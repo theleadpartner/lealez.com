@@ -81,7 +81,7 @@ class OY_Loyalty_Program_CPT {
             'hierarchical'        => false,
             'public'              => true,
             'show_ui'             => true,
-            'show_in_menu'        => 'lealez',
+            'show_in_menu'        => 'false',
             'menu_position'       => 25,
             'menu_icon'           => 'dashicons-awards',
             'show_in_admin_bar'   => true,
