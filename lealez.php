@@ -137,6 +137,13 @@ final class Lealez_Plugin {
     }
 
     /**
+ * Include CPT classes
+ */
+private function include_cpts() {
+    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
+}
+
+    /**
      * Plugin activation callback
      */
     public function activate() {
