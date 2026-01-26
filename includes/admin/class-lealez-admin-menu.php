@@ -29,71 +29,81 @@ class Lealez_Admin_Menu {
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_styles' ) );
     }
 
-    /**
-     * Register the main admin menu
-     */
-    public function register_admin_menu() {
-        // Main menu page
-        add_menu_page(
-            __( 'Lealez', 'lealez' ),                    // Page title
-            __( 'Lealez', 'lealez' ),                    // Menu title
-            'manage_options',                             // Capability
-            'lealez',                                     // Menu slug
-            array( $this, 'render_dashboard_page' ),     // Callback function
-            'dashicons-awards',                           // Icon
-            26                                            // Position
-        );
+/**
+ * Register the main admin menu
+ */
+public function register_admin_menu() {
+    // Main menu page
+    add_menu_page(
+        __( 'Lealez', 'lealez' ),                    // Page title
+        __( 'Lealez', 'lealez' ),                    // Menu title
+        'manage_options',                             // Capability
+        'lealez',                                     // Menu slug
+        array( $this, 'render_dashboard_page' ),     // Callback function
+        'dashicons-awards',                           // Icon
+        26                                            // Position
+    );
 
-        // Dashboard submenu (replaces the duplicate main menu item)
-        add_submenu_page(
-            'lealez',                                     // Parent slug
-            __( 'Dashboard', 'lealez' ),                 // Page title
-            __( 'Dashboard', 'lealez' ),                 // Menu title
-            'manage_options',                             // Capability
-            'lealez',                                     // Menu slug (same as parent)
-            array( $this, 'render_dashboard_page' )      // Callback function
-        );
+    // Dashboard submenu (replaces the duplicate main menu item)
+    add_submenu_page(
+        'lealez',                                     // Parent slug
+        __( 'Dashboard', 'lealez' ),                 // Page title
+        __( 'Dashboard', 'lealez' ),                 // Menu title
+        'manage_options',                             // Capability
+        'lealez',                                     // Menu slug (same as parent)
+        array( $this, 'render_dashboard_page' )      // Callback function
+    );
 
-        // Empresas submenu
-        add_submenu_page(
-            'lealez',                                     // Parent slug
-            __( 'Empresas', 'lealez' ),                  // Page title
-            __( 'Empresas', 'lealez' ),                  // Menu title
-            'manage_options',                             // Capability
-            'edit.php?post_type=oy_business',            // Menu slug
-            null                                          // No callback needed
-        );
+    // Empresas submenu
+    add_submenu_page(
+        'lealez',                                     // Parent slug
+        __( 'Empresas', 'lealez' ),                  // Page title
+        __( 'Empresas', 'lealez' ),                  // Menu title
+        'manage_options',                             // Capability
+        'edit.php?post_type=oy_business',            // Menu slug
+        null                                          // No callback needed
+    );
 
-        // Ubicaciones submenu
-        add_submenu_page(
-            'lealez',                                     // Parent slug
-            __( 'Ubicaciones', 'lealez' ),               // Page title
-            __( 'Ubicaciones', 'lealez' ),               // Menu title
-            'manage_options',                             // Capability
-            'edit.php?post_type=oy_location',            // Menu slug
-            null                                          // No callback needed
-        );
+    // Ubicaciones submenu
+    add_submenu_page(
+        'lealez',                                     // Parent slug
+        __( 'Ubicaciones', 'lealez' ),               // Page title
+        __( 'Ubicaciones', 'lealez' ),               // Menu title
+        'manage_options',                             // Capability
+        'edit.php?post_type=oy_location',            // Menu slug
+        null                                          // No callback needed
+    );
 
-        // Programas de Lealtad submenu
-        add_submenu_page(
-            'lealez',                                     // Parent slug
-            __( 'Programas de Lealtad', 'lealez' ),      // Page title
-            __( 'Programas de Lealtad', 'lealez' ),      // Menu title
-            'manage_options',                             // Capability
-            'edit.php?post_type=oy_loyalty_program',     // Menu slug
-            null                                          // No callback needed
-        );
+    // Programas de Lealtad submenu
+    add_submenu_page(
+        'lealez',                                     // Parent slug
+        __( 'Programas de Lealtad', 'lealez' ),      // Page title
+        __( 'Programas de Lealtad', 'lealez' ),      // Menu title
+        'manage_options',                             // Capability
+        'edit.php?post_type=oy_loyalty_program',     // Menu slug
+        null                                          // No callback needed
+    );
 
-        // Settings submenu
-        add_submenu_page(
-            'lealez',                                     // Parent slug
-            __( 'Configuración', 'lealez' ),             // Page title
-            __( 'Configuración', 'lealez' ),             // Menu title
-            'manage_options',                             // Capability
-            'lealez-settings',                            // Menu slug
-            array( $this, 'render_settings_page' )       // Callback function
-        );
-    }
+    // Tarjetas de Lealtad submenu
+    add_submenu_page(
+        'lealez',                                     // Parent slug
+        __( 'Tarjetas de Lealtad', 'lealez' ),       // Page title
+        __( 'Tarjetas de Lealtad', 'lealez' ),       // Menu title
+        'manage_options',                             // Capability
+        'edit.php?post_type=oy_loyalty_card',        // Menu slug
+        null                                          // No callback needed
+    );
+
+    // Settings submenu
+    add_submenu_page(
+        'lealez',                                     // Parent slug
+        __( 'Configuración', 'lealez' ),             // Page title
+        __( 'Configuración', 'lealez' ),             // Menu title
+        'manage_options',                             // Capability
+        'lealez-settings',                            // Menu slug
+        array( $this, 'render_settings_page' )       // Callback function
+    );
+}
 
     /**
      * Render the dashboard page
@@ -106,42 +116,51 @@ class Lealez_Admin_Menu {
             <div class="lealez-dashboard">
                 <div class="lealez-dashboard-widgets">
                     
-                    <!-- Widget: Quick Stats -->
-                    <div class="lealez-widget lealez-widget-stats">
-                        <h2><?php esc_html_e( 'Resumen Rápido', 'lealez' ); ?></h2>
-                        <div class="lealez-stats-grid">
-                            <?php
-                            // Get counts
-                            $business_count = wp_count_posts( 'oy_business' );
-                            $location_count = wp_count_posts( 'oy_location' );
-                            $program_count  = wp_count_posts( 'oy_loyalty_program' );
-                            ?>
-                            
-                            <div class="lealez-stat-box">
-                                <span class="dashicons dashicons-building"></span>
-                                <div class="lealez-stat-content">
-                                    <div class="lealez-stat-number"><?php echo esc_html( $business_count->publish ); ?></div>
-                                    <div class="lealez-stat-label"><?php esc_html_e( 'Empresas', 'lealez' ); ?></div>
-                                </div>
-                            </div>
+<!-- Widget: Quick Stats -->
+<div class="lealez-widget lealez-widget-stats">
+    <h2><?php esc_html_e( 'Resumen Rápido', 'lealez' ); ?></h2>
+    <div class="lealez-stats-grid">
+        <?php
+        // Get counts
+        $business_count = wp_count_posts( 'oy_business' );
+        $location_count = wp_count_posts( 'oy_location' );
+        $program_count  = wp_count_posts( 'oy_loyalty_program' );
+        $card_count     = wp_count_posts( 'oy_loyalty_card' );
+        ?>
+        
+        <div class="lealez-stat-box">
+            <span class="dashicons dashicons-building"></span>
+            <div class="lealez-stat-content">
+                <div class="lealez-stat-number"><?php echo esc_html( $business_count->publish ); ?></div>
+                <div class="lealez-stat-label"><?php esc_html_e( 'Empresas', 'lealez' ); ?></div>
+            </div>
+        </div>
 
-                            <div class="lealez-stat-box">
-                                <span class="dashicons dashicons-location"></span>
-                                <div class="lealez-stat-content">
-                                    <div class="lealez-stat-number"><?php echo esc_html( $location_count->publish ); ?></div>
-                                    <div class="lealez-stat-label"><?php esc_html_e( 'Ubicaciones', 'lealez' ); ?></div>
-                                </div>
-                            </div>
+        <div class="lealez-stat-box">
+            <span class="dashicons dashicons-location"></span>
+            <div class="lealez-stat-content">
+                <div class="lealez-stat-number"><?php echo esc_html( $location_count->publish ); ?></div>
+                <div class="lealez-stat-label"><?php esc_html_e( 'Ubicaciones', 'lealez' ); ?></div>
+            </div>
+        </div>
 
-                            <div class="lealez-stat-box">
-                                <span class="dashicons dashicons-awards"></span>
-                                <div class="lealez-stat-content">
-                                    <div class="lealez-stat-number"><?php echo esc_html( $program_count->publish ); ?></div>
-                                    <div class="lealez-stat-label"><?php esc_html_e( 'Programas', 'lealez' ); ?></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+        <div class="lealez-stat-box">
+            <span class="dashicons dashicons-awards"></span>
+            <div class="lealez-stat-content">
+                <div class="lealez-stat-number"><?php echo esc_html( $program_count->publish ); ?></div>
+                <div class="lealez-stat-label"><?php esc_html_e( 'Programas', 'lealez' ); ?></div>
+            </div>
+        </div>
+
+        <div class="lealez-stat-box">
+            <span class="dashicons dashicons-id-alt"></span>
+            <div class="lealez-stat-content">
+                <div class="lealez-stat-number"><?php echo esc_html( $card_count->publish ); ?></div>
+                <div class="lealez-stat-label"><?php esc_html_e( 'Tarjetas', 'lealez' ); ?></div>
+            </div>
+        </div>
+    </div>
+</div>
 
                     <!-- Widget: Quick Actions -->
                     <div class="lealez-widget lealez-widget-actions">
