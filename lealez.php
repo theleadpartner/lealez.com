@@ -145,6 +145,7 @@ final class Lealez_Plugin {
 private function include_cpts() {
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-location-cpt.php';
+    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-program-cpt.php';
 }
 
     /**
