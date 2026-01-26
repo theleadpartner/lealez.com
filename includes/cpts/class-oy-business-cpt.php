@@ -85,7 +85,7 @@ class Lealez_Business_CPT {
             'has_archive'        => false,
             'hierarchical'       => false,
             'supports'           => array( 'title', 'editor', 'thumbnail', 'author' ),
-            'show_in_rest'       => true,
+            'show_in_rest'       => false,
         );
 
         register_post_type( $this->post_type, $args );
