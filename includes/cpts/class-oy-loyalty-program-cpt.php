@@ -91,7 +91,7 @@ class OY_Loyalty_Program_CPT {
             'exclude_from_search' => false,
             'publicly_queryable'  => true,
             'capability_type'     => 'post',
-            'show_in_rest'        => true,
+            'show_in_rest'        => false,
             'rest_base'           => 'loyalty-programs',
             'rewrite'             => array(
                 'slug'       => 'loyalty-program',
