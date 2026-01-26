@@ -151,8 +151,8 @@ private function include_cpts() {
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-location-cpt.php';
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-program-cpt.php';
+    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-card-cpt.php';
 }
-
 /**
  * Include admin classes
  */
