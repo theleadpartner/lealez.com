@@ -133,15 +133,18 @@ final class Lealez_Plugin {
      * When WordPress has loaded all plugins
      */
     public function on_plugins_loaded() {
+        // Include CPT classes
+        $this->include_cpts();
+        
         do_action( 'lealez_loaded' );
     }
 
     /**
- * Include CPT classes
- */
-private function include_cpts() {
-    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
-}
+     * Include CPT classes
+     */
+    private function include_cpts() {
+        require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
+    }
 
     /**
      * Plugin activation callback
@@ -166,6 +169,9 @@ private function include_cpts() {
                 array( 'back_link' => true )
             );
         }
+
+        // Include CPT classes before activation to register post types
+        $this->include_cpts();
 
         // Set default options
         $this->set_default_options();
