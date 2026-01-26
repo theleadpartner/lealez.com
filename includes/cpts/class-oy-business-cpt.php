@@ -76,7 +76,7 @@ class Lealez_Business_CPT {
             'public'             => false,
             'publicly_queryable' => false,
             'show_ui'            => true,
-            'show_in_menu'       => true,
+            'show_in_menu'       => false,
             'menu_position'      => 20,
             'menu_icon'          => 'dashicons-building',
             'query_var'          => true,
