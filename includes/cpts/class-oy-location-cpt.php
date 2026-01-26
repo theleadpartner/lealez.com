@@ -116,7 +116,7 @@ class OY_Location_CPT {
             'hierarchical'          => false,
             'public'                => true,
             'show_ui'               => true,
-            'show_in_menu'          => true,
+            'show_in_menu'          => false,
             'menu_position'         => 21,
             'menu_icon'             => 'dashicons-location',
             'show_in_admin_bar'     => true,
