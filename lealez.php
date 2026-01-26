@@ -129,15 +129,20 @@ final class Lealez_Plugin {
         );
     }
 
-    /**
-     * When WordPress has loaded all plugins
-     */
-    public function on_plugins_loaded() {
-        // Include CPT classes
-        $this->include_cpts();
-        
-        do_action( 'lealez_loaded' );
+/**
+ * When WordPress has loaded all plugins
+ */
+public function on_plugins_loaded() {
+    // Include CPT classes
+    $this->include_cpts();
+    
+    // Include admin classes
+    if ( is_admin() ) {
+        $this->include_admin();
     }
+    
+    do_action( 'lealez_loaded' );
+}
 
 /**
  * Include CPT classes
@@ -146,6 +151,13 @@ private function include_cpts() {
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-location-cpt.php';
     require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-program-cpt.php';
+}
+
+/**
+ * Include admin classes
+ */
+private function include_admin() {
+    require_once LEALEZ_INCLUDES_DIR . 'admin/class-lealez-admin-menu.php';
 }
 
     /**
