@@ -97,14 +97,21 @@ class Lealez_GMB_Settings {
                 <p>
                     <strong><?php _e( 'Setup Instructions:', 'lealez' ); ?></strong>
                 </p>
-                <ol>
-                    <li><?php _e( 'Go to Google Cloud Console: <a href="https://console.cloud.google.com/" target="_blank">https://console.cloud.google.com/</a>', 'lealez' ); ?></li>
-                    <li><?php _e( 'Create a new project or select an existing one', 'lealez' ); ?></li>
-                    <li><?php _e( 'Enable the "Google My Business API"', 'lealez' ); ?></li>
-                    <li><?php _e( 'Go to "Credentials" and create an OAuth 2.0 Client ID', 'lealez' ); ?></li>
-                    <li><?php _e( 'Add the Redirect URI shown below to your OAuth client', 'lealez' ); ?></li>
-                    <li><?php _e( 'Copy the Client ID and Client Secret and paste them below', 'lealez' ); ?></li>
-                </ol>
+<ol>
+    <li><?php _e( 'Go to Google Cloud Console: <a href="https://console.cloud.google.com/" target="_blank">https://console.cloud.google.com/</a>', 'lealez' ); ?></li>
+    <li><?php _e( 'Create a new project or select an existing one', 'lealez' ); ?></li>
+    <li>
+        <?php _e( 'Enable the following APIs in the API Library:', 'lealez' ); ?>
+        <ul style="margin-top: 8px;">
+            <li><strong>My Business Business Information API</strong> <?php _e( '(required for location data)', 'lealez' ); ?></li>
+            <li><strong>Business Profile Performance API</strong> <?php _e( '(required for metrics)', 'lealez' ); ?></li>
+            <li><strong>My Business Account Management API</strong> <?php _e( '(required for account access)', 'lealez' ); ?></li>
+        </ul>
+    </li>
+    <li><?php _e( 'Go to "Credentials" and create an OAuth 2.0 Client ID', 'lealez' ); ?></li>
+    <li><?php _e( 'Add the Redirect URI shown below to your OAuth client', 'lealez' ); ?></li>
+    <li><?php _e( 'Copy the Client ID and Client Secret and paste them below', 'lealez' ); ?></li>
+</ol>
             </div>
 
             <form method="post" action="options.php">
