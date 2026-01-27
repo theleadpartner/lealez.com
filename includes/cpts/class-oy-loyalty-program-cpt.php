@@ -31,7 +31,6 @@ class OY_Loyalty_Program_CPT {
      */
     public function __construct() {
         add_action( 'init', array( $this, 'register_post_type' ) );
-        add_action( 'init', array( $this, 'register_meta_fields' ) );
         add_action( 'add_meta_boxes', array( $this, 'add_meta_boxes' ) );
         add_action( 'save_post_' . self::POST_TYPE, array( $this, 'save_meta_boxes' ), 10, 2 );
         add_filter( 'manage_' . self::POST_TYPE . '_posts_columns', array( $this, 'set_custom_columns' ) );
@@ -81,7 +80,7 @@ class OY_Loyalty_Program_CPT {
             'hierarchical'        => false,
             'public'              => true,
             'show_ui'             => true,
-            'show_in_menu'        => 'false',
+            'show_in_menu'        => false,
             'menu_position'       => 25,
             'menu_icon'           => 'dashicons-awards',
             'show_in_admin_bar'   => true,
@@ -100,901 +99,6 @@ class OY_Loyalty_Program_CPT {
         );
 
         register_post_type( self::POST_TYPE, $args );
-    }
-
-    /**
-     * Register meta fields for the Loyalty Program CPT
-     */
-    public function register_meta_fields() {
-        $meta_fields = $this->get_meta_fields_config();
-
-        foreach ( $meta_fields as $meta_key => $config ) {
-            register_post_meta(
-                self::POST_TYPE,
-                $meta_key,
-                array(
-                    'type'              => $config['type'],
-                    'description'       => $config['description'],
-                    'single'            => true,
-                    'show_in_rest'      => $config['show_in_rest'],
-                    'sanitize_callback' => $config['sanitize_callback'],
-                    'auth_callback'     => function() {
-                        return current_user_can( 'edit_posts' );
-                    },
-                )
-            );
-        }
-    }
-
-    /**
-     * Get meta fields configuration
-     *
-     * @return array
-     */
-    private function get_meta_fields_config() {
-        return array(
-            // ===== RELACIÓN Y BÁSICOS =====
-            'parent_business_id'              => array(
-                'type'              => 'integer',
-                'description'       => 'ID del negocio padre (oy_business)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'program_name'                    => array(
-                'type'              => 'string',
-                'description'       => 'Nombre del programa de lealtad',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'program_slug'                    => array(
-                'type'              => 'string',
-                'description'       => 'Slug único del programa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_title',
-            ),
-            'program_description'             => array(
-                'type'              => 'string',
-                'description'       => 'Descripción completa del programa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'wp_kses_post',
-            ),
-            'program_short_description'       => array(
-                'type'              => 'string',
-                'description'       => 'Descripción breve (160 caracteres)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'program_terms'                   => array(
-                'type'              => 'string',
-                'description'       => 'Términos y condiciones (HTML)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'wp_kses_post',
-            ),
-            'program_privacy_policy'          => array(
-                'type'              => 'string',
-                'description'       => 'Política de privacidad del programa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'wp_kses_post',
-            ),
-
-            // ===== TIPO Y ESTRUCTURA =====
-            'program_type'                    => array(
-                'type'              => 'string',
-                'description'       => 'Tipo: points, stamps, visits, cashback, tiered, hybrid',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'program_subtype'                 => array(
-                'type'              => 'string',
-                'description'       => 'Subtipo: earn_and_burn, tiered_benefits, subscription',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'program_currency_name'           => array(
-                'type'              => 'string',
-                'description'       => 'Nombre de la moneda (singular)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'program_currency_plural'         => array(
-                'type'              => 'string',
-                'description'       => 'Nombre de la moneda (plural)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'program_icon'                    => array(
-                'type'              => 'string',
-                'description'       => 'Icono del programa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'esc_url_raw',
-            ),
-
-            // ===== ALCANCE GEOGRÁFICO (CAMPO CRÍTICO) =====
-            'program_scope'                   => array(
-                'type'              => 'string',
-                'description'       => 'Alcance: global, specific_locations, single_location',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'applicable_locations'            => array(
-                'type'              => 'array',
-                'description'       => 'Array de IDs de oy_location',
-                'show_in_rest'      => array(
-                    'schema' => array(
-                        'type'  => 'array',
-                        'items' => array(
-                            'type' => 'integer',
-                        ),
-                    ),
-                ),
-                'sanitize_callback' => array( $this, 'sanitize_array_of_integers' ),
-            ),
-
-            'applicable_customer_categories'  => array(
-    'type'              => 'array',
-    'description'       => 'Array de IDs de categorías de cliente (oy_customer_category term IDs)',
-    'show_in_rest'      => array(
-        'schema' => array(
-            'type'  => 'array',
-            'items' => array(
-                'type' => 'integer',
-            ),
-        ),
-    ),
-    'sanitize_callback' => array( $this, 'sanitize_array_of_integers' ),
-),
-
-            // ===== MECÁNICA DE PUNTOS/RECOMPENSAS =====
-            'points_per_currency'             => array(
-                'type'              => 'number',
-                'description'       => 'Puntos por cada unidad monetaria gastada',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'min_purchase_for_points'         => array(
-                'type'              => 'number',
-                'description'       => 'Compra mínima para ganar puntos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'points_rounding'                 => array(
-                'type'              => 'string',
-                'description'       => 'Redondeo: round_up, round_down, round_nearest',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'cashback_percentage'             => array(
-                'type'              => 'number',
-                'description'       => 'Porcentaje de cashback',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'visit_threshold'                 => array(
-                'type'              => 'integer',
-                'description'       => 'Visitas necesarias para recompensa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-
-            // ===== NIVELES/TIERS =====
-            'is_tiered_program'               => array(
-                'type'              => 'boolean',
-                'description'       => 'Si el programa tiene niveles',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'tiers_configuration'             => array(
-                'type'              => 'string',
-                'description'       => 'Configuración de niveles (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'tier_retention_period'           => array(
-                'type'              => 'integer',
-                'description'       => 'Período para mantener nivel (meses)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'tier_downgrade_enabled'          => array(
-                'type'              => 'boolean',
-                'description'       => 'Permite bajar de nivel',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== RECOMPENSAS Y UMBRALES =====
-            'reward_threshold'                => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos para primera recompensa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'reward_catalog'                  => array(
-                'type'              => 'string',
-                'description'       => 'Catálogo de recompensas (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'rewards_expiry_days'             => array(
-                'type'              => 'integer',
-                'description'       => 'Días para usar recompensa canjeada',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'auto_apply_rewards'              => array(
-                'type'              => 'boolean',
-                'description'       => 'Aplicar recompensas automáticamente',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== EXPIRACIÓN Y CADUCIDAD =====
-            'points_expiry_enabled'           => array(
-                'type'              => 'boolean',
-                'description'       => 'Habilitar expiración de puntos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'points_expiry_months'            => array(
-                'type'              => 'integer',
-                'description'       => 'Meses para expiración de puntos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'points_expiry_warning_days'      => array(
-                'type'              => 'integer',
-                'description'       => 'Días antes para avisar expiración',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'account_inactivity_months'       => array(
-                'type'              => 'integer',
-                'description'       => 'Meses de inactividad antes de suspender',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'expiration_policy_text'          => array(
-                'type'              => 'string',
-                'description'       => 'Texto de política de expiración',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'wp_kses_post',
-            ),
-
-            // ===== DISEÑO DE TARJETA =====
-            'card_design_template'            => array(
-                'type'              => 'string',
-                'description'       => 'Plantilla: default, minimal, premium, custom',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'card_background_color'           => array(
-                'type'              => 'string',
-                'description'       => 'Color de fondo (#HEX)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_hex_color',
-            ),
-            'card_text_color'                 => array(
-                'type'              => 'string',
-                'description'       => 'Color de texto (#HEX)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_hex_color',
-            ),
-            'card_accent_color'               => array(
-                'type'              => 'string',
-                'description'       => 'Color de acento (#HEX)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_hex_color',
-            ),
-            'card_background_image'           => array(
-                'type'              => 'string',
-                'description'       => 'URL imagen de fondo',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'esc_url_raw',
-            ),
-            'card_background_image_id'        => array(
-                'type'              => 'integer',
-                'description'       => 'Media ID de imagen de fondo',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'card_logo_position'              => array(
-                'type'              => 'string',
-                'description'       => 'Posición logo: top_left, top_center, top_right, center',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'card_show_barcode'               => array(
-                'type'              => 'boolean',
-                'description'       => 'Mostrar código de barras',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'card_barcode_type'               => array(
-                'type'              => 'string',
-                'description'       => 'Tipo: qr_code, aztec, code128, pdf417',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-
-            // ===== INTEGRACIÓN GOOGLE WALLET =====
-            'google_class_id'                 => array(
-                'type'              => 'string',
-                'description'       => 'ID de LoyaltyClass en Google',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'google_class_json'               => array(
-                'type'              => 'string',
-                'description'       => 'JSON completo de la clase de Google',
-                'show_in_rest'      => false,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'google_class_created_date'       => array(
-                'type'              => 'string',
-                'description'       => 'Fecha de creación en Google',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'google_class_last_updated'       => array(
-                'type'              => 'string',
-                'description'       => 'Última actualización en Google',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'google_issuer_name'              => array(
-                'type'              => 'string',
-                'description'       => 'Nombre del emisor en Google',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'google_program_logo'             => array(
-                'type'              => 'string',
-                'description'       => 'Logo para Google Wallet',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'esc_url_raw',
-            ),
-            'google_hero_image'               => array(
-                'type'              => 'string',
-                'description'       => 'Imagen hero para Google Wallet',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'esc_url_raw',
-            ),
-            'google_enable_smart_tap'         => array(
-                'type'              => 'boolean',
-                'description'       => 'Habilitar Smart Tap (NFC)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== INTEGRACIÓN APPLE WALLET =====
-            'apple_pass_type_id'              => array(
-                'type'              => 'string',
-                'description'       => 'Pass Type ID de Apple',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'apple_team_id'                   => array(
-                'type'              => 'string',
-                'description'       => 'Team ID de Apple',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'apple_certificate'               => array(
-                'type'              => 'string',
-                'description'       => 'Certificado para firmar passes',
-                'show_in_rest'      => false,
-                'sanitize_callback' => 'sanitize_textarea_field',
-            ),
-            'apple_pass_style'                => array(
-                'type'              => 'string',
-                'description'       => 'Estilo: generic, storeCard, coupon',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'apple_enable_location_updates'   => array(
-                'type'              => 'boolean',
-                'description'       => 'Actualizar con ubicación',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== BENEFICIOS Y VENTAJAS =====
-            'welcome_bonus_points'            => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos de bienvenida al inscribirse',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'referral_bonus_points'           => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos por referir amigo',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'birthday_bonus_enabled'          => array(
-                'type'              => 'boolean',
-                'description'       => 'Bonus de cumpleaños habilitado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'birthday_bonus_amount'           => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos/descuento de cumpleaños',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'exclusive_benefits'              => array(
-                'type'              => 'string',
-                'description'       => 'Beneficios exclusivos (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'early_access_enabled'            => array(
-                'type'              => 'boolean',
-                'description'       => 'Acceso anticipado habilitado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== CONFIGURACIÓN DE INSCRIPCIÓN =====
-            'enrollment_enabled'              => array(
-                'type'              => 'boolean',
-                'description'       => 'Aceptando nuevos miembros',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'enrollment_method'               => array(
-                'type'              => 'string',
-                'description'       => 'Método: auto, manual, invite_only',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'enrollment_fee'                  => array(
-                'type'              => 'number',
-                'description'       => 'Costo de inscripción (0 = gratis)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'enrollment_requires_approval'    => array(
-                'type'              => 'boolean',
-                'description'       => 'Requiere aprobación',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'enrollment_fields_required'      => array(
-                'type'              => 'array',
-                'description'       => 'Array de campos obligatorios',
-                'show_in_rest'      => array(
-                    'schema' => array(
-                        'type'  => 'array',
-                        'items' => array(
-                            'type' => 'string',
-                        ),
-                    ),
-                ),
-                'sanitize_callback' => array( $this, 'sanitize_array_of_strings' ),
-            ),
-            'enrollment_welcome_email'        => array(
-                'type'              => 'boolean',
-                'description'       => 'Enviar email de bienvenida',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'enrollment_welcome_message'      => array(
-                'type'              => 'string',
-                'description'       => 'Texto del mensaje de bienvenida',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'wp_kses_post',
-            ),
-
-            // ===== LÍMITES Y RESTRICCIONES =====
-            'max_cards_per_user'              => array(
-                'type'              => 'integer',
-                'description'       => 'Máx tarjetas por usuario',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'max_points_per_day'              => array(
-                'type'              => 'integer',
-                'description'       => 'Máximo de puntos ganables por día',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'max_points_per_transaction'      => array(
-                'type'              => 'integer',
-                'description'       => 'Máximo de puntos por transacción',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'max_redemptions_per_day'         => array(
-                'type'              => 'integer',
-                'description'       => 'Máximas redenciones por día',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'min_points_for_redemption'       => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos mínimos para canjear',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'redemption_increments'           => array(
-                'type'              => 'integer',
-                'description'       => 'Incrementos de canje',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-
-            // ===== NOTIFICACIONES Y COMUNICACIÓN =====
-            'notifications_enabled'           => array(
-                'type'              => 'boolean',
-                'description'       => 'Sistema de notificaciones habilitado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'notify_points_earned'            => array(
-                'type'              => 'boolean',
-                'description'       => 'Notificar al ganar puntos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'notify_points_redeemed'          => array(
-                'type'              => 'boolean',
-                'description'       => 'Notificar al canjear',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'notify_expiring_points'          => array(
-                'type'              => 'boolean',
-                'description'       => 'Notificar puntos próximos a expirar',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'notify_tier_upgrade'             => array(
-                'type'              => 'boolean',
-                'description'       => 'Notificar cambio de nivel',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'notify_new_rewards'              => array(
-                'type'              => 'boolean',
-                'description'       => 'Notificar nuevas recompensas',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'notification_channels'           => array(
-                'type'              => 'array',
-                'description'       => 'Canales: email, sms, push, in_app',
-                'show_in_rest'      => array(
-                    'schema' => array(
-                        'type'  => 'array',
-                        'items' => array(
-                            'type' => 'string',
-                        ),
-                    ),
-                ),
-                'sanitize_callback' => array( $this, 'sanitize_array_of_strings' ),
-            ),
-
-            // ===== PROMOCIONES Y CAMPAÑAS =====
-            'active_promotions'               => array(
-                'type'              => 'string',
-                'description'       => 'Promociones activas (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'seasonal_bonuses'                => array(
-                'type'              => 'string',
-                'description'       => 'Bonos por temporada (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'double_points_days'              => array(
-                'type'              => 'array',
-                'description'       => 'Días con puntos dobles',
-                'show_in_rest'      => array(
-                    'schema' => array(
-                        'type'  => 'array',
-                        'items' => array(
-                            'type' => 'string',
-                        ),
-                    ),
-                ),
-                'sanitize_callback' => array( $this, 'sanitize_array_of_strings' ),
-            ),
-            'special_events'                  => array(
-                'type'              => 'string',
-                'description'       => 'Eventos especiales del programa (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-
-            // ===== INTEGRACIÓN CON ECOMMERCE =====
-            'woocommerce_enabled'             => array(
-                'type'              => 'boolean',
-                'description'       => 'Integración con WooCommerce',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'woocommerce_product_categories'  => array(
-                'type'              => 'array',
-                'description'       => 'Categorías que otorgan puntos',
-                'show_in_rest'      => array(
-                    'schema' => array(
-                        'type'  => 'array',
-                        'items' => array(
-                            'type' => 'integer',
-                        ),
-                    ),
-                ),
-                'sanitize_callback' => array( $this, 'sanitize_array_of_integers' ),
-            ),
-            'woocommerce_excluded_products'   => array(
-                'type'              => 'array',
-                'description'       => 'Productos excluidos',
-                'show_in_rest'      => array(
-                    'schema' => array(
-                        'type'  => 'array',
-                        'items' => array(
-                            'type' => 'integer',
-                        ),
-                    ),
-                ),
-                'sanitize_callback' => array( $this, 'sanitize_array_of_integers' ),
-            ),
-            'points_as_payment_enabled'       => array(
-                'type'              => 'boolean',
-                'description'       => 'Usar puntos como pago',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'points_to_currency_rate'         => array(
-                'type'              => 'number',
-                'description'       => 'Tasa de conversión puntos a moneda',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-
-            // ===== GAMIFICACIÓN =====
-            'achievements_enabled'            => array(
-                'type'              => 'boolean',
-                'description'       => 'Sistema de logros habilitado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'achievements_list'               => array(
-                'type'              => 'string',
-                'description'       => 'Lista de logros (JSON)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => array( $this, 'sanitize_json' ),
-            ),
-            'leaderboard_enabled'             => array(
-                'type'              => 'boolean',
-                'description'       => 'Tabla de clasificación habilitada',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'badges_enabled'                  => array(
-                'type'              => 'boolean',
-                'description'       => 'Sistema de insignias habilitado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'challenges_enabled'              => array(
-                'type'              => 'boolean',
-                'description'       => 'Desafíos periódicos habilitados',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== PROGRAMA DE REFERIDOS =====
-            'referral_program_enabled'        => array(
-                'type'              => 'boolean',
-                'description'       => 'Programa de referidos habilitado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'referral_reward_referrer'        => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos para quien refiere',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'referral_reward_referee'         => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos para quien se inscribe',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'referral_code_format'            => array(
-                'type'              => 'string',
-                'description'       => 'Formato del código de referido',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'max_referrals_per_user'          => array(
-                'type'              => 'integer',
-                'description'       => 'Máximo de referidos por usuario',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-
-            // ===== ESTADÍSTICAS DEL PROGRAMA =====
-            'total_members'                   => array(
-                'type'              => 'integer',
-                'description'       => 'Total de miembros activos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'total_cards_issued'              => array(
-                'type'              => 'integer',
-                'description'       => 'Total de tarjetas emitidas',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'total_points_issued'             => array(
-                'type'              => 'integer',
-                'description'       => 'Total de puntos emitidos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'total_points_redeemed'           => array(
-                'type'              => 'integer',
-                'description'       => 'Total de puntos canjeados',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'total_revenue_generated'         => array(
-                'type'              => 'number',
-                'description'       => 'Ingresos generados por el programa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'average_member_value'            => array(
-                'type'              => 'number',
-                'description'       => 'Valor promedio por miembro',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'member_retention_rate'           => array(
-                'type'              => 'number',
-                'description'       => 'Tasa de retención (%)',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'floatval',
-            ),
-            'active_members_30_days'          => array(
-                'type'              => 'integer',
-                'description'       => 'Miembros activos últimos 30 días',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-
-            // ===== CONFIGURACIÓN DE SEGURIDAD =====
-            'fraud_detection_enabled'         => array(
-                'type'              => 'boolean',
-                'description'       => 'Detección de fraude habilitada',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'max_points_transfer'             => array(
-                'type'              => 'integer',
-                'description'       => 'Puntos máx transferibles entre usuarios',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'allow_point_gifting'             => array(
-                'type'              => 'boolean',
-                'description'       => 'Permitir regalar puntos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'require_pin_for_redemption'      => array(
-                'type'              => 'boolean',
-                'description'       => 'PIN para canjear',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'require_location_for_redemption' => array(
-                'type'              => 'boolean',
-                'description'       => 'Verificar ubicación al canjear',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-
-            // ===== METADATOS DEL SISTEMA =====
-            'program_status'                  => array(
-                'type'              => 'string',
-                'description'       => 'Estado: active, inactive, draft, archived',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'is_featured'                     => array(
-                'type'              => 'boolean',
-                'description'       => 'Programa destacado',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'launch_date'                     => array(
-                'type'              => 'string',
-                'description'       => 'Fecha de lanzamiento',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'end_date'                        => array(
-                'type'              => 'string',
-                'description'       => 'Fecha de finalización',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'created_by_user_id'              => array(
-                'type'              => 'integer',
-                'description'       => 'WP User que creó',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'date_created'                    => array(
-                'type'              => 'string',
-                'description'       => 'Fecha de creación',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'date_modified'                   => array(
-                'type'              => 'string',
-                'description'       => 'Última modificación',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'version'                         => array(
-                'type'              => 'string',
-                'description'       => 'Versión del programa',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-
-            // ===== LEGAL Y COMPLIANCE =====
-            'program_legal_entity'            => array(
-                'type'              => 'string',
-                'description'       => 'Entidad legal responsable',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'tax_reporting_enabled'           => array(
-                'type'              => 'boolean',
-                'description'       => 'Requiere reporte fiscal',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'data_retention_months'           => array(
-                'type'              => 'integer',
-                'description'       => 'Meses de retención de datos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'absint',
-            ),
-            'gdpr_compliant'                  => array(
-                'type'              => 'boolean',
-                'description'       => 'Cumple con GDPR',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-            'privacy_policy_url'              => array(
-                'type'              => 'string',
-                'description'       => 'URL de política de privacidad',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'esc_url_raw',
-            ),
-            'terms_last_updated'              => array(
-                'type'              => 'string',
-                'description'       => 'Fecha última actualización de términos',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'sanitize_text_field',
-            ),
-            'requires_terms_acceptance'       => array(
-                'type'              => 'boolean',
-                'description'       => 'Requiere aceptar T&C',
-                'show_in_rest'      => true,
-                'sanitize_callback' => 'rest_sanitize_boolean',
-            ),
-        );
     }
 
     /**
@@ -1220,60 +324,59 @@ class OY_Loyalty_Program_CPT {
                 <?php endif; ?>
             </div>
 
-<hr style="margin: 20px 0;">
+            <hr style="margin: 20px 0;">
 
-<h3><?php _e( 'Categorías de Cliente Aplicables', 'lealez' ); ?></h3>
-<p class="description">
-    <?php _e( 'Selecciona las categorías de cliente que pueden acceder a este programa de lealtad.', 'lealez' ); ?>
-</p>
-
-<?php
-$applicable_customer_categories = get_post_meta( $post->ID, 'applicable_customer_categories', true );
-if ( ! is_array( $applicable_customer_categories ) ) {
-    $applicable_customer_categories = array();
-}
-
-// Get customer categories
-$customer_categories = get_terms( array(
-    'taxonomy'   => 'oy_customer_category',
-    'hide_empty' => false,
-) );
-
-if ( ! empty( $customer_categories ) && ! is_wp_error( $customer_categories ) ) :
-    ?>
-    <div style="margin-top: 15px; border: 1px solid #ddd; padding: 15px; background: #f9f9f9; max-height: 300px; overflow-y: auto;">
-        <?php foreach ( $customer_categories as $category ) :
-            $category_color = get_term_meta( $category->term_id, 'category_color', true );
-            $category_type = get_term_meta( $category->term_id, 'category_type', true );
-            $parent_business_id_cat = get_term_meta( $category->term_id, 'parent_business_id', true );
-            
-            // Only show categories from the same business
-            if ( $parent_business_id && $parent_business_id_cat != $parent_business_id ) {
-                continue;
-            }
-            ?>
-            <p>
-                <label style="display: flex; align-items: center; gap: 10px;">
-                    <input type="checkbox" name="applicable_customer_categories[]" value="<?php echo esc_attr( $category->term_id ); ?>" <?php checked( in_array( $category->term_id, $applicable_customer_categories, true ) ); ?>>
-                    <?php if ( $category_color ) : ?>
-                        <span style="display: inline-block; width: 20px; height: 20px; background-color: <?php echo esc_attr( $category_color ); ?>; border: 1px solid #ddd; border-radius: 3px;"></span>
-                    <?php endif; ?>
-                    <strong><?php echo esc_html( $category->name ); ?></strong>
-                    <?php if ( $category_type === 'restrictive' ) : ?>
-                        <span style="color: #dc3232; font-size: 11px;">(<?php _e( 'Restrictiva', 'lealez' ); ?>)</span>
-                    <?php else : ?>
-                        <span style="color: #46b450; font-size: 11px;">(<?php _e( 'Acumulativa', 'lealez' ); ?>)</span>
-                    <?php endif; ?>
-                </label>
+            <h3><?php _e( 'Categorías de Cliente Aplicables', 'lealez' ); ?></h3>
+            <p class="description">
+                <?php _e( 'Selecciona las categorías de cliente que pueden acceder a este programa de lealtad.', 'lealez' ); ?>
             </p>
-        <?php endforeach; ?>
-    </div>
-<?php else : ?>
-    <p class="description" style="color: #dc3232;">
-        <?php _e( 'No hay categorías de cliente disponibles. Por favor, crea categorías de cliente primero.', 'lealez' ); ?>
-    </p>
-<?php endif; ?>
 
+            <?php
+            $applicable_customer_categories = get_post_meta( $post->ID, 'applicable_customer_categories', true );
+            if ( ! is_array( $applicable_customer_categories ) ) {
+                $applicable_customer_categories = array();
+            }
+
+            // Get customer categories
+            $customer_categories = get_terms( array(
+                'taxonomy'   => 'oy_customer_category',
+                'hide_empty' => false,
+            ) );
+
+            if ( ! empty( $customer_categories ) && ! is_wp_error( $customer_categories ) ) :
+                ?>
+                <div style="margin-top: 15px; border: 1px solid #ddd; padding: 15px; background: #f9f9f9; max-height: 300px; overflow-y: auto;">
+                    <?php foreach ( $customer_categories as $category ) :
+                        $category_color = get_term_meta( $category->term_id, 'category_color', true );
+                        $category_type = get_term_meta( $category->term_id, 'category_type', true );
+                        $parent_business_id_cat = get_term_meta( $category->term_id, 'parent_business_id', true );
+                        
+                        // Only show categories from the same business
+                        if ( $parent_business_id && $parent_business_id_cat != $parent_business_id ) {
+                            continue;
+                        }
+                        ?>
+                        <p>
+                            <label style="display: flex; align-items: center; gap: 10px;">
+                                <input type="checkbox" name="applicable_customer_categories[]" value="<?php echo esc_attr( $category->term_id ); ?>" <?php checked( in_array( $category->term_id, $applicable_customer_categories, true ) ); ?>>
+                                <?php if ( $category_color ) : ?>
+                                    <span style="display: inline-block; width: 20px; height: 20px; background-color: <?php echo esc_attr( $category_color ); ?>; border: 1px solid #ddd; border-radius: 3px;"></span>
+                                <?php endif; ?>
+                                <strong><?php echo esc_html( $category->name ); ?></strong>
+                                <?php if ( $category_type === 'restrictive' ) : ?>
+                                    <span style="color: #dc3232; font-size: 11px;">(<?php _e( 'Restrictiva', 'lealez' ); ?>)</span>
+                                <?php else : ?>
+                                    <span style="color: #46b450; font-size: 11px;">(<?php _e( 'Acumulativa', 'lealez' ); ?>)</span>
+                                <?php endif; ?>
+                            </label>
+                        </p>
+                    <?php endforeach; ?>
+                </div>
+            <?php else : ?>
+                <p class="description" style="color: #dc3232;">
+                    <?php _e( 'No hay categorías de cliente disponibles. Por favor, crea categorías de cliente primero.', 'lealez' ); ?>
+                </p>
+            <?php endif; ?>
             
         </div>
 
@@ -1463,22 +566,24 @@ if ( ! empty( $customer_categories ) && ! is_wp_error( $customer_categories ) ) 
                 delete_post_meta( $post_id, 'applicable_locations' );
             }
 
-// Save applicable_customer_categories
-if ( isset( $_POST['applicable_customer_categories'] ) && is_array( $_POST['applicable_customer_categories'] ) ) {
-    $categories = array_map( 'absint', $_POST['applicable_customer_categories'] );
-    update_post_meta( $post_id, 'applicable_customer_categories', $categories );
-} else {
-    update_post_meta( $post_id, 'applicable_customer_categories', array() );
-}
+            // Save applicable_customer_categories
+            if ( isset( $_POST['applicable_customer_categories'] ) && is_array( $_POST['applicable_customer_categories'] ) ) {
+                $categories = array_map( 'absint', $_POST['applicable_customer_categories'] );
+                update_post_meta( $post_id, 'applicable_customer_categories', $categories );
+            } else {
+                update_post_meta( $post_id, 'applicable_customer_categories', array() );
+            }
             
         }
 
-        // Save points mechanics
+        // Save points mechanics - USANDO SANITIZACIÓN DIRECTA
         if ( isset( $_POST['points_per_currency'] ) ) {
-            update_post_meta( $post_id, 'points_per_currency', floatval( $_POST['points_per_currency'] ) );
+            $value = sanitize_text_field( $_POST['points_per_currency'] );
+            update_post_meta( $post_id, 'points_per_currency', $value );
         }
         if ( isset( $_POST['min_purchase_for_points'] ) ) {
-            update_post_meta( $post_id, 'min_purchase_for_points', floatval( $_POST['min_purchase_for_points'] ) );
+            $value = sanitize_text_field( $_POST['min_purchase_for_points'] );
+            update_post_meta( $post_id, 'min_purchase_for_points', $value );
         }
         if ( isset( $_POST['points_rounding'] ) ) {
             update_post_meta( $post_id, 'points_rounding', sanitize_text_field( $_POST['points_rounding'] ) );
@@ -1601,63 +706,6 @@ if ( isset( $_POST['applicable_customer_categories'] ) && is_array( $_POST['appl
         $columns['program_status'] = 'program_status';
 
         return $columns;
-    }
-
-/**
-     * Sanitize JSON data
-     */
-    public function sanitize_json( $value ) {
-        if ( empty( $value ) ) {
-            return '';
-        }
-
-        // If already JSON string, validate it
-        if ( is_string( $value ) ) {
-            $decoded = json_decode( $value, true );
-            if ( json_last_error() === JSON_ERROR_NONE ) {
-                return wp_json_encode( $decoded );
-            }
-            return '';
-        }
-
-        // If array, encode it
-        if ( is_array( $value ) ) {
-            return wp_json_encode( $value );
-        }
-
-        return '';
-    }
-
-    /**
-     * Sanitize float value
-     * 
-     * @param mixed $value Value to sanitize
-     * @return float Sanitized float value
-     */
-    public function sanitize_float( $value ) {
-        return floatval( $value );
-    }
-
-    /**
-     * Sanitize array of integers
-     */
-    public function sanitize_array_of_integers( $value ) {
-        if ( ! is_array( $value ) ) {
-            return array();
-        }
-
-        return array_map( 'absint', $value );
-    }
-
-    /**
-     * Sanitize array of strings
-     */
-    public function sanitize_array_of_strings( $value ) {
-        if ( ! is_array( $value ) ) {
-            return array();
-        }
-
-        return array_map( 'sanitize_text_field', $value );
     }
 }
 
