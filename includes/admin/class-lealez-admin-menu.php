@@ -94,6 +94,16 @@ public function register_admin_menu() {
         null                                          // No callback needed
     );
 
+    // Categorías de Cliente submenu
+add_submenu_page(
+    'lealez',                                     // Parent slug
+    __( 'Categorías de Cliente', 'lealez' ),     // Page title
+    __( 'Categorías de Cliente', 'lealez' ),     // Menu title
+    'manage_options',                             // Capability
+    'edit-tags.php?taxonomy=oy_customer_category&post_type=oy_loyalty_card', // Menu slug
+    null                                          // No callback needed
+);
+
     // Settings submenu
     add_submenu_page(
         'lealez',                                     // Parent slug
@@ -239,116 +249,119 @@ public function register_admin_menu() {
         <?php
     }
 
-    /**
-     * Enqueue admin styles
-     */
-    public function enqueue_admin_styles( $hook ) {
-        // Only load on Lealez pages
-        if ( strpos( $hook, 'lealez' ) === false && ! in_array( get_current_screen()->post_type, array( 'oy_business', 'oy_location', 'oy_loyalty_program' ), true ) ) {
-            return;
-        }
-
-        // Inline CSS for dashboard
-        $custom_css = "
-        .lealez-dashboard {
-            margin-top: 20px;
-        }
-        .lealez-dashboard-widgets {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        .lealez-widget {
-            background: #fff;
-            border: 1px solid #ccd0d4;
-            box-shadow: 0 1px 1px rgba(0,0,0,.04);
-            padding: 20px;
-        }
-        .lealez-widget h2 {
-            margin-top: 0;
-            font-size: 18px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 10px;
-            margin-bottom: 15px;
-        }
-        .lealez-stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-        }
-        .lealez-stat-box {
-            display: flex;
-            align-items: center;
-            padding: 15px;
-            background: #f9f9f9;
-            border-radius: 4px;
-        }
-        .lealez-stat-box .dashicons {
-            font-size: 40px;
-            width: 40px;
-            height: 40px;
-            margin-right: 15px;
-            color: #2271b1;
-        }
-        .lealez-stat-number {
-            font-size: 28px;
-            font-weight: bold;
-            color: #2271b1;
-            line-height: 1;
-        }
-        .lealez-stat-label {
-            font-size: 13px;
-            color: #666;
-            margin-top: 5px;
-        }
-        .lealez-quick-actions {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        .lealez-action-button {
-            display: flex;
-            align-items: center;
-            padding: 12px 15px;
-            background: #2271b1;
-            color: #fff;
-            text-decoration: none;
-            border-radius: 4px;
-            transition: background 0.3s;
-        }
-        .lealez-action-button:hover {
-            background: #135e96;
-            color: #fff;
-        }
-        .lealez-action-button .dashicons {
-            margin-right: 8px;
-        }
-        .lealez-activity-list {
-            list-style: none;
-            margin: 0;
-            padding: 0;
-        }
-        .lealez-activity-list li {
-            padding: 10px 0;
-            border-bottom: 1px solid #eee;
-        }
-        .lealez-activity-list li:last-child {
-            border-bottom: none;
-        }
-        .lealez-activity-date {
-            display: inline-block;
-            font-size: 12px;
-            color: #999;
-            margin-right: 10px;
-        }
-        .lealez-activity-type {
-            font-weight: 600;
-            margin-right: 5px;
-        }
-        ";
-
-        wp_add_inline_style( 'wp-admin', $custom_css );
+public function enqueue_admin_styles( $hook ) {
+    // Only load on Lealez pages
+    $screen = get_current_screen();
+    $lealez_post_types = array( 'oy_business', 'oy_location', 'oy_loyalty_program', 'oy_loyalty_card' );
+    $lealez_taxonomies = array( 'oy_customer_category' );
+    
+    if ( strpos( $hook, 'lealez' ) === false 
+         && ! in_array( $screen->post_type, $lealez_post_types, true )
+         && ! in_array( $screen->taxonomy, $lealez_taxonomies, true ) ) {
+        return;
     }
+
+    // Inline CSS for dashboard
+    $custom_css = "
+    .lealez-dashboard {
+        margin-top: 20px;
+    }
+    .lealez-dashboard-widgets {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+    }
+    .lealez-widget {
+        background: #fff;
+        border: 1px solid #ccd0d4;
+        box-shadow: 0 1px 1px rgba(0,0,0,.04);
+        padding: 20px;
+    }
+    .lealez-widget h2 {
+        margin-top: 0;
+        font-size: 18px;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 10px;
+        margin-bottom: 15px;
+    }
+    .lealez-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 15px;
+    }
+    .lealez-stat-box {
+        display: flex;
+        align-items: center;
+        padding: 15px;
+        background: #f9f9f9;
+        border-radius: 4px;
+    }
+    .lealez-stat-box .dashicons {
+        font-size: 40px;
+        width: 40px;
+        height: 40px;
+        margin-right: 15px;
+        color: #2271b1;
+    }
+    .lealez-stat-number {
+        font-size: 28px;
+        font-weight: bold;
+        color: #2271b1;
+        line-height: 1;
+    }
+    .lealez-stat-label {
+        font-size: 13px;
+        color: #666;
+        margin-top: 5px;
+    }
+    .lealez-quick-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .lealez-action-button {
+        display: flex;
+        align-items: center;
+        padding: 12px 15px;
+        background: #2271b1;
+        color: #fff;
+        text-decoration: none;
+        border-radius: 4px;
+        transition: background 0.3s;
+    }
+    .lealez-action-button:hover {
+        background: #135e96;
+        color: #fff;
+    }
+    .lealez-action-button .dashicons {
+        margin-right: 8px;
+    }
+    .lealez-activity-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .lealez-activity-list li {
+        padding: 10px 0;
+        border-bottom: 1px solid #eee;
+    }
+    .lealez-activity-list li:last-child {
+        border-bottom: none;
+    }
+    .lealez-activity-date {
+        display: inline-block;
+        font-size: 12px;
+        color: #999;
+        margin-right: 10px;
+    }
+    .lealez-activity-type {
+        font-weight: 600;
+        margin-right: 5px;
+    }
+    ";
+
+    wp_add_inline_style( 'wp-admin', $custom_css );
+}
 }
 
 // Initialize the admin menu
