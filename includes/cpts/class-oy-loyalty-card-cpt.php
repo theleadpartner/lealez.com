@@ -49,56 +49,54 @@ class Lealez_Loyalty_Card_CPT {
         add_action( 'before_delete_post', array( $this, 'update_counters_on_delete' ) );
     }
 
-    /**
-     * Register the Loyalty Card CPT
-     */
-    public function register_post_type() {
-        $labels = array(
-            'name'                  => _x( 'Tarjetas de Lealtad', 'Post type general name', 'lealez' ),
-            'singular_name'         => _x( 'Tarjeta de Lealtad', 'Post type singular name', 'lealez' ),
-            'menu_name'             => _x( 'Tarjetas de Lealtad', 'Admin Menu text', 'lealez' ),
-            'name_admin_bar'        => _x( 'Tarjeta de Lealtad', 'Add New on Toolbar', 'lealez' ),
-            'add_new'               => __( 'Agregar Nueva', 'lealez' ),
-            'add_new_item'          => __( 'Agregar Nueva Tarjeta', 'lealez' ),
-            'new_item'              => __( 'Nueva Tarjeta', 'lealez' ),
-            'edit_item'             => __( 'Editar Tarjeta', 'lealez' ),
-            'view_item'             => __( 'Ver Tarjeta', 'lealez' ),
-            'all_items'             => __( 'Todas las Tarjetas', 'lealez' ),
-            'search_items'          => __( 'Buscar Tarjetas', 'lealez' ),
-            'parent_item_colon'     => __( 'Tarjeta Padre:', 'lealez' ),
-            'not_found'             => __( 'No se encontraron tarjetas.', 'lealez' ),
-            'not_found_in_trash'    => __( 'No se encontraron tarjetas en la papelera.', 'lealez' ),
-            'featured_image'        => _x( 'Imagen de la Tarjeta', 'Overrides the "Featured Image" phrase', 'lealez' ),
-            'set_featured_image'    => _x( 'Establecer imagen', 'Overrides the "Set featured image" phrase', 'lealez' ),
-            'remove_featured_image' => _x( 'Eliminar imagen', 'Overrides the "Remove featured image" phrase', 'lealez' ),
-            'use_featured_image'    => _x( 'Usar como imagen', 'Overrides the "Use as featured image" phrase', 'lealez' ),
-            'archives'              => _x( 'Archivo de Tarjetas', 'The post type archive label', 'lealez' ),
-            'insert_into_item'      => _x( 'Insertar en tarjeta', 'Overrides the "Insert into post" phrase', 'lealez' ),
-            'uploaded_to_this_item' => _x( 'Subido a esta tarjeta', 'Overrides the "Uploaded to this post" phrase', 'lealez' ),
-            'filter_items_list'     => _x( 'Filtrar lista de tarjetas', 'Screen reader text for the filter links', 'lealez' ),
-            'items_list_navigation' => _x( 'Navegación de lista de tarjetas', 'Screen reader text for the pagination', 'lealez' ),
-            'items_list'            => _x( 'Lista de tarjetas', 'Screen reader text for the items list', 'lealez' ),
-        );
+public function register_post_type() {
+    $labels = array(
+        'name'                  => _x( 'Tarjetas de Lealtad', 'Post type general name', 'lealez' ),
+        'singular_name'         => _x( 'Tarjeta de Lealtad', 'Post type singular name', 'lealez' ),
+        'menu_name'             => _x( 'Tarjetas de Lealtad', 'Admin Menu text', 'lealez' ),
+        'name_admin_bar'        => _x( 'Tarjeta de Lealtad', 'Add New on Toolbar', 'lealez' ),
+        'add_new'               => __( 'Agregar Nueva', 'lealez' ),
+        'add_new_item'          => __( 'Agregar Nueva Tarjeta', 'lealez' ),
+        'new_item'              => __( 'Nueva Tarjeta', 'lealez' ),
+        'edit_item'             => __( 'Editar Tarjeta', 'lealez' ),
+        'view_item'             => __( 'Ver Tarjeta', 'lealez' ),
+        'all_items'             => __( 'Todas las Tarjetas', 'lealez' ),
+        'search_items'          => __( 'Buscar Tarjetas', 'lealez' ),
+        'parent_item_colon'     => __( 'Tarjeta Padre:', 'lealez' ),
+        'not_found'             => __( 'No se encontraron tarjetas.', 'lealez' ),
+        'not_found_in_trash'    => __( 'No se encontraron tarjetas en la papelera.', 'lealez' ),
+        'featured_image'        => _x( 'Imagen de la Tarjeta', 'Overrides the "Featured Image" phrase', 'lealez' ),
+        'set_featured_image'    => _x( 'Establecer imagen', 'Overrides the "Set featured image" phrase', 'lealez' ),
+        'remove_featured_image' => _x( 'Eliminar imagen', 'Overrides the "Remove featured image" phrase', 'lealez' ),
+        'use_featured_image'    => _x( 'Usar como imagen', 'Overrides the "Use as featured image" phrase', 'lealez' ),
+        'archives'              => _x( 'Archivo de Tarjetas', 'The post type archive label', 'lealez' ),
+        'insert_into_item'      => _x( 'Insertar en tarjeta', 'Overrides the "Insert into post" phrase', 'lealez' ),
+        'uploaded_to_this_item' => _x( 'Subido a esta tarjeta', 'Overrides the "Uploaded to this post" phrase', 'lealez' ),
+        'filter_items_list'     => _x( 'Filtrar lista de tarjetas', 'Screen reader text for the filter links', 'lealez' ),
+        'items_list_navigation' => _x( 'Navegación de lista de tarjetas', 'Screen reader text for the pagination', 'lealez' ),
+        'items_list'            => _x( 'Lista de tarjetas', 'Screen reader text for the items list', 'lealez' ),
+    );
 
-        $args = array(
-            'labels'             => $labels,
-            'public'             => false,
-            'publicly_queryable' => false,
-            'show_ui'            => true,
-            'show_in_menu'       => false,
-            'menu_position'      => 27,
-            'menu_icon'          => 'dashicons-id-alt',
-            'query_var'          => true,
-            'rewrite'            => array( 'slug' => 'loyalty-card' ),
-            'capability_type'    => 'post',
-            'has_archive'        => false,
-            'hierarchical'       => false,
-            'supports'           => array( 'title', 'author' ),
-            'show_in_rest'       => false,
-        );
+    $args = array(
+        'labels'             => $labels,
+        'public'             => false,
+        'publicly_queryable' => false,
+        'show_ui'            => true,
+        'show_in_menu'       => false,
+        'menu_position'      => 27,
+        'menu_icon'          => 'dashicons-id-alt',
+        'query_var'          => true,
+        'rewrite'            => array( 'slug' => 'loyalty-card' ),
+        'capability_type'    => 'post',
+        'has_archive'        => false,
+        'hierarchical'       => false,
+        'supports'           => array( 'title', 'author' ),
+        'show_in_rest'       => false,
+        'taxonomies'         => array( 'oy_customer_category' ),
+    );
 
-        register_post_type( $this->post_type, $args );
-    }
+    register_post_type( $this->post_type, $args );
+}
 
     /**
      * Add meta boxes
@@ -225,88 +223,65 @@ class Lealez_Loyalty_Card_CPT {
         );
     }
 
-    /**
-     * Render Program Relation Meta Box
-     */
-    public function render_program_relation_meta_box( $post ) {
-        wp_nonce_field( 'lealez_card_meta_box', 'lealez_card_meta_box_nonce' );
+/**
+ * Render Program Relation Meta Box
+ */
+public function render_program_relation_meta_box( $post ) {
+    wp_nonce_field( 'lealez_card_meta_box', 'lealez_card_meta_box_nonce' );
 
-        $parent_program_id = get_post_meta( $post->ID, '_parent_program_id', true );
-        $parent_business_id = get_post_meta( $post->ID, '_parent_business_id', true );
-        $user_id = get_post_meta( $post->ID, '_user_id', true );
-        $card_number = get_post_meta( $post->ID, '_card_number', true );
+    $parent_business_id = get_post_meta( $post->ID, '_parent_business_id', true );
+    $user_id = get_post_meta( $post->ID, '_user_id', true );
+    $card_number = get_post_meta( $post->ID, '_card_number', true );
 
-        // Get all loyalty programs
-        $programs = get_posts( array(
-            'post_type'      => 'oy_loyalty_program',
-            'posts_per_page' => -1,
-            'orderby'        => 'title',
-            'order'          => 'ASC',
-            'post_status'    => 'publish',
-        ) );
+    // Get all businesses
+    $businesses = get_posts( array(
+        'post_type'      => 'oy_business',
+        'posts_per_page' => -1,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+        'post_status'    => 'publish',
+    ) );
 
-        // Get all businesses
-        $businesses = get_posts( array(
-            'post_type'      => 'oy_business',
-            'posts_per_page' => -1,
-            'orderby'        => 'title',
-            'order'          => 'ASC',
-            'post_status'    => 'publish',
-        ) );
-
-        // Get all WordPress users
-        $users = get_users( array( 'orderby' => 'display_name' ) );
-        ?>
-        <table class="form-table">
-            <tr>
-                <th><label for="parent_program_id"><?php _e( 'Programa de Lealtad', 'lealez' ); ?> <span class="required">*</span></label></th>
-                <td>
-                    <select name="parent_program_id" id="parent_program_id" class="widefat" required>
-                        <option value=""><?php _e( 'Seleccionar programa...', 'lealez' ); ?></option>
-                        <?php foreach ( $programs as $program ) : ?>
-                            <option value="<?php echo esc_attr( $program->ID ); ?>" <?php selected( $parent_program_id, $program->ID ); ?>>
-                                <?php echo esc_html( $program->post_title ); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="parent_business_id"><?php _e( 'Empresa', 'lealez' ); ?> <span class="required">*</span></label></th>
-                <td>
-                    <select name="parent_business_id" id="parent_business_id" class="widefat" required>
-                        <option value=""><?php _e( 'Seleccionar empresa...', 'lealez' ); ?></option>
-                        <?php foreach ( $businesses as $business ) : ?>
-                            <option value="<?php echo esc_attr( $business->ID ); ?>" <?php selected( $parent_business_id, $business->ID ); ?>>
-                                <?php echo esc_html( $business->post_title ); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="user_id"><?php _e( 'Usuario (Propietario)', 'lealez' ); ?> <span class="required">*</span></label></th>
-                <td>
-                    <select name="user_id" id="user_id" class="widefat" required>
-                        <option value=""><?php _e( 'Seleccionar usuario...', 'lealez' ); ?></option>
-                        <?php foreach ( $users as $user ) : ?>
-                            <option value="<?php echo esc_attr( $user->ID ); ?>" <?php selected( $user_id, $user->ID ); ?>>
-                                <?php echo esc_html( $user->display_name . ' (' . $user->user_email . ')' ); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="card_number"><?php _e( 'Número de Tarjeta', 'lealez' ); ?></label></th>
-                <td>
-                    <input type="text" id="card_number" name="card_number" value="<?php echo esc_attr( $card_number ); ?>" class="regular-text" readonly />
-                    <p class="description"><?php _e( 'Se genera automáticamente al crear la tarjeta.', 'lealez' ); ?></p>
-                </td>
-            </tr>
-        </table>
-        <?php
-    }
+    // Get all WordPress users
+    $users = get_users( array( 'orderby' => 'display_name' ) );
+    ?>
+    <table class="form-table">
+        <tr>
+            <th><label for="parent_business_id"><?php _e( 'Empresa', 'lealez' ); ?> <span class="required">*</span></label></th>
+            <td>
+                <select name="parent_business_id" id="parent_business_id" class="widefat" required>
+                    <option value=""><?php _e( 'Seleccionar empresa...', 'lealez' ); ?></option>
+                    <?php foreach ( $businesses as $business ) : ?>
+                        <option value="<?php echo esc_attr( $business->ID ); ?>" <?php selected( $parent_business_id, $business->ID ); ?>>
+                            <?php echo esc_html( $business->post_title ); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+        </tr>
+        <tr>
+            <th><label for="user_id"><?php _e( 'Usuario (Propietario)', 'lealez' ); ?> <span class="required">*</span></label></th>
+            <td>
+                <select name="user_id" id="user_id" class="widefat" required>
+                    <option value=""><?php _e( 'Seleccionar usuario...', 'lealez' ); ?></option>
+                    <?php foreach ( $users as $user ) : ?>
+                        <option value="<?php echo esc_attr( $user->ID ); ?>" <?php selected( $user_id, $user->ID ); ?>>
+                            <?php echo esc_html( $user->display_name . ' (' . $user->user_email . ')' ); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+        </tr>
+        <tr>
+            <th><label for="card_number"><?php _e( 'Número de Tarjeta', 'lealez' ); ?></label></th>
+            <td>
+                <input type="text" id="card_number" name="card_number" value="<?php echo esc_attr( $card_number ); ?>" class="regular-text" readonly />
+                <p class="description"><?php _e( 'Se genera automáticamente al crear la tarjeta.', 'lealez' ); ?></p>
+            </td>
+        </tr>
+    </table>
+    <?php
+}
 
     /**
      * Render Holder Info Meta Box
@@ -849,90 +824,89 @@ class Lealez_Loyalty_Card_CPT {
             return;
         }
 
-        // Define all meta fields
-        $meta_fields = array(
-            // Relación
-            'parent_program_id',
-            'parent_business_id',
-            'user_id',
-            'card_number',
+// Define all meta fields
+$meta_fields = array(
+    // Relación
+    'parent_business_id',
+    'user_id',
+    'card_number',
 
-            // Titular
-            'card_holder_name',
-            'card_holder_email',
-            'card_holder_phone',
-            'member_id',
-            'date_of_birth',
-            'gender',
-            'country_of_residence',
-            'city_of_residence',
-            'postal_code',
+    // Titular
+    'card_holder_name',
+    'card_holder_email',
+    'card_holder_phone',
+    'member_id',
+    'date_of_birth',
+    'gender',
+    'country_of_residence',
+    'city_of_residence',
+    'postal_code',
 
-            // Puntos
-            'current_points',
-            'lifetime_points_earned',
-            'lifetime_points_redeemed',
-            'pending_points',
-            'expired_points',
+    // Puntos
+    'current_points',
+    'lifetime_points_earned',
+    'lifetime_points_redeemed',
+    'pending_points',
+    'expired_points',
 
-            // Tier
-            'current_tier',
-            'tier_points',
-            'tier_since_date',
+    // Tier
+    'current_tier',
+    'tier_points',
+    'tier_since_date',
 
-            // Digital Wallets
-            'google_object_id',
-            'google_save_url',
-            'google_wallet_added',
-            'apple_pass_serial_number',
-            'apple_pass_url',
-            'apple_wallet_added',
+    // Digital Wallets
+    'google_object_id',
+    'google_save_url',
+    'google_wallet_added',
+    'apple_pass_serial_number',
+    'apple_pass_url',
+    'apple_wallet_added',
 
-            // Barcodes
-            'barcode_type',
-            'barcode_value',
-            'barcode_alt_text',
-            'qr_code_url',
+    // Barcodes
+    'barcode_type',
+    'barcode_value',
+    'barcode_alt_text',
+    'qr_code_url',
 
-            // Ubicaciones
-            'enrollment_location_id',
-            'last_location_used',
+    // Ubicaciones
+    'enrollment_location_id',
+    'last_location_used',
 
-            // Actividad
-            'total_transactions',
-            'total_visits',
-            'total_purchases',
-            'total_spent',
-            'average_transaction_value',
-            'date_last_activity',
+    // Actividad
+    'total_transactions',
+    'total_visits',
+    'total_purchases',
+    'total_spent',
+    'average_transaction_value',
+    'date_last_activity',
 
-            // Estado
-            'card_status',
-            'status_reason',
-            'is_verified',
-            'verification_method',
-            'date_issued',
-            'date_expires',
+    // Estado
+    'card_status',
+    'status_reason',
+    'is_verified',
+    'verification_method',
+    'date_issued',
+    'date_expires',
 
-            // Seguridad
-            'pin_enabled',
-            'two_factor_enabled',
-            'account_locked',
-            'failed_pin_attempts',
+    // Seguridad
+    'pin_enabled',
+    'two_factor_enabled',
+    'account_locked',
+    'failed_pin_attempts',
 
-            // Preferencias
-            'language_preference',
-            'notification_opt_in',
-            'marketing_opt_in',
-            'share_data_opt_in',
-            'preferred_contact_method',
+    // Preferencias
+    'language_preference',
+    'notification_opt_in',
+    'marketing_opt_in',
+    'share_data_opt_in',
+    'preferred_contact_method',
 
-            // Referidos
-            'referral_code',
-            'referred_by_user_id',
-            'referral_bonus_earned',
-            'total_referrals_made',
-        );
+    // Referidos
+    'referral_code',
+    'referred_by_user_id',
+    'referral_bonus_earned',
+    'total_referrals_made',
+);
 
         // Save text fields
         foreach ( $meta_fields as $field ) {
@@ -992,36 +966,35 @@ class Lealez_Loyalty_Card_CPT {
         update_post_meta( $post_id, '_date_issued', current_time( 'mysql' ) );
     }
 
-    /**
-     * Update parent program counters
-     */
-    public function update_parent_program_counters( $post_id, $post ) {
-        if ( $post->post_status !== 'publish' ) {
-            return;
-        }
-
-        $parent_program_id = get_post_meta( $post_id, '_parent_program_id', true );
-        if ( ! $parent_program_id ) {
-            return;
-        }
-
-        // Count all published cards for this program
-        $cards = get_posts( array(
-            'post_type'      => $this->post_type,
-            'posts_per_page' => -1,
-            'post_status'    => 'publish',
-            'meta_query'     => array(
-                array(
-                    'key'   => '_parent_program_id',
-                    'value' => $parent_program_id,
-                ),
-            ),
-            'fields'         => 'ids',
-        ) );
-
-        update_post_meta( $parent_program_id, '_total_cards_issued', count( $cards ) );
-        update_post_meta( $parent_program_id, '_total_members', count( $cards ) );
+/**
+ * Update parent business counters
+ */
+public function update_parent_program_counters( $post_id, $post ) {
+    if ( $post->post_status !== 'publish' ) {
+        return;
     }
+
+    $parent_business_id = get_post_meta( $post_id, '_parent_business_id', true );
+    if ( ! $parent_business_id ) {
+        return;
+    }
+
+    // Count all published cards for this business
+    $cards = get_posts( array(
+        'post_type'      => $this->post_type,
+        'posts_per_page' => -1,
+        'post_status'    => 'publish',
+        'meta_query'     => array(
+            array(
+                'key'   => '_parent_business_id',
+                'value' => $parent_business_id,
+            ),
+        ),
+        'fields'         => 'ids',
+    ) );
+
+    update_post_meta( $parent_business_id, '_total_cards_issued', count( $cards ) );
+}
 
     /**
      * Update counters on card deletion
@@ -1038,86 +1011,102 @@ class Lealez_Loyalty_Card_CPT {
         }
     }
 
-    /**
-     * Set custom columns for admin list
-     */
-    public function set_custom_columns( $columns ) {
-        $new_columns = array();
-        $new_columns['cb'] = $columns['cb'];
-        $new_columns['title'] = __( 'Tarjeta', 'lealez' );
-        $new_columns['card_number'] = __( 'Número', 'lealez' );
-        $new_columns['card_holder'] = __( 'Titular', 'lealez' );
-        $new_columns['program'] = __( 'Programa', 'lealez' );
-        $new_columns['current_points'] = __( 'Puntos', 'lealez' );
-        $new_columns['tier'] = __( 'Nivel', 'lealez' );
-        $new_columns['status'] = __( 'Estado', 'lealez' );
-        $new_columns['date'] = __( 'Fecha', 'lealez' );
+/**
+ * Set custom columns for admin list
+ */
+public function set_custom_columns( $columns ) {
+    $new_columns = array();
+    $new_columns['cb'] = $columns['cb'];
+    $new_columns['title'] = __( 'Tarjeta', 'lealez' );
+    $new_columns['card_number'] = __( 'Número', 'lealez' );
+    $new_columns['card_holder'] = __( 'Titular', 'lealez' );
+    $new_columns['business'] = __( 'Empresa', 'lealez' );
+    $new_columns['categories'] = __( 'Categorías', 'lealez' );
+    $new_columns['current_points'] = __( 'Puntos', 'lealez' );
+    $new_columns['tier'] = __( 'Nivel', 'lealez' );
+    $new_columns['status'] = __( 'Estado', 'lealez' );
+    $new_columns['date'] = __( 'Fecha', 'lealez' );
 
-        return $new_columns;
-    }
+    return $new_columns;
+}
 
-    /**
-     * Display custom column content
-     */
-    public function custom_column_content( $column, $post_id ) {
-        switch ( $column ) {
-            case 'card_number':
-                $card_number = get_post_meta( $post_id, '_card_number', true );
-                echo $card_number ? '<code>' . esc_html( $card_number ) . '</code>' : '—';
-                break;
+/**
+ * Display custom column content
+ */
+public function custom_column_content( $column, $post_id ) {
+    switch ( $column ) {
+        case 'card_number':
+            $card_number = get_post_meta( $post_id, '_card_number', true );
+            echo $card_number ? '<code>' . esc_html( $card_number ) . '</code>' : '—';
+            break;
 
-            case 'card_holder':
-                $card_holder_name = get_post_meta( $post_id, '_card_holder_name', true );
-                $card_holder_email = get_post_meta( $post_id, '_card_holder_email', true );
-                if ( $card_holder_name ) {
-                    echo esc_html( $card_holder_name );
-                    if ( $card_holder_email ) {
-                        echo '<br><small>' . esc_html( $card_holder_email ) . '</small>';
-                    }
-                } else {
-                    echo '—';
+        case 'card_holder':
+            $card_holder_name = get_post_meta( $post_id, '_card_holder_name', true );
+            $card_holder_email = get_post_meta( $post_id, '_card_holder_email', true );
+            if ( $card_holder_name ) {
+                echo esc_html( $card_holder_name );
+                if ( $card_holder_email ) {
+                    echo '<br><small>' . esc_html( $card_holder_email ) . '</small>';
                 }
-                break;
+            } else {
+                echo '—';
+            }
+            break;
 
-            case 'program':
-                $parent_program_id = get_post_meta( $post_id, '_parent_program_id', true );
-                if ( $parent_program_id ) {
-                    echo '<a href="' . esc_url( get_edit_post_link( $parent_program_id ) ) . '">' . esc_html( get_the_title( $parent_program_id ) ) . '</a>';
-                } else {
-                    echo '<span style="color: #dc3232;">—</span>';
+        case 'business':
+            $parent_business_id = get_post_meta( $post_id, '_parent_business_id', true );
+            if ( $parent_business_id ) {
+                echo '<a href="' . esc_url( get_edit_post_link( $parent_business_id ) ) . '">' . esc_html( get_the_title( $parent_business_id ) ) . '</a>';
+            } else {
+                echo '<span style="color: #dc3232;">—</span>';
+            }
+            break;
+
+        case 'categories':
+            $terms = get_the_terms( $post_id, 'oy_customer_category' );
+            if ( $terms && ! is_wp_error( $terms ) ) {
+                $category_list = array();
+                foreach ( $terms as $term ) {
+                    $category_color = get_term_meta( $term->term_id, 'category_color', true );
+                    $color_style = $category_color ? 'background-color: ' . esc_attr( $category_color ) . ';' : '';
+                    $category_list[] = '<span style="display: inline-block; padding: 2px 8px; ' . $color_style . ' color: #fff; border-radius: 3px; font-size: 11px; margin: 2px;">' . esc_html( $term->name ) . '</span>';
                 }
-                break;
+                echo implode( ' ', $category_list );
+            } else {
+                echo '—';
+            }
+            break;
 
-            case 'current_points':
-                $current_points = get_post_meta( $post_id, '_current_points', true );
-                echo esc_html( $current_points ? number_format( $current_points ) : '0' );
-                break;
+        case 'current_points':
+            $current_points = get_post_meta( $post_id, '_current_points', true );
+            echo esc_html( $current_points ? number_format( $current_points ) : '0' );
+            break;
 
-            case 'tier':
-                $current_tier = get_post_meta( $post_id, '_current_tier', true );
-                $tier_labels = array(
-                    'bronze'   => '<span style="color: #cd7f32;">● Bronce</span>',
-                    'silver'   => '<span style="color: #c0c0c0;">● Plata</span>',
-                    'gold'     => '<span style="color: #ffd700;">● Oro</span>',
-                    'platinum' => '<span style="color: #e5e4e2;">● Platino</span>',
-                );
-                echo isset( $tier_labels[ $current_tier ] ) ? wp_kses_post( $tier_labels[ $current_tier ] ) : '—';
-                break;
+        case 'tier':
+            $current_tier = get_post_meta( $post_id, '_current_tier', true );
+            $tier_labels = array(
+                'bronze'   => '<span style="color: #cd7f32;">● Bronce</span>',
+                'silver'   => '<span style="color: #c0c0c0;">● Plata</span>',
+                'gold'     => '<span style="color: #ffd700;">● Oro</span>',
+                'platinum' => '<span style="color: #e5e4e2;">● Platino</span>',
+            );
+            echo isset( $tier_labels[ $current_tier ] ) ? wp_kses_post( $tier_labels[ $current_tier ] ) : '—';
+            break;
 
-            case 'status':
-                $card_status = get_post_meta( $post_id, '_card_status', true );
-                $status_labels = array(
-                    'active'    => '<span style="color: #46b450;">● Activa</span>',
-                    'inactive'  => '<span style="color: #999;">● Inactiva</span>',
-                    'suspended' => '<span style="color: #dc3232;">● Suspendida</span>',
-                    'expired'   => '<span style="color: #999;">● Expirada</span>',
-                    'blocked'   => '<span style="color: #dc3232;">● Bloqueada</span>',
-                    'cancelled' => '<span style="color: #333;">● Cancelada</span>',
-                );
-                echo isset( $status_labels[ $card_status ] ) ? wp_kses_post( $status_labels[ $card_status ] ) : '—';
-                break;
-        }
+        case 'status':
+            $card_status = get_post_meta( $post_id, '_card_status', true );
+            $status_labels = array(
+                'active'    => '<span style="color: #46b450;">● Activa</span>',
+                'inactive'  => '<span style="color: #999;">● Inactiva</span>',
+                'suspended' => '<span style="color: #dc3232;">● Suspendida</span>',
+                'expired'   => '<span style="color: #999;">● Expirada</span>',
+                'blocked'   => '<span style="color: #dc3232;">● Bloqueada</span>',
+                'cancelled' => '<span style="color: #333;">● Cancelada</span>',
+            );
+            echo isset( $status_labels[ $card_status ] ) ? wp_kses_post( $status_labels[ $card_status ] ) : '—';
+            break;
     }
+}
 
     /**
      * Set sortable columns
