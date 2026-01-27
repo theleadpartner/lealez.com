@@ -229,50 +229,69 @@ class OY_Location_CPT {
         );
     }
 
-    /**
-     * Render Parent Business meta box
-     */
-    public function render_parent_business_meta_box( $post ) {
-        wp_nonce_field( $this->nonce_action, $this->nonce_name );
-        
-        $parent_business_id = get_post_meta( $post->ID, 'parent_business_id', true );
-        
-        // Get all businesses
-        $businesses = get_posts( array(
-            'post_type'      => 'oy_business',
-            'posts_per_page' => -1,
-            'orderby'        => 'title',
-            'order'          => 'ASC',
-            'post_status'    => 'publish',
-        ) );
-        
-        ?>
-        <div class="oy-meta-field">
-            <label for="parent_business_id">
-                <strong><?php _e( 'Empresa/Negocio', 'lealez' ); ?> <span class="required">*</span></strong>
-            </label>
-            <select name="parent_business_id" id="parent_business_id" class="widefat" required>
-                <option value=""><?php _e( 'Seleccionar empresa...', 'lealez' ); ?></option>
-                <?php foreach ( $businesses as $business ) : ?>
-                    <option value="<?php echo esc_attr( $business->ID ); ?>" <?php selected( $parent_business_id, $business->ID ); ?>>
-                        <?php echo esc_html( $business->post_title ); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <p class="description">
-                <?php _e( 'Selecciona la empresa a la que pertenece esta ubicación.', 'lealez' ); ?>
-            </p>
-        </div>
-        
-        <?php if ( $parent_business_id ) : ?>
-            <div class="oy-meta-field" style="margin-top: 15px;">
-                <a href="<?php echo esc_url( get_edit_post_link( $parent_business_id ) ); ?>" class="button button-secondary" target="_blank">
-                    <?php _e( 'Ver Empresa', 'lealez' ); ?>
-                </a>
-            </div>
-        <?php endif; ?>
-        <?php
+/**
+ * Render Parent Business meta box
+ */
+public function render_parent_business_meta_box( $post ) {
+    wp_nonce_field( $this->nonce_action, $this->nonce_name );
+    
+    $parent_business_id = get_post_meta( $post->ID, 'parent_business_id', true );
+    
+    // Check if business_id is passed via URL (from business page)
+    if ( empty( $parent_business_id ) && isset( $_GET['business_id'] ) ) {
+        $parent_business_id = absint( $_GET['business_id'] );
     }
+    
+    // Get all businesses
+    $businesses = get_posts( array(
+        'post_type'      => 'oy_business',
+        'posts_per_page' => -1,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+        'post_status'    => 'publish',
+    ) );
+    
+    ?>
+    <div class="oy-meta-field">
+        <label for="parent_business_id">
+            <strong><?php _e( 'Empresa/Negocio', 'lealez' ); ?> <span class="required">*</span></strong>
+        </label>
+        <select name="parent_business_id" id="parent_business_id" class="widefat" required>
+            <option value=""><?php _e( 'Seleccionar empresa...', 'lealez' ); ?></option>
+            <?php foreach ( $businesses as $business ) : ?>
+                <option value="<?php echo esc_attr( $business->ID ); ?>" <?php selected( $parent_business_id, $business->ID ); ?>>
+                    <?php echo esc_html( $business->post_title ); ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        <p class="description">
+            <?php _e( 'Selecciona la empresa a la que pertenece esta ubicación.', 'lealez' ); ?>
+        </p>
+    </div>
+    
+    <?php if ( $parent_business_id ) : ?>
+        <div class="oy-meta-field" style="margin-top: 15px;">
+            <a href="<?php echo esc_url( get_edit_post_link( $parent_business_id ) ); ?>" class="button button-secondary" target="_blank">
+                <span class="dashicons dashicons-building" style="margin-top: 3px;"></span>
+                <?php _e( 'Ver Empresa', 'lealez' ); ?>
+            </a>
+            <a href="<?php echo esc_url( admin_url( 'edit.php?post_type=oy_location&business_filter=' . $parent_business_id ) ); ?>" class="button button-secondary">
+                <span class="dashicons dashicons-list-view" style="margin-top: 3px;"></span>
+                <?php _e( 'Ver Todas las Ubicaciones de esta Empresa', 'lealez' ); ?>
+            </a>
+        </div>
+    <?php endif; ?>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        // Pre-select business if passed via URL
+        <?php if ( ! empty( $parent_business_id ) && isset( $_GET['business_id'] ) ) : ?>
+        $('#parent_business_id').val('<?php echo esc_js( $parent_business_id ); ?>');
+        <?php endif; ?>
+    });
+    </script>
+    <?php
+}
 
     /**
      * Render Basic Information meta box
