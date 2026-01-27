@@ -170,6 +170,11 @@ private function include_cpts() {
  */
 private function include_admin() {
     require_once LEALEZ_INCLUDES_DIR . 'admin/class-lealez-admin-menu.php';
+    
+    // Include GMB Settings if OAuth class exists
+    if ( class_exists( 'Lealez_GMB_OAuth' ) ) {
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-settings.php';
+    }
 }
 
     /**
