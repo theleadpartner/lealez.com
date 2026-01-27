@@ -185,6 +185,16 @@ class Lealez_Business_CPT {
             'low'
         );
 
+        // Ubicaciones Asociadas
+add_meta_box(
+    'lealez_business_locations',
+    __( 'Ubicaciones Asociadas', 'lealez' ),
+    array( $this, 'render_locations_meta_box' ),
+    $this->post_type,
+    'normal',
+    'default'
+);
+
         // Permisos y Roles
         add_meta_box(
             'lealez_business_permissions',
@@ -626,6 +636,156 @@ class Lealez_Business_CPT {
         <?php endif; ?>
         <?php
     }
+
+    /**
+ * Render Locations Meta Box
+ */
+public function render_locations_meta_box( $post ) {
+    // Get all locations for this business
+    $locations = get_posts( array(
+        'post_type'      => 'oy_location',
+        'posts_per_page' => -1,
+        'post_status'    => 'any',
+        'meta_query'     => array(
+            array(
+                'key'     => 'parent_business_id',
+                'value'   => $post->ID,
+                'compare' => '=',
+            ),
+        ),
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+    ) );
+
+    if ( empty( $locations ) ) {
+        ?>
+        <div class="lealez-no-locations">
+            <p><?php _e( 'No hay ubicaciones asociadas a esta empresa.', 'lealez' ); ?></p>
+            <p>
+                <a href="<?php echo esc_url( admin_url( 'post-new.php?post_type=oy_location&business_id=' . $post->ID ) ); ?>" class="button button-primary">
+                    <span class="dashicons dashicons-plus-alt" style="margin-top: 3px;"></span>
+                    <?php _e( 'Agregar Primera Ubicación', 'lealez' ); ?>
+                </a>
+            </p>
+        </div>
+        <?php
+        return;
+    }
+
+    ?>
+    <div class="lealez-locations-list">
+        <div class="lealez-locations-header" style="margin-bottom: 15px;">
+            <a href="<?php echo esc_url( admin_url( 'post-new.php?post_type=oy_location&business_id=' . $post->ID ) ); ?>" class="button button-primary">
+                <span class="dashicons dashicons-plus-alt" style="margin-top: 3px;"></span>
+                <?php _e( 'Agregar Nueva Ubicación', 'lealez' ); ?>
+            </a>
+            <span style="margin-left: 15px; color: #666;">
+                <?php printf( _n( '%s ubicación encontrada', '%s ubicaciones encontradas', count( $locations ), 'lealez' ), number_format_i18n( count( $locations ) ) ); ?>
+            </span>
+        </div>
+
+        <table class="widefat striped">
+            <thead>
+                <tr>
+                    <th><?php _e( 'Nombre', 'lealez' ); ?></th>
+                    <th><?php _e( 'Código', 'lealez' ); ?></th>
+                    <th><?php _e( 'Ciudad', 'lealez' ); ?></th>
+                    <th><?php _e( 'Estado', 'lealez' ); ?></th>
+                    <th><?php _e( 'GMB', 'lealez' ); ?></th>
+                    <th><?php _e( 'Acciones', 'lealez' ); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ( $locations as $location ) :
+                    $location_code = get_post_meta( $location->ID, 'location_code', true );
+                    $location_city = get_post_meta( $location->ID, 'location_city', true );
+                    $location_status = get_post_meta( $location->ID, 'location_status', true );
+                    $gmb_verified = get_post_meta( $location->ID, 'gmb_verified', true );
+                    $gmb_location_id = get_post_meta( $location->ID, 'gmb_location_id', true );
+
+                    // Status colors
+                    $status_colors = array(
+                        'active'              => array( 'color' => '#46b450', 'label' => __( 'Activa', 'lealez' ) ),
+                        'inactive'            => array( 'color' => '#999', 'label' => __( 'Inactiva', 'lealez' ) ),
+                        'temporarily_closed'  => array( 'color' => '#f0b322', 'label' => __( 'Cerrada Temp.', 'lealez' ) ),
+                        'permanently_closed'  => array( 'color' => '#dc3232', 'label' => __( 'Cerrada Perm.', 'lealez' ) ),
+                    );
+
+                    $status_display = isset( $status_colors[ $location_status ] ) ? $status_colors[ $location_status ] : array( 'color' => '#999', 'label' => '—' );
+                    ?>
+                    <tr>
+                        <td>
+                            <strong>
+                                <a href="<?php echo esc_url( get_edit_post_link( $location->ID ) ); ?>">
+                                    <?php echo esc_html( get_the_title( $location->ID ) ); ?>
+                                </a>
+                            </strong>
+                        </td>
+                        <td>
+                            <?php if ( $location_code ) : ?>
+                                <code><?php echo esc_html( $location_code ); ?></code>
+                            <?php else : ?>
+                                <span style="color: #999;">—</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php echo $location_city ? esc_html( $location_city ) : '<span style="color: #999;">—</span>'; ?>
+                        </td>
+                        <td>
+                            <span style="color: <?php echo esc_attr( $status_display['color'] ); ?>; font-weight: 600;">
+                                <?php echo esc_html( $status_display['label'] ); ?>
+                            </span>
+                        </td>
+                        <td style="text-align: center;">
+                            <?php if ( $gmb_verified && $gmb_location_id ) : ?>
+                                <span style="color: #46b450; font-size: 18px;" title="<?php esc_attr_e( 'Verificada en GMB', 'lealez' ); ?>">✓</span>
+                            <?php elseif ( $gmb_location_id ) : ?>
+                                <span style="color: #f0b322; font-size: 18px;" title="<?php esc_attr_e( 'Conectada pero no verificada', 'lealez' ); ?>">⚠</span>
+                            <?php else : ?>
+                                <span style="color: #999; font-size: 18px;" title="<?php esc_attr_e( 'No conectada a GMB', 'lealez' ); ?>">—</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <a href="<?php echo esc_url( get_edit_post_link( $location->ID ) ); ?>" class="button button-small">
+                                <?php _e( 'Editar', 'lealez' ); ?>
+                            </a>
+                            <a href="<?php echo esc_url( get_permalink( $location->ID ) ); ?>" class="button button-small" target="_blank">
+                                <?php _e( 'Ver', 'lealez' ); ?>
+                            </a>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+
+    <style>
+    .lealez-no-locations {
+        text-align: center;
+        padding: 40px 20px;
+        background: #f9f9f9;
+        border: 2px dashed #ddd;
+        border-radius: 4px;
+    }
+    .lealez-no-locations p {
+        margin: 10px 0;
+    }
+    .lealez-locations-list table {
+        margin-top: 10px;
+    }
+    .lealez-locations-list .button .dashicons {
+        display: inline-block;
+        vertical-align: middle;
+    }
+    .lealez-locations-header {
+        display: flex;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #ddd;
+    }
+    </style>
+    <?php
+}
 
     /**
      * Render Permissions Meta Box
