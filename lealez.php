@@ -155,6 +155,14 @@ private function include_cpts() {
     
     // Include taxonomies
     require_once LEALEZ_INCLUDES_DIR . 'taxonomies/class-oy-customer-category-taxonomy.php';
+    
+    // Include GMB integration
+    if ( file_exists( LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php' ) ) {
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php';
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-oauth.php';
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-api.php';
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-ajax.php';
+    }
 }
     
 /**
