@@ -40,6 +40,7 @@ class Lealez_GMB_OAuth {
      */
     private static $scopes = array(
         'https://www.googleapis.com/auth/business.manage',
+        'https://www.googleapis.com/auth/businessprofileperformance.readonly',
     );
 
     /**
@@ -48,13 +49,17 @@ class Lealez_GMB_OAuth {
      * @return array|false
      */
     private static function get_oauth_config() {
-        $config = get_option( 'lealez_gmb_oauth_config', array() );
+        $client_id = get_option( 'lealez_gmb_client_id', '' );
+        $client_secret = get_option( 'lealez_gmb_client_secret', '' );
         
-        if ( empty( $config['client_id'] ) || empty( $config['client_secret'] ) ) {
+        if ( empty( $client_id ) || empty( $client_secret ) ) {
             return false;
         }
 
-        return $config;
+        return array(
+            'client_id'     => $client_id,
+            'client_secret' => $client_secret,
+        );
     }
 
     /**
@@ -119,6 +124,7 @@ class Lealez_GMB_OAuth {
                     'redirect_uri'  => self::get_redirect_uri(),
                     'grant_type'    => 'authorization_code',
                 ),
+                'timeout' => 30,
             )
         );
 
@@ -129,7 +135,14 @@ class Lealez_GMB_OAuth {
         $body = json_decode( wp_remote_retrieve_body( $response ), true );
 
         if ( isset( $body['error'] ) ) {
-            return new WP_Error( 'oauth_error', $body['error_description'] ?? $body['error'] );
+            $error_description = $body['error_description'] ?? $body['error'];
+            
+            // Provide user-friendly error messages
+            if ( $body['error'] === 'access_denied' ) {
+                $error_description = __( 'Access denied. Make sure your email is added as a "Test User" in Google Cloud Console → OAuth consent screen → Test users.', 'lealez' );
+            }
+            
+            return new WP_Error( 'oauth_error', $error_description );
         }
 
         $tokens = array(
@@ -141,12 +154,23 @@ class Lealez_GMB_OAuth {
         );
 
         // Store tokens encrypted
-        Lealez_GMB_Encryption::store_tokens( $business_id, $tokens );
+        $store_result = Lealez_GMB_Encryption::store_tokens( $business_id, $tokens );
+        
+        if ( ! $store_result ) {
+            return new WP_Error( 'token_storage_failed', __( 'Failed to store tokens securely', 'lealez' ) );
+        }
 
         // Mark as connected
         update_post_meta( $business_id, '_gmb_connected', '1' );
         update_post_meta( $business_id, '_gmb_connection_date', time() );
         update_post_meta( $business_id, '_gmb_connected_by_user_id', get_current_user_id() );
+
+        // Get user info from Google
+        $user_info = self::get_user_info( $tokens['access_token'] );
+        if ( ! is_wp_error( $user_info ) && isset( $user_info['email'] ) ) {
+            update_post_meta( $business_id, '_gmb_account_email', sanitize_email( $user_info['email'] ) );
+            update_post_meta( $business_id, '_gmb_account_name', sanitize_text_field( $user_info['name'] ?? $user_info['email'] ) );
+        }
 
         return $tokens;
     }
@@ -179,6 +203,7 @@ class Lealez_GMB_OAuth {
                     'client_secret' => $config['client_secret'],
                     'grant_type'    => 'refresh_token',
                 ),
+                'timeout' => 30,
             )
         );
 
@@ -204,6 +229,37 @@ class Lealez_GMB_OAuth {
         Lealez_GMB_Encryption::store_tokens( $business_id, $new_tokens );
 
         return $new_tokens;
+    }
+
+    /**
+     * Get user info from Google
+     *
+     * @param string $access_token Access token
+     * @return array|WP_Error
+     */
+    private static function get_user_info( $access_token ) {
+        $response = wp_remote_get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $access_token,
+                ),
+                'timeout' => 30,
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $body = wp_remote_retrieve_body( $response );
+        $data = json_decode( $body, true );
+
+        if ( json_last_error() !== JSON_ERROR_NONE ) {
+            return new WP_Error( 'json_decode_error', __( 'Failed to decode user info response', 'lealez' ) );
+        }
+
+        return $data;
     }
 
     /**
