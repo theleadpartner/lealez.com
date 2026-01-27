@@ -1603,7 +1603,7 @@ if ( isset( $_POST['applicable_customer_categories'] ) && is_array( $_POST['appl
         return $columns;
     }
 
-    /**
+/**
      * Sanitize JSON data
      */
     public function sanitize_json( $value ) {
@@ -1626,6 +1626,16 @@ if ( isset( $_POST['applicable_customer_categories'] ) && is_array( $_POST['appl
         }
 
         return '';
+    }
+
+    /**
+     * Sanitize float value
+     * 
+     * @param mixed $value Value to sanitize
+     * @return float Sanitized float value
+     */
+    public function sanitize_float( $value ) {
+        return floatval( $value );
     }
 
     /**
