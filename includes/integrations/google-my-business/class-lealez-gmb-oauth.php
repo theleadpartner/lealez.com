@@ -40,7 +40,6 @@ class Lealez_GMB_OAuth {
      */
     private static $scopes = array(
         'https://www.googleapis.com/auth/business.manage',
-        'https://www.googleapis.com/auth/businessprofileperformance.readonly',
     );
 
     /**
