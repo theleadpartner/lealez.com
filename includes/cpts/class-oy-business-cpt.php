@@ -38,6 +38,8 @@ class Lealez_Business_CPT {
         add_action( 'save_post_oy_business', array( $this, 'save_meta_boxes' ), 10, 2 );
         add_filter( 'manage_oy_business_posts_columns', array( $this, 'set_custom_columns' ) );
         add_action( 'manage_oy_business_posts_custom_column', array( $this, 'custom_column_content' ), 10, 2 );
+        // Enqueue scripts for GMB
+add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
     }
 
     /**
@@ -1023,6 +1025,48 @@ public function render_locations_meta_box( $post ) {
                 break;
         }
     }
+
+/**
+ * Enqueue admin scripts for GMB integration
+ */
+public function enqueue_admin_scripts( $hook ) {
+    global $post_type, $post;
+    
+    if ( 'oy_business' !== $post_type ) {
+        return;
+    }
+    
+    if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
+        return;
+    }
+    
+    // Enqueue GMB connection script
+    wp_enqueue_script(
+        'lealez-gmb-connection',
+        LEALEZ_ASSETS_URL . 'js/admin/lealez-gmb-connection.js',
+        array( 'jquery' ),
+        LEALEZ_VERSION,
+        true
+    );
+    
+    // Localize script
+    wp_localize_script(
+        'lealez-gmb-connection',
+        'lealezGMBData',
+        array(
+            'nonce'      => wp_create_nonce( 'lealez_gmb_nonce' ),
+            'businessId' => $post->ID ?? 0,
+            'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+            'i18n'       => array(
+                'processing'        => __( 'Procesando...', 'lealez' ),
+                'error'             => __( 'Ocurrió un error. Por favor intenta de nuevo.', 'lealez' ),
+                'saveFirst'         => __( 'Por favor guarda la empresa primero.', 'lealez' ),
+                'confirmDisconnect' => __( '¿Estás seguro de que deseas desconectar esta cuenta de Google My Business?', 'lealez' ),
+            ),
+        )
+    );
+}
+
 }
 
 // Initialize the class
