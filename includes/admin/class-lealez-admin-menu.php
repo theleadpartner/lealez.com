@@ -358,6 +358,31 @@ public function enqueue_admin_styles( $hook ) {
         font-weight: 600;
         margin-right: 5px;
     }
+    
+    /* Estilos para el meta box de ubicaciones */
+    .lealez-no-locations {
+        text-align: center;
+        padding: 40px 20px;
+        background: #f9f9f9;
+        border: 2px dashed #ddd;
+        border-radius: 4px;
+    }
+    .lealez-no-locations p {
+        margin: 10px 0;
+    }
+    .lealez-locations-list table {
+        margin-top: 10px;
+    }
+    .lealez-locations-list .button .dashicons {
+        display: inline-block;
+        vertical-align: middle;
+    }
+    .lealez-locations-header {
+        display: flex;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #ddd;
+    }
     ";
 
     wp_add_inline_style( 'wp-admin', $custom_css );
