@@ -230,6 +230,20 @@ class OY_Loyalty_Program_CPT {
                 'sanitize_callback' => array( $this, 'sanitize_array_of_integers' ),
             ),
 
+            'applicable_customer_categories'  => array(
+    'type'              => 'array',
+    'description'       => 'Array de IDs de categorías de cliente (oy_customer_category term IDs)',
+    'show_in_rest'      => array(
+        'schema' => array(
+            'type'  => 'array',
+            'items' => array(
+                'type' => 'integer',
+            ),
+        ),
+    ),
+    'sanitize_callback' => array( $this, 'sanitize_array_of_integers' ),
+),
+
             // ===== MECÁNICA DE PUNTOS/RECOMPENSAS =====
             'points_per_currency'             => array(
                 'type'              => 'number',
@@ -1205,6 +1219,62 @@ class OY_Loyalty_Program_CPT {
                     <p class="description"><?php esc_html_e( 'No hay ubicaciones disponibles. Por favor, crea ubicaciones primero o selecciona una empresa.', 'lealez' ); ?></p>
                 <?php endif; ?>
             </div>
+
+<hr style="margin: 20px 0;">
+
+<h3><?php _e( 'Categorías de Cliente Aplicables', 'lealez' ); ?></h3>
+<p class="description">
+    <?php _e( 'Selecciona las categorías de cliente que pueden acceder a este programa de lealtad.', 'lealez' ); ?>
+</p>
+
+<?php
+$applicable_customer_categories = get_post_meta( $post->ID, 'applicable_customer_categories', true );
+if ( ! is_array( $applicable_customer_categories ) ) {
+    $applicable_customer_categories = array();
+}
+
+// Get customer categories
+$customer_categories = get_terms( array(
+    'taxonomy'   => 'oy_customer_category',
+    'hide_empty' => false,
+) );
+
+if ( ! empty( $customer_categories ) && ! is_wp_error( $customer_categories ) ) :
+    ?>
+    <div style="margin-top: 15px; border: 1px solid #ddd; padding: 15px; background: #f9f9f9; max-height: 300px; overflow-y: auto;">
+        <?php foreach ( $customer_categories as $category ) :
+            $category_color = get_term_meta( $category->term_id, 'category_color', true );
+            $category_type = get_term_meta( $category->term_id, 'category_type', true );
+            $parent_business_id_cat = get_term_meta( $category->term_id, 'parent_business_id', true );
+            
+            // Only show categories from the same business
+            if ( $parent_business_id && $parent_business_id_cat != $parent_business_id ) {
+                continue;
+            }
+            ?>
+            <p>
+                <label style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" name="applicable_customer_categories[]" value="<?php echo esc_attr( $category->term_id ); ?>" <?php checked( in_array( $category->term_id, $applicable_customer_categories, true ) ); ?>>
+                    <?php if ( $category_color ) : ?>
+                        <span style="display: inline-block; width: 20px; height: 20px; background-color: <?php echo esc_attr( $category_color ); ?>; border: 1px solid #ddd; border-radius: 3px;"></span>
+                    <?php endif; ?>
+                    <strong><?php echo esc_html( $category->name ); ?></strong>
+                    <?php if ( $category_type === 'restrictive' ) : ?>
+                        <span style="color: #dc3232; font-size: 11px;">(<?php _e( 'Restrictiva', 'lealez' ); ?>)</span>
+                    <?php else : ?>
+                        <span style="color: #46b450; font-size: 11px;">(<?php _e( 'Acumulativa', 'lealez' ); ?>)</span>
+                    <?php endif; ?>
+                </label>
+            </p>
+        <?php endforeach; ?>
+    </div>
+<?php else : ?>
+    <p class="description" style="color: #dc3232;">
+        <?php _e( 'No hay categorías de cliente disponibles. Por favor, crea categorías de cliente primero.', 'lealez' ); ?>
+    </p>
+<?php endif; ?>
+
+            
         </div>
 
         <script>
@@ -1392,6 +1462,15 @@ class OY_Loyalty_Program_CPT {
                 // If global, clear specific locations
                 delete_post_meta( $post_id, 'applicable_locations' );
             }
+
+// Save applicable_customer_categories
+if ( isset( $_POST['applicable_customer_categories'] ) && is_array( $_POST['applicable_customer_categories'] ) ) {
+    $categories = array_map( 'absint', $_POST['applicable_customer_categories'] );
+    update_post_meta( $post_id, 'applicable_customer_categories', $categories );
+} else {
+    update_post_meta( $post_id, 'applicable_customer_categories', array() );
+}
+            
         }
 
         // Save points mechanics
