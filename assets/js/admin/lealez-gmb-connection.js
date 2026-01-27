@@ -1,17 +1,12 @@
 /**
  * Lealez GMB Connection Handler
  * 
- * Handles Google My Business connection UI interactions
- *
- * @package Lealez
- * @since 1.0.0
+ * Handles Google My Business OAuth connection flow
  */
-
 (function($) {
     'use strict';
 
-    var LealezGMB = {
-        
+    const LealezGMB = {
         /**
          * Initialize
          */
@@ -23,51 +18,10 @@
          * Bind events
          */
         bindEvents: function() {
-            $(document).on('click', '.lealez-connect-gmb', this.connectGMB);
-            $(document).on('click', '.lealez-disconnect-gmb', this.disconnectGMB);
-            $(document).on('click', '.lealez-refresh-gmb-locations', this.refreshLocations);
-            $(document).on('click', '.lealez-test-gmb-connection', this.testConnection);
-        },
-
-        /**
-         * Get business ID
-         */
-        getBusinessId: function() {
-            return $('#post_ID').val() || lealezGMBData.businessId || 0;
-        },
-
-        /**
-         * Show loading
-         */
-        showLoading: function(button) {
-            button.prop('disabled', true);
-            button.data('original-text', button.text());
-            button.html('<span class="spinner is-active" style="float: none; margin: 0;"></span> ' + lealezGMBData.i18n.processing);
-        },
-
-        /**
-         * Hide loading
-         */
-        hideLoading: function(button) {
-            button.prop('disabled', false);
-            button.text(button.data('original-text') || button.text());
-        },
-
-        /**
-         * Show notice
-         */
-        showNotice: function(message, type) {
-            type = type || 'success';
-            var noticeClass = 'notice-' + type;
-            var notice = $('<div class="notice ' + noticeClass + ' is-dismissible"><p>' + message + '</p></div>');
-            
-            $('.wrap h1').after(notice);
-            
-            setTimeout(function() {
-                notice.fadeOut(function() {
-                    $(this).remove();
-                });
-            }, 5000);
+            $(document).on('click', '.lealez-connect-gmb', this.connectGMB.bind(this));
+            $(document).on('click', '.lealez-disconnect-gmb', this.disconnectGMB.bind(this));
+            $(document).on('click', '.lealez-refresh-gmb-locations', this.refreshLocations.bind(this));
+            $(document).on('click', '.lealez-test-gmb-connection', this.testConnection.bind(this));
         },
 
         /**
@@ -75,55 +29,63 @@
          */
         connectGMB: function(e) {
             e.preventDefault();
-            var button = $(this);
-            var businessId = LealezGMB.getBusinessId();
-
-            if (!businessId) {
+            
+            const businessId = lealezGMBData.businessId;
+            
+            if (!businessId || businessId === '0') {
                 alert(lealezGMBData.i18n.saveFirst);
                 return;
             }
 
-            LealezGMB.showLoading(button);
+            const $button = $(e.currentTarget);
+            $button.prop('disabled', true).text(lealezGMBData.i18n.processing);
 
             $.ajax({
-                url: ajaxurl,
+                url: lealezGMBData.ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'lealez_gmb_get_auth_url',
-                    business_id: businessId,
-                    nonce: lealezGMBData.nonce
+                    nonce: lealezGMBData.nonce,
+                    business_id: businessId
                 },
                 success: function(response) {
-                    LealezGMB.hideLoading(button);
-                    
                     if (response.success && response.data.auth_url) {
-                        // Open OAuth window
-                        var width = 600;
-                        var height = 700;
-                        var left = (screen.width - width) / 2;
-                        var top = (screen.height - height) / 2;
+                        // Open popup window
+                        const width = 600;
+                        const height = 700;
+                        const left = (screen.width - width) / 2;
+                        const top = (screen.height - height) / 2;
                         
-                        var authWindow = window.open(
+                        const popup = window.open(
                             response.data.auth_url,
-                            'gmb_auth',
-                            'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top
+                            'gmb_oauth',
+                            `width=${width},height=${height},left=${left},top=${top},toolbar=0,menubar=0,location=0`
                         );
 
-                        // Check if window was closed
-                        var checkWindow = setInterval(function() {
-                            if (authWindow.closed) {
-                                clearInterval(checkWindow);
-                                // Reload page to show connection status
+                        // Check if popup was blocked
+                        if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+                            alert('Por favor, permite las ventanas emergentes para conectar con Google.');
+                            $button.prop('disabled', false).text('Conectar con Google My Business');
+                            return;
+                        }
+
+                        // Monitor popup
+                        const checkPopup = setInterval(function() {
+                            if (popup.closed) {
+                                clearInterval(checkPopup);
+                                // Reload page to show updated connection status
                                 location.reload();
                             }
                         }, 1000);
+
                     } else {
-                        LealezGMB.showNotice(response.data.message || lealezGMBData.i18n.error, 'error');
+                        alert(response.data.message || lealezGMBData.i18n.error);
+                        $button.prop('disabled', false).text('Conectar con Google My Business');
                     }
                 },
                 error: function() {
-                    LealezGMB.hideLoading(button);
-                    LealezGMB.showNotice(lealezGMBData.i18n.error, 'error');
+                    alert(lealezGMBData.i18n.error);
+                    $button.prop('disabled', false).text('Conectar con Google My Business');
                 }
             });
         },
@@ -138,106 +100,93 @@
                 return;
             }
 
-            var button = $(this);
-            var businessId = LealezGMB.getBusinessId();
-
-            LealezGMB.showLoading(button);
+            const $button = $(e.currentTarget);
+            $button.prop('disabled', true).text(lealezGMBData.i18n.processing);
 
             $.ajax({
-                url: ajaxurl,
+                url: lealezGMBData.ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'lealez_gmb_disconnect',
-                    business_id: businessId,
-                    nonce: lealezGMBData.nonce
+                    nonce: lealezGMBData.nonce,
+                    business_id: lealezGMBData.businessId
                 },
                 success: function(response) {
                     if (response.success) {
-                        LealezGMB.showNotice(response.data.message, 'success');
-                        setTimeout(function() {
-                            location.reload();
-                        }, 1500);
+                        location.reload();
                     } else {
-                        LealezGMB.hideLoading(button);
-                        LealezGMB.showNotice(response.data.message || lealezGMBData.i18n.error, 'error');
+                        alert(response.data.message || lealezGMBData.i18n.error);
+                        $button.prop('disabled', false).text('Desconectar Cuenta');
                     }
                 },
                 error: function() {
-                    LealezGMB.hideLoading(button);
-                    LealezGMB.showNotice(lealezGMBData.i18n.error, 'error');
+                    alert(lealezGMBData.i18n.error);
+                    $button.prop('disabled', false).text('Desconectar Cuenta');
                 }
             });
         },
 
         /**
-         * Refresh locations
+         * Refresh GMB locations
          */
         refreshLocations: function(e) {
             e.preventDefault();
-            var button = $(this);
-            var businessId = LealezGMB.getBusinessId();
-
-            LealezGMB.showLoading(button);
+            
+            const $button = $(e.currentTarget);
+            $button.prop('disabled', true).text(lealezGMBData.i18n.processing);
 
             $.ajax({
-                url: ajaxurl,
+                url: lealezGMBData.ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'lealez_gmb_refresh_locations',
-                    business_id: businessId,
-                    nonce: lealezGMBData.nonce
+                    nonce: lealezGMBData.nonce,
+                    business_id: lealezGMBData.businessId
                 },
                 success: function(response) {
-                    LealezGMB.hideLoading(button);
-                    
                     if (response.success) {
-                        LealezGMB.showNotice(response.data.message, 'success');
-                        
-                        // Optionally reload to show updated locations
-                        setTimeout(function() {
-                            location.reload();
-                        }, 1500);
+                        alert(response.data.message);
+                        location.reload();
                     } else {
-                        LealezGMB.showNotice(response.data.message || lealezGMBData.i18n.error, 'error');
+                        alert(response.data.message || lealezGMBData.i18n.error);
+                        $button.prop('disabled', false).text('Actualizar Ubicaciones');
                     }
                 },
                 error: function() {
-                    LealezGMB.hideLoading(button);
-                    LealezGMB.showNotice(lealezGMBData.i18n.error, 'error');
+                    alert(lealezGMBData.i18n.error);
+                    $button.prop('disabled', false).text('Actualizar Ubicaciones');
                 }
             });
         },
 
         /**
-         * Test connection
+         * Test GMB connection
          */
         testConnection: function(e) {
             e.preventDefault();
-            var button = $(this);
-            var businessId = LealezGMB.getBusinessId();
-
-            LealezGMB.showLoading(button);
+            
+            const $button = $(e.currentTarget);
+            $button.prop('disabled', true).text(lealezGMBData.i18n.processing);
 
             $.ajax({
-                url: ajaxurl,
+                url: lealezGMBData.ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'lealez_gmb_test_connection',
-                    business_id: businessId,
-                    nonce: lealezGMBData.nonce
+                    nonce: lealezGMBData.nonce,
+                    business_id: lealezGMBData.businessId
                 },
                 success: function(response) {
-                    LealezGMB.hideLoading(button);
-                    
                     if (response.success) {
-                        LealezGMB.showNotice(response.data.message, 'success');
+                        alert('✓ ' + response.data.message);
                     } else {
-                        LealezGMB.showNotice(response.data.message || lealezGMBData.i18n.error, 'error');
+                        alert('✗ ' + (response.data.message || lealezGMBData.i18n.error));
                     }
+                    $button.prop('disabled', false).text('Probar Conexión');
                 },
                 error: function() {
-                    LealezGMB.hideLoading(button);
-                    LealezGMB.showNotice(lealezGMBData.i18n.error, 'error');
+                    alert(lealezGMBData.i18n.error);
+                    $button.prop('disabled', false).text('Probar Conexión');
                 }
             });
         }
