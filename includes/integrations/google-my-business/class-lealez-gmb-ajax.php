@@ -28,6 +28,7 @@ class Lealez_GMB_Ajax {
         add_action( 'wp_ajax_lealez_gmb_disconnect', array( $this, 'disconnect' ) );
         add_action( 'wp_ajax_lealez_gmb_refresh_locations', array( $this, 'refresh_locations' ) );
         add_action( 'wp_ajax_lealez_gmb_test_connection', array( $this, 'test_connection' ) );
+        add_action( 'wp_ajax_lealez_gmb_clear_logs', array( $this, 'clear_logs' ) );
 
         // OAuth callback page
         add_action( 'admin_menu', array( $this, 'register_callback_page' ) );
