@@ -260,90 +260,98 @@ public function handle_oauth_callback() {
     );
 }
 
-    /**
-     * Render callback page
-     *
-     * @param string $status      Status: success, error, warning
-     * @param string $message     Message to display
-     * @param int    $business_id Business ID
-     */
-    private function render_callback_page( $status, $message, $business_id = 0 ) {
-        $icon = $status === 'success' ? '✓' : ($status === 'error' ? '✗' : '⚠');
-        $color = $status === 'success' ? '#46b450' : ($status === 'error' ? '#dc3232' : '#f0b322');
-        $edit_link = $business_id ? get_edit_post_link( $business_id ) : admin_url( 'edit.php?post_type=oy_business' );
-        ?>
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title><?php esc_html_e( 'Google My Business Connection', 'lealez' ); ?></title>
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    min-height: 100vh;
-                    margin: 0;
-                    background: #f0f0f1;
+/**
+ * Render callback page
+ *
+ * @param string $status      Status: success, error, warning
+ * @param string $message     Message to display
+ * @param int    $business_id Business ID
+ */
+private function render_callback_page( $status, $message, $business_id = 0 ) {
+    $icon = $status === 'success' ? '✓' : ($status === 'error' ? '✗' : '⚠');
+    $color = $status === 'success' ? '#46b450' : ($status === 'error' ? '#dc3232' : '#f0b322');
+    $edit_link = $business_id ? get_edit_post_link( $business_id ) : admin_url( 'edit.php?post_type=oy_business' );
+    
+    // Convert line breaks to <br> for HTML display
+    $message_html = nl2br( esc_html( $message ) );
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title><?php esc_html_e( 'Google My Business Connection', 'lealez' ); ?></title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                margin: 0;
+                background: #f0f0f1;
+            }
+            .callback-container {
+                background: white;
+                padding: 40px;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                text-align: center;
+                max-width: 600px;
+            }
+            .callback-icon {
+                font-size: 64px;
+                margin-bottom: 20px;
+                color: <?php echo esc_attr( $color ); ?>;
+            }
+            .callback-message {
+                font-size: 16px;
+                margin-bottom: 30px;
+                color: #333;
+                text-align: left;
+                line-height: 1.6;
+            }
+            .callback-message strong {
+                color: #000;
+            }
+            .callback-button {
+                display: inline-block;
+                padding: 12px 24px;
+                background: #2271b1;
+                color: white;
+                text-decoration: none;
+                border-radius: 4px;
+                transition: background 0.3s;
+            }
+            .callback-button:hover {
+                background: #135e96;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="callback-container">
+            <div class="callback-icon"><?php echo esc_html( $icon ); ?></div>
+            <div class="callback-message"><?php echo wp_kses_post( $message_html ); ?></div>
+            <a href="<?php echo esc_url( $edit_link ); ?>" class="callback-button">
+                <?php esc_html_e( 'Return to Business', 'lealez' ); ?>
+            </a>
+        </div>
+        <?php if ( $status === 'success' ) : ?>
+        <script>
+            // Auto-close after 5 seconds (increased from 3 to give time to read)
+            setTimeout(function() {
+                if (window.opener) {
+                    window.opener.location.reload();
+                    window.close();
+                } else {
+                    window.location.href = '<?php echo esc_url( $edit_link ); ?>';
                 }
-                .callback-container {
-                    background: white;
-                    padding: 40px;
-                    border-radius: 8px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                    text-align: center;
-                    max-width: 500px;
-                }
-                .callback-icon {
-                    font-size: 64px;
-                    margin-bottom: 20px;
-                    color: <?php echo esc_attr( $color ); ?>;
-                }
-                .callback-message {
-                    font-size: 18px;
-                    margin-bottom: 30px;
-                    color: #333;
-                }
-                .callback-button {
-                    display: inline-block;
-                    padding: 12px 24px;
-                    background: #2271b1;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 4px;
-                    transition: background 0.3s;
-                }
-                .callback-button:hover {
-                    background: #135e96;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="callback-container">
-                <div class="callback-icon"><?php echo esc_html( $icon ); ?></div>
-                <div class="callback-message"><?php echo esc_html( $message ); ?></div>
-                <a href="<?php echo esc_url( $edit_link ); ?>" class="callback-button">
-                    <?php esc_html_e( 'Return to Business', 'lealez' ); ?>
-                </a>
-            </div>
-            <?php if ( $status === 'success' ) : ?>
-            <script>
-                // Auto-close after 3 seconds
-                setTimeout(function() {
-                    if (window.opener) {
-                        window.opener.location.reload();
-                        window.close();
-                    } else {
-                        window.location.href = '<?php echo esc_url( $edit_link ); ?>';
-                    }
-                }, 3000);
-            </script>
-            <?php endif; ?>
-        </body>
-        </html>
-        <?php
-    }
+            }, 5000);
+        </script>
+        <?php endif; ?>
+    </body>
+    </html>
+    <?php
+}
 }
 
 // Initialize
