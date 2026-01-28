@@ -177,6 +177,30 @@ class Lealez_GMB_Ajax {
         ) );
     }
 
+    /**
+ * Clear activity logs
+ */
+public function clear_logs() {
+    check_ajax_referer( 'lealez_gmb_nonce', 'nonce' );
+
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'lealez' ) ) );
+    }
+
+    $business_id = absint( $_POST['business_id'] ?? 0 );
+
+    if ( ! $business_id ) {
+        wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::clear_logs( $business_id );
+        wp_send_json_success( array( 'message' => __( 'Logs cleared successfully', 'lealez' ) ) );
+    } else {
+        wp_send_json_error( array( 'message' => __( 'Logger class not found', 'lealez' ) ) );
+    }
+}
+
 /**
  * Handle OAuth callback
  */
