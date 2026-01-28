@@ -23,6 +23,8 @@ class Lealez_GMB_Ajax {
      * Constructor
      */
     public function __construct() {
+        // Background task hook
+        add_action( 'lealez_gmb_fetch_accounts_background', array( $this, 'fetch_accounts_background' ) );
         // AJAX actions
         add_action( 'wp_ajax_lealez_gmb_get_auth_url', array( $this, 'get_auth_url' ) );
         add_action( 'wp_ajax_lealez_gmb_disconnect', array( $this, 'disconnect' ) );
