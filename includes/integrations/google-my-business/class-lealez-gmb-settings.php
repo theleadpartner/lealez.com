@@ -98,9 +98,11 @@ class Lealez_GMB_Settings {
                         <?php _e( 'Enable the following APIs in the API Library:', 'lealez' ); ?>
                         <ul style="margin-top: 8px; margin-left: 20px;">
                             <li><strong>My Business Business Information API</strong> <?php _e( '(required for location data)', 'lealez' ); ?></li>
-                            <li><strong>Business Profile Performance API</strong> <?php _e( '(required for metrics)', 'lealez' ); ?></li>
                             <li><strong>My Business Account Management API</strong> <?php _e( '(required for account access)', 'lealez' ); ?></li>
                         </ul>
+                        <p style="margin-left: 20px; color: #d63638; font-weight: bold;">
+                            <?php _e( '⚠️ IMPORTANT: Both APIs must be enabled or you will get permission errors!', 'lealez' ); ?>
+                        </p>
                     </li>
                     <li><?php _e( 'Go to "Credentials" and create an OAuth 2.0 Client ID', 'lealez' ); ?></li>
                     <li>
@@ -109,10 +111,9 @@ class Lealez_GMB_Settings {
                             <li><?php _e( 'User Type: External', 'lealez' ); ?></li>
                             <li><?php _e( 'App name: Lealez (or your company name)', 'lealez' ); ?></li>
                             <li>
-                                <?php _e( 'Scopes: Add these OAuth scopes:', 'lealez' ); ?>
+                                <?php _e( 'Scopes: Add this OAuth scope:', 'lealez' ); ?>
                                 <ul style="margin-left: 20px; font-size: 12px; font-family: monospace;">
                                     <li>https://www.googleapis.com/auth/business.manage</li>
-                                    <li>https://www.googleapis.com/auth/businessprofileperformance.readonly</li>
                                 </ul>
                             </li>
                             <li>
@@ -212,6 +213,24 @@ class Lealez_GMB_Settings {
                     </p>
                 </div>
             <?php endif; ?>
+            
+            <div class="notice notice-info" style="margin-top: 20px;">
+                <h3><?php _e( 'Troubleshooting Common Errors:', 'lealez' ); ?></h3>
+                <ul style="list-style: disc; margin-left: 20px;">
+                    <li>
+                        <strong><?php _e( 'Error 403: Permission Denied', 'lealez' ); ?></strong><br>
+                        <?php _e( 'Make sure both "My Business Account Management API" and "My Business Business Information API" are enabled in Google Cloud Console.', 'lealez' ); ?>
+                    </li>
+                    <li>
+                        <strong><?php _e( 'Error 403: access_denied', 'lealez' ); ?></strong><br>
+                        <?php _e( 'Add your email as a Test User in OAuth consent screen.', 'lealez' ); ?>
+                    </li>
+                    <li>
+                        <strong><?php _e( 'Rate Limit Errors', 'lealez' ); ?></strong><br>
+                        <?php _e( 'Wait at least 15 minutes between manual refresh attempts.', 'lealez' ); ?>
+                    </li>
+                </ul>
+            </div>
         </div>
         <?php
     }
