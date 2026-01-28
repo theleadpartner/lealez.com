@@ -23,8 +23,6 @@ class Lealez_GMB_Ajax {
      * Constructor
      */
     public function __construct() {
-        // Background task hook
-        add_action( 'lealez_gmb_fetch_accounts_background', array( $this, 'fetch_accounts_background' ) );
         // AJAX actions
         add_action( 'wp_ajax_lealez_gmb_get_auth_url', array( $this, 'get_auth_url' ) );
         add_action( 'wp_ajax_lealez_gmb_disconnect', array( $this, 'disconnect' ) );
@@ -115,11 +113,33 @@ class Lealez_GMB_Ajax {
             wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
         }
 
-        $locations = Lealez_GMB_API::get_all_locations( $business_id );
+        // Check if we can refresh (not too recent)
+        if ( ! Lealez_GMB_API::can_refresh_now( $business_id ) ) {
+            $wait_minutes = Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
+            wp_send_json_error( array( 
+                'message' => sprintf(
+                    __( 'Please wait %d minutes before refreshing again to avoid API rate limits.', 'lealez' ),
+                    $wait_minutes
+                )
+            ) );
+        }
+
+        // First get accounts
+        $accounts = Lealez_GMB_API::get_accounts( $business_id, true );
+
+        if ( is_wp_error( $accounts ) ) {
+            wp_send_json_error( array( 'message' => $accounts->get_error_message() ) );
+        }
+
+        // Then get all locations
+        $locations = Lealez_GMB_API::get_all_locations( $business_id, true );
 
         if ( is_wp_error( $locations ) ) {
             wp_send_json_error( array( 'message' => $locations->get_error_message() ) );
         }
+
+        // Update last refresh timestamp
+        update_post_meta( $business_id, '_gmb_last_manual_refresh', time() );
 
         wp_send_json_success( array(
             'message'   => sprintf( __( 'Successfully retrieved %d locations', 'lealez' ), count( $locations ) ),
@@ -143,7 +163,8 @@ class Lealez_GMB_Ajax {
             wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
         }
 
-        $accounts = Lealez_GMB_API::get_accounts( $business_id );
+        // Just test the connection, don't fetch all data
+        $accounts = Lealez_GMB_API::get_accounts( $business_id, false );
 
         if ( is_wp_error( $accounts ) ) {
             wp_send_json_error( array( 'message' => $accounts->get_error_message() ) );
@@ -151,11 +172,11 @@ class Lealez_GMB_Ajax {
 
         wp_send_json_success( array(
             'message'  => __( 'Connection successful', 'lealez' ),
-            'accounts' => $accounts,
+            'accounts' => count( $accounts ),
         ) );
     }
 
-/**
+    /**
      * Handle OAuth callback
      */
     public function handle_oauth_callback() {
@@ -200,13 +221,11 @@ class Lealez_GMB_Ajax {
             return;
         }
 
-        // Schedule background task to fetch accounts (avoids rate limiting)
-        wp_schedule_single_event( time() + 60, 'lealez_gmb_fetch_accounts_background', array( $business_id ) );
-
-        // Success - accounts will be fetched in background
+        // Success - NO LLAMAMOS A LA API INMEDIATAMENTE
+        // El usuario debe hacer clic en "Refresh Locations" cuando esté listo
         $this->render_callback_page(
             'success',
-            __( 'Successfully connected to Google My Business! Your account information will be loaded shortly. You can close this window.', 'lealez' ),
+            __( 'Successfully connected to Google My Business! Click "Refresh Locations" in the business page to load your data. You can close this window.', 'lealez' ),
             $business_id
         );
     }
@@ -295,36 +314,6 @@ class Lealez_GMB_Ajax {
         </html>
         <?php
     }
-
-    /**
-     * Background task to fetch accounts
-     * Scheduled after OAuth to avoid rate limiting
-     */
-    public static function fetch_accounts_background( $business_id ) {
-        if ( ! $business_id ) {
-            return;
-        }
-
-        // Fetch accounts with retry logic built into API class
-        $accounts = Lealez_GMB_API::get_accounts( $business_id, true );
-
-        if ( is_wp_error( $accounts ) ) {
-            // Log error
-            update_post_meta( $business_id, '_gmb_last_sync_error', array(
-                'message' => $accounts->get_error_message(),
-                'time'    => time(),
-            ) );
-
-            // Reschedule if rate limit error
-            if ( 'rate_limit_exceeded' === $accounts->get_error_code() ) {
-                wp_schedule_single_event( time() + 300, 'lealez_gmb_fetch_accounts_background', array( $business_id ) );
-            }
-        } else {
-            // Clear any previous errors
-            delete_post_meta( $business_id, '_gmb_last_sync_error' );
-        }
-    }
-
 }
 
 // Initialize
