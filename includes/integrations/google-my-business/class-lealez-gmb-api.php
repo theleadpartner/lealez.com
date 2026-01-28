@@ -20,18 +20,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Lealez_GMB_API {
 
     /**
-     * API base URL
+     * Account Management API base URL
      *
      * @var string
      */
-    private static $api_base = 'https://mybusinessbusinessinformation.googleapis.com/v1';
+    private static $account_api_base = 'https://mybusinessaccountmanagement.googleapis.com/v1';
+
+    /**
+     * Business Information API base URL
+     *
+     * @var string
+     */
+    private static $business_api_base = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 
     /**
      * Max retry attempts
      *
      * @var int
      */
-    private static $max_retries = 3;
+    private static $max_retries = 2;
 
     /**
      * Minimum minutes between manual refreshes
@@ -39,6 +46,13 @@ class Lealez_GMB_API {
      * @var int
      */
     private static $min_refresh_interval = 15;
+
+    /**
+     * Delay between API calls (seconds)
+     *
+     * @var int
+     */
+    private static $delay_between_calls = 2;
 
     /**
      * Check if we can refresh now
@@ -87,24 +101,25 @@ class Lealez_GMB_API {
      * Make API request with rate limiting and retry logic
      *
      * @param int    $business_id Business post ID
-     * @param string $endpoint    API endpoint
+     * @param string $endpoint    API endpoint (full path)
+     * @param string $api_base    API base URL to use
      * @param string $method      HTTP method
      * @param array  $body        Request body
      * @param bool   $use_cache   Whether to use cache
      * @return array|WP_Error
      */
-    private static function make_request( $business_id, $endpoint, $method = 'GET', $body = array(), $use_cache = true ) {
+    private static function make_request( $business_id, $endpoint, $api_base, $method = 'GET', $body = array(), $use_cache = true ) {
         // Log the request
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log( 
                 $business_id, 
                 'info', 
-                sprintf( 'Making %s request to: %s', $method, $endpoint )
+                sprintf( 'Making %s request to: %s%s', $method, $api_base, $endpoint )
             );
         }
 
         // Generate cache key
-        $cache_key = md5( $business_id . $endpoint . $method . serialize( $body ) );
+        $cache_key = md5( $business_id . $api_base . $endpoint . $method . serialize( $body ) );
 
         // Check cache for GET requests
         if ( 'GET' === $method && $use_cache ) {
@@ -115,21 +130,6 @@ class Lealez_GMB_API {
                 }
                 return $cached;
             }
-        }
-
-        // Check rate limit
-        if ( ! Lealez_GMB_Rate_Limiter::can_make_request( $endpoint ) ) {
-            $wait_time = Lealez_GMB_Rate_Limiter::get_wait_time( $endpoint );
-            $error_msg = sprintf(
-                __( 'API rate limit exceeded. Please wait %d seconds before trying again.', 'lealez' ),
-                $wait_time
-            );
-            
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log( $business_id, 'error', $error_msg );
-            }
-            
-            return new WP_Error( 'rate_limit_exceeded', $error_msg );
         }
 
         // Check if token is expired and refresh if needed
@@ -166,10 +166,10 @@ class Lealez_GMB_API {
             return $error;
         }
 
-        $url = self::$api_base . $endpoint;
+        $url = $api_base . $endpoint;
         $args = array(
             'method'  => $method,
-            'timeout' => 30,
+            'timeout' => 45,
             'headers' => array(
                 'Authorization' => 'Bearer ' . $tokens['access_token'],
                 'Content-Type'  => 'application/json',
@@ -180,11 +180,24 @@ class Lealez_GMB_API {
             $args['body'] = wp_json_encode( $body );
         }
 
-        // Retry logic
+        // Retry logic with exponential backoff
         $attempt = 0;
         $response = null;
 
         while ( $attempt < self::$max_retries ) {
+            // Add delay before request (except first attempt)
+            if ( $attempt > 0 ) {
+                $wait_time = pow( 2, $attempt ) * self::$delay_between_calls;
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( 
+                        $business_id, 
+                        'info', 
+                        sprintf( 'Waiting %d seconds before retry %d/%d', $wait_time, $attempt + 1, self::$max_retries )
+                    );
+                }
+                sleep( $wait_time );
+            }
+
             $response = wp_remote_request( $url, $args );
 
             if ( is_wp_error( $response ) ) {
@@ -197,19 +210,27 @@ class Lealez_GMB_API {
                     );
                 }
                 
-                if ( $attempt < self::$max_retries ) {
-                    Lealez_GMB_Rate_Limiter::wait_before_retry( $attempt );
-                    continue;
+                if ( $attempt >= self::$max_retries ) {
+                    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                        Lealez_GMB_Logger::log( $business_id, 'error', 'Max retries exceeded' );
+                    }
+                    return $response;
                 }
-                
-                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                    Lealez_GMB_Logger::log( $business_id, 'error', 'Max retries exceeded' );
-                }
-                return $response;
+                continue;
             }
 
             $response_code = wp_remote_retrieve_response_code( $response );
-            $response_body = json_decode( wp_remote_retrieve_body( $response ), true );
+            $response_body = wp_remote_retrieve_body( $response );
+            $data = json_decode( $response_body, true );
+
+            // Log full response for debugging
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( 
+                    $business_id, 
+                    'info', 
+                    sprintf( 'Response HTTP %d: %s', $response_code, substr( $response_body, 0, 500 ) )
+                );
+            }
 
             // Success
             if ( $response_code >= 200 && $response_code < 300 ) {
@@ -221,26 +242,24 @@ class Lealez_GMB_API {
                     );
                 }
                 
-                // Cache successful GET requests with appropriate duration
-                if ( 'GET' === $method && $use_cache ) {
-                    // Cache duration based on endpoint
+                // Cache successful GET requests
+                if ( 'GET' === $method && $use_cache && is_array( $data ) ) {
                     $cache_duration = 3600; // Default 1 hour
                     
                     if ( strpos( $endpoint, '/accounts' ) !== false && strpos( $endpoint, '/locations' ) === false ) {
-                        // Accounts endpoint: cache for 24 hours
-                        $cache_duration = 86400;
+                        $cache_duration = 86400; // 24 hours for accounts
                     } elseif ( strpos( $endpoint, '/locations' ) !== false ) {
-                        // Locations endpoint: cache for 12 hours
-                        $cache_duration = 43200;
+                        $cache_duration = 43200; // 12 hours for locations
                     }
                     
-                    Lealez_GMB_Rate_Limiter::set_cached_response( $cache_key, $response_body, $cache_duration );
+                    Lealez_GMB_Rate_Limiter::set_cached_response( $cache_key, $data, $cache_duration );
                 }
-                return $response_body;
+                
+                return $data;
             }
 
-            // Rate limit error - wait and retry
-            if ( 429 === $response_code || ( isset( $response_body['error']['status'] ) && 'RESOURCE_EXHAUSTED' === $response_body['error']['status'] ) ) {
+            // Rate limit error
+            if ( 429 === $response_code || ( isset( $data['error']['status'] ) && 'RESOURCE_EXHAUSTED' === $data['error']['status'] ) ) {
                 $attempt++;
                 
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -251,22 +270,39 @@ class Lealez_GMB_API {
                     );
                 }
                 
-                if ( $attempt < self::$max_retries ) {
-                    Lealez_GMB_Rate_Limiter::wait_before_retry( $attempt );
-                    continue;
+                if ( $attempt >= self::$max_retries ) {
+                    $error_msg = __( 'Google API rate limit exceeded. Please wait at least 15 minutes before trying again.', 'lealez' );
+                    
+                    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                        Lealez_GMB_Logger::log( $business_id, 'error', $error_msg );
+                    }
+                    
+                    return new WP_Error( 'rate_limit_exceeded', $error_msg );
+                }
+                continue;
+            }
+
+            // Permission errors
+            if ( 403 === $response_code ) {
+                $error_details = '';
+                if ( isset( $data['error']['message'] ) ) {
+                    $error_details = $data['error']['message'];
                 }
                 
-                $error_msg = __( 'Google API rate limit exceeded. Please wait at least 15 minutes before trying again.', 'lealez' );
+                $error_msg = sprintf(
+                    __( 'Permission denied (HTTP 403): %s. Please verify that the required APIs are enabled in Google Cloud Console.', 'lealez' ),
+                    $error_details
+                );
                 
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                     Lealez_GMB_Logger::log( $business_id, 'error', $error_msg );
                 }
                 
-                return new WP_Error( 'rate_limit_exceeded', $error_msg );
+                return new WP_Error( 'permission_denied', $error_msg );
             }
 
             // Other errors
-            $error_message = $response_body['error']['message'] ?? __( 'API request failed', 'lealez' );
+            $error_message = $data['error']['message'] ?? __( 'API request failed', 'lealez' );
             
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log( 
@@ -301,11 +337,14 @@ class Lealez_GMB_API {
             
             // Use cache if less than 24 hours old
             if ( ! empty( $cached_accounts ) && $last_fetch && ( time() - $last_fetch ) < 86400 ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'info', 'Using cached accounts data' );
+                }
                 return $cached_accounts;
             }
         }
 
-        $result = self::make_request( $business_id, '/accounts', 'GET', array(), ! $force_refresh );
+        $result = self::make_request( $business_id, '/accounts', self::$account_api_base, 'GET', array(), ! $force_refresh );
 
         if ( is_wp_error( $result ) ) {
             return $result;
@@ -316,11 +355,20 @@ class Lealez_GMB_API {
         // Store accounts
         update_post_meta( $business_id, '_gmb_accounts', $accounts );
         update_post_meta( $business_id, '_gmb_accounts_last_fetch', time() );
+        update_post_meta( $business_id, '_gmb_total_accounts', count( $accounts ) );
 
         // Store account info if only one account
         if ( count( $accounts ) === 1 ) {
             $account = $accounts[0];
             update_post_meta( $business_id, '_gmb_account_name', $account['accountName'] ?? '' );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( 
+                $business_id, 
+                'success', 
+                sprintf( 'Retrieved %d GMB account(s)', count( $accounts ) )
+            );
         }
 
         return $accounts;
@@ -336,7 +384,11 @@ class Lealez_GMB_API {
      */
     public static function get_locations( $business_id, $account_name, $force_refresh = false ) {
         $endpoint = '/' . $account_name . '/locations';
-        $result = self::make_request( $business_id, $endpoint, 'GET', array(), ! $force_refresh );
+        
+        // Add delay before this call
+        sleep( self::$delay_between_calls );
+        
+        $result = self::make_request( $business_id, $endpoint, self::$business_api_base, 'GET', array(), ! $force_refresh );
 
         if ( is_wp_error( $result ) ) {
             return $result;
@@ -359,6 +411,14 @@ class Lealez_GMB_API {
             );
         }
 
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( 
+                $business_id, 
+                'success', 
+                sprintf( 'Retrieved %d location(s) for account %s', count( $processed_locations ), $account_name )
+            );
+        }
+
         return $processed_locations;
     }
 
@@ -377,6 +437,9 @@ class Lealez_GMB_API {
             
             // Use cache if less than 12 hours old
             if ( ! empty( $cached_locations ) && $last_fetch && ( time() - $last_fetch ) < 43200 ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'info', 'Using cached locations data' );
+                }
                 return $cached_locations;
             }
         }
@@ -387,18 +450,33 @@ class Lealez_GMB_API {
             return $accounts;
         }
 
+        if ( empty( $accounts ) ) {
+            $error = new WP_Error( 'no_accounts', __( 'No GMB accounts found for this user', 'lealez' ) );
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'error', 'No GMB accounts found' );
+            }
+            return $error;
+        }
+
         $all_locations = array();
         $errors = array();
 
-        foreach ( $accounts as $account ) {
+        foreach ( $accounts as $index => $account ) {
             $account_name = $account['name'] ?? '';
             
             if ( empty( $account_name ) ) {
                 continue;
             }
 
-            // Add a delay between account requests (5 seconds)
-            if ( ! empty( $all_locations ) ) {
+            // Add delay between accounts (except first)
+            if ( $index > 0 ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( 
+                        $business_id, 
+                        'info', 
+                        'Waiting 5 seconds before fetching next account locations...'
+                    );
+                }
                 sleep( 5 );
             }
 
@@ -406,6 +484,13 @@ class Lealez_GMB_API {
             
             if ( is_wp_error( $locations ) ) {
                 $errors[] = $locations->get_error_message();
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( 
+                        $business_id, 
+                        'error', 
+                        sprintf( 'Failed to get locations for account %s: %s', $account_name, $locations->get_error_message() )
+                    );
+                }
                 continue;
             }
 
@@ -417,11 +502,25 @@ class Lealez_GMB_API {
             update_post_meta( $business_id, '_gmb_locations_available', $all_locations );
             update_post_meta( $business_id, '_gmb_locations_last_fetch', time() );
             update_post_meta( $business_id, '_gmb_total_locations_available', count( $all_locations ) );
+            
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( 
+                    $business_id, 
+                    'success', 
+                    sprintf( 'Total of %d location(s) retrieved successfully', count( $all_locations ) )
+                );
+            }
         }
 
         // If we have some locations but also some errors, log errors
         if ( ! empty( $all_locations ) && ! empty( $errors ) ) {
             update_post_meta( $business_id, '_gmb_last_sync_errors', $errors );
+        }
+
+        // If we have NO locations at all, return error
+        if ( empty( $all_locations ) ) {
+            $error_msg = ! empty( $errors ) ? implode( '; ', $errors ) : __( 'No locations found in any account', 'lealez' );
+            return new WP_Error( 'no_locations', $error_msg );
         }
 
         return $all_locations;
@@ -436,7 +535,7 @@ class Lealez_GMB_API {
      */
     public static function sync_location_data( $business_id, $location_name ) {
         $endpoint = '/' . $location_name;
-        $result = self::make_request( $business_id, $endpoint, 'GET', array(), false );
+        $result = self::make_request( $business_id, $endpoint, self::$business_api_base, 'GET', array(), false );
 
         if ( is_wp_error( $result ) ) {
             return $result;
