@@ -537,164 +537,312 @@ class Lealez_Business_CPT {
     }
 
 /**
-     * Render GMB Meta Box
-     */
-    public function render_gmb_meta_box( $post ) {
-        $gmb_connected = get_post_meta( $post->ID, '_gmb_connected', true );
-        $gmb_account_name = get_post_meta( $post->ID, '_gmb_account_name', true );
-        $gmb_account_email = get_post_meta( $post->ID, '_gmb_account_email', true );
-        $gmb_connection_date = get_post_meta( $post->ID, '_gmb_connection_date', true );
-        $gmb_last_manual_refresh = get_post_meta( $post->ID, '_gmb_last_manual_refresh', true );
-        $gmb_accounts_last_fetch = get_post_meta( $post->ID, '_gmb_accounts_last_fetch', true );
-        $gmb_locations_last_fetch = get_post_meta( $post->ID, '_gmb_locations_last_fetch', true );
-        
-        // Check if we can refresh now
-        $can_refresh = true;
-        $wait_message = '';
-        if ( class_exists( 'Lealez_GMB_API' ) && $gmb_connected ) {
-            $can_refresh = Lealez_GMB_API::can_refresh_now( $post->ID );
-            if ( ! $can_refresh ) {
-                $wait_minutes = Lealez_GMB_API::get_minutes_until_next_refresh( $post->ID );
-                $wait_message = sprintf( __( 'Please wait %d minutes before refreshing again.', 'lealez' ), $wait_minutes );
-            }
+ * Render GMB Meta Box
+ */
+public function render_gmb_meta_box( $post ) {
+    $gmb_connected = get_post_meta( $post->ID, '_gmb_connected', true );
+    $gmb_account_name = get_post_meta( $post->ID, '_gmb_account_name', true );
+    $gmb_account_email = get_post_meta( $post->ID, '_gmb_account_email', true );
+    $gmb_connection_date = get_post_meta( $post->ID, '_gmb_connection_date', true );
+    $gmb_last_manual_refresh = get_post_meta( $post->ID, '_gmb_last_manual_refresh', true );
+    $gmb_accounts_last_fetch = get_post_meta( $post->ID, '_gmb_accounts_last_fetch', true );
+    $gmb_locations_last_fetch = get_post_meta( $post->ID, '_gmb_locations_last_fetch', true );
+    
+    // Get accounts and locations data
+    $gmb_accounts = get_post_meta( $post->ID, '_gmb_accounts', true );
+    $gmb_locations_available = get_post_meta( $post->ID, '_gmb_locations_available', true );
+    $gmb_total_locations_available = get_post_meta( $post->ID, '_gmb_total_locations_available', true );
+    
+    // Check if we can refresh now
+    $can_refresh = true;
+    $wait_message = '';
+    if ( class_exists( 'Lealez_GMB_API' ) && $gmb_connected ) {
+        $can_refresh = Lealez_GMB_API::can_refresh_now( $post->ID );
+        if ( ! $can_refresh ) {
+            $wait_minutes = Lealez_GMB_API::get_minutes_until_next_refresh( $post->ID );
+            $wait_message = sprintf( __( 'Please wait %d minutes before refreshing again.', 'lealez' ), $wait_minutes );
         }
-        ?>
-        <div class="lealez-gmb-connection">
-            <?php if ( $gmb_connected ) : ?>
-                <div class="notice notice-success inline">
-                    <p><strong><?php _e( 'Cuenta de Google My Business Conectada', 'lealez' ); ?></strong></p>
-                    <?php if ( $gmb_account_name ) : ?>
-                        <p><?php _e( 'Cuenta:', 'lealez' ); ?> <strong><?php echo esc_html( $gmb_account_name ); ?></strong></p>
-                    <?php endif; ?>
-                    <?php if ( $gmb_account_email ) : ?>
-                        <p><?php _e( 'Email:', 'lealez' ); ?> <?php echo esc_html( $gmb_account_email ); ?></p>
-                    <?php endif; ?>
-                    <?php if ( $gmb_connection_date ) : ?>
-                        <p><?php _e( 'Conectado el:', 'lealez' ); ?> <?php echo date_i18n( get_option( 'date_format' ), $gmb_connection_date ); ?></p>
-                    <?php endif; ?>
-                </div>
-                
-                <?php if ( $gmb_last_manual_refresh || $gmb_accounts_last_fetch || $gmb_locations_last_fetch ) : ?>
-                    <div class="notice notice-info inline" style="margin-top: 10px;">
-                        <p><strong><?php _e( 'Información de Sincronización:', 'lealez' ); ?></strong></p>
-                        <?php if ( $gmb_last_manual_refresh ) : ?>
-                            <p><?php _e( 'Última actualización manual:', 'lealez' ); ?> 
-                                <strong><?php echo human_time_diff( $gmb_last_manual_refresh, current_time( 'timestamp' ) ); ?> <?php _e( 'ago', 'lealez' ); ?></strong>
-                            </p>
-                        <?php endif; ?>
-                        <?php if ( $gmb_accounts_last_fetch ) : ?>
-                            <p><?php _e( 'Cuentas actualizadas:', 'lealez' ); ?> 
-                                <?php echo human_time_diff( $gmb_accounts_last_fetch, current_time( 'timestamp' ) ); ?> <?php _e( 'ago', 'lealez' ); ?>
-                            </p>
-                        <?php endif; ?>
-                        <?php if ( $gmb_locations_last_fetch ) : ?>
-                            <p><?php _e( 'Ubicaciones actualizadas:', 'lealez' ); ?> 
-                                <?php echo human_time_diff( $gmb_locations_last_fetch, current_time( 'timestamp' ) ); ?> <?php _e( 'ago', 'lealez' ); ?>
-                            </p>
-                        <?php endif; ?>
-                    </div>
-                <?php endif; ?>
-                
-                <?php if ( ! $can_refresh && $wait_message ) : ?>
-                    <div class="notice notice-warning inline" style="margin-top: 10px;">
-                        <p><strong>⚠ <?php echo esc_html( $wait_message ); ?></strong></p>
-                        <p><?php _e( 'This helps avoid Google API rate limits.', 'lealez' ); ?></p>
-                    </div>
-                <?php endif; ?>
-                
-                <p style="margin-top: 15px;">
-                    <button type="button" class="button button-secondary lealez-disconnect-gmb"><?php _e( 'Desconectar Cuenta', 'lealez' ); ?></button>
-                    <button type="button" class="button button-primary lealez-refresh-gmb-locations" <?php echo ! $can_refresh ? 'disabled' : ''; ?>>
-                        <?php _e( 'Actualizar Ubicaciones', 'lealez' ); ?>
-                    </button>
-                </p>
-                <p class="description">
-                    <?php _e( 'Note: To avoid API rate limits, please wait at least 15 minutes between manual refreshes.', 'lealez' ); ?>
-                </p>
-            <?php else : ?>
-                <div class="notice notice-info inline">
-                    <p><?php _e( 'No hay ninguna cuenta de Google My Business conectada.', 'lealez' ); ?></p>
-                </div>
-                <p>
-                    <button type="button" class="button button-primary lealez-connect-gmb"><?php _e( 'Conectar con Google My Business', 'lealez' ); ?></button>
-                </p>
-                <p class="description">
-                    <?php _e( 'After connecting, click "Refresh Locations" to load your Google My Business data.', 'lealez' ); ?>
-                </p>
-            <?php endif; ?>
-        </div>
-
-        <hr>
-
-        <h4><?php _e( 'Configuración de Sincronización', 'lealez' ); ?></h4>
-        <table class="form-table">
-            <tr>
-                <th><label for="gmb_auto_refresh_token"><?php _e( 'Refresh Automático', 'lealez' ); ?></label></th>
-                <td>
-                    <label>
-                        <input type="checkbox" id="gmb_auto_refresh_token" name="gmb_auto_refresh_token" value="1" <?php checked( get_post_meta( $post->ID, '_gmb_auto_refresh_token', true ), '1' ); ?> />
-                        <?php _e( 'Renovar tokens automáticamente', 'lealez' ); ?>
-                    </label>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="gmb_delegation_enabled"><?php _e( 'Permitir Delegación', 'lealez' ); ?></label></th>
-                <td>
-                    <label>
-                        <input type="checkbox" id="gmb_delegation_enabled" name="gmb_delegation_enabled" value="1" <?php checked( get_post_meta( $post->ID, '_gmb_delegation_enabled', true ), '1' ); ?> />
-                        <?php _e( 'Permitir que otros usuarios creen ubicaciones', 'lealez' ); ?>
-                    </label>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="gmb_total_auto_sync_enabled"><?php _e( 'Sincronización Automática', 'lealez' ); ?></label></th>
-                <td>
-                    <label>
-                        <input type="checkbox" id="gmb_total_auto_sync_enabled" name="gmb_total_auto_sync_enabled" value="1" <?php checked( get_post_meta( $post->ID, '_gmb_total_auto_sync_enabled', true ), '1' ); ?> />
-                        <?php _e( 'Sincronizar métricas automáticamente', 'lealez' ); ?>
-                    </label>
-                    <p class="description"><?php _e( '(Feature not yet implemented - coming soon)', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="gmb_total_sync_frequency"><?php _e( 'Frecuencia de Sincronización', 'lealez' ); ?></label></th>
-                <td>
-                    <select id="gmb_total_sync_frequency" name="gmb_total_sync_frequency">
-                        <option value="daily" <?php selected( get_post_meta( $post->ID, '_gmb_total_sync_frequency', true ), 'daily' ); ?>><?php _e( 'Diaria', 'lealez' ); ?></option>
-                        <option value="weekly" <?php selected( get_post_meta( $post->ID, '_gmb_total_sync_frequency', true ), 'weekly' ); ?>><?php _e( 'Semanal', 'lealez' ); ?></option>
-                        <option value="monthly" <?php selected( get_post_meta( $post->ID, '_gmb_total_sync_frequency', true ), 'monthly' ); ?>><?php _e( 'Mensual', 'lealez' ); ?></option>
-                    </select>
-                </td>
-            </tr>
-        </table>
-
-        <hr>
-
-        <h4><?php _e( 'Configuración de Reportes', 'lealez' ); ?></h4>
-        <table class="form-table">
-            <tr>
-                <th><label for="gmb_reports_email_enabled"><?php _e( 'Reportes por Email', 'lealez' ); ?></label></th>
-                <td>
-                    <label>
-                        <input type="checkbox" id="gmb_reports_email_enabled" name="gmb_reports_email_enabled" value="1" <?php checked( get_post_meta( $post->ID, '_gmb_reports_email_enabled', true ), '1' ); ?> />
-                        <?php _e( 'Enviar reportes periódicos por email', 'lealez' ); ?>
-                    </label>
-                    <p class="description"><?php _e( '(Feature not yet implemented - coming soon)', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th><label for="gmb_reports_frequency"><?php _e( 'Frecuencia de Reportes', 'lealez' ); ?></label></th>
-                <td>
-                    <select id="gmb_reports_frequency" name="gmb_reports_frequency">
-                        <option value="weekly" <?php selected( get_post_meta( $post->ID, '_gmb_reports_frequency', true ), 'weekly' ); ?>><?php _e( 'Semanal', 'lealez' ); ?></option>
-                        <option value="monthly" <?php selected( get_post_meta( $post->ID, '_gmb_reports_frequency', true ), 'monthly' ); ?>><?php _e( 'Mensual', 'lealez' ); ?></option>
-                        <option value="quarterly" <?php selected( get_post_meta( $post->ID, '_gmb_reports_frequency', true ), 'quarterly' ); ?>><?php _e( 'Trimestral', 'lealez' ); ?></option>
-                    </select>
-                </td>
-            </tr>
-        </table>
-        <?php
     }
+    ?>
+    <div class="lealez-gmb-connection">
+        <?php if ( $gmb_connected ) : ?>
+            <!-- CONNECTION STATUS -->
+            <div class="notice notice-success inline" style="margin: 0 0 15px 0;">
+                <p><strong>✓ <?php _e( 'Google My Business Connected', 'lealez' ); ?></strong></p>
+                <?php if ( $gmb_account_email ) : ?>
+                    <p style="margin: 8px 0;">
+                        <?php _e( 'Email:', 'lealez' ); ?> <strong><?php echo esc_html( $gmb_account_email ); ?></strong>
+                    </p>
+                <?php endif; ?>
+                <?php if ( $gmb_connection_date ) : ?>
+                    <p style="margin: 8px 0;">
+                        <?php _e( 'Connected:', 'lealez' ); ?> 
+                        <?php echo human_time_diff( $gmb_connection_date, current_time( 'timestamp' ) ); ?> <?php _e( 'ago', 'lealez' ); ?>
+                        <small>(<?php echo date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $gmb_connection_date ); ?>)</small>
+                    </p>
+                <?php endif; ?>
+            </div>
+
+            <!-- DATA SUMMARY -->
+            <?php if ( ! empty( $gmb_accounts ) || ! empty( $gmb_total_locations_available ) ) : ?>
+                <div class="notice notice-info inline" style="margin: 0 0 15px 0; background: #e8f4f8; border-left-color: #00a0d2;">
+                    <h4 style="margin: 8px 0;"><?php _e( '📊 Connected Data Summary', 'lealez' ); ?></h4>
+                    
+                    <?php if ( ! empty( $gmb_accounts ) && is_array( $gmb_accounts ) ) : ?>
+                        <p style="margin: 8px 0;">
+                            <strong><?php _e( 'Google My Business Accounts:', 'lealez' ); ?></strong> 
+                            <?php echo count( $gmb_accounts ); ?>
+                        </p>
+                        <ul style="margin: 8px 0 8px 20px; list-style: disc;">
+                            <?php foreach ( array_slice( $gmb_accounts, 0, 3 ) as $account ) : ?>
+                                <li style="margin: 4px 0;">
+                                    <?php 
+                                    echo esc_html( $account['accountName'] ?? $account['name'] ?? __( 'Account', 'lealez' ) ); 
+                                    if ( isset( $account['type'] ) ) {
+                                        echo ' <small>(' . esc_html( $account['type'] ) . ')</small>';
+                                    }
+                                    ?>
+                                </li>
+                            <?php endforeach; ?>
+                            <?php if ( count( $gmb_accounts ) > 3 ) : ?>
+                                <li style="margin: 4px 0;"><em><?php printf( __( '... and %d more', 'lealez' ), count( $gmb_accounts ) - 3 ); ?></em></li>
+                            <?php endif; ?>
+                        </ul>
+                    <?php endif; ?>
+
+                    <?php if ( $gmb_total_locations_available ) : ?>
+                        <p style="margin: 8px 0;">
+                            <strong><?php _e( 'Locations Available in GMB:', 'lealez' ); ?></strong> 
+                            <?php echo esc_html( $gmb_total_locations_available ); ?>
+                        </p>
+                    <?php endif; ?>
+
+                    <?php if ( $gmb_accounts_last_fetch ) : ?>
+                        <p style="margin: 8px 0; font-size: 12px; color: #666;">
+                            <?php _e( 'Accounts data refreshed:', 'lealez' ); ?> 
+                            <?php echo human_time_diff( $gmb_accounts_last_fetch, current_time( 'timestamp' ) ); ?> <?php _e( 'ago', 'lealez' ); ?>
+                        </p>
+                    <?php endif; ?>
+
+                    <?php if ( $gmb_locations_last_fetch ) : ?>
+                        <p style="margin: 8px 0; font-size: 12px; color: #666;">
+                            <?php _e( 'Locations data refreshed:', 'lealez' ); ?> 
+                            <?php echo human_time_diff( $gmb_locations_last_fetch, current_time( 'timestamp' ) ); ?> <?php _e( 'ago', 'lealez' ); ?>
+                        </p>
+                    <?php endif; ?>
+                </div>
+            <?php else : ?>
+                <div class="notice notice-warning inline" style="margin: 0 0 15px 0;">
+                    <p>
+                        <strong>⚠ <?php _e( 'No Data Yet', 'lealez' ); ?></strong><br>
+                        <?php _e( 'Click "Refresh Locations" below to load your Google My Business data.', 'lealez' ); ?>
+                    </p>
+                </div>
+            <?php endif; ?>
+
+            <!-- RATE LIMIT WARNING -->
+            <?php if ( ! $can_refresh && $wait_message ) : ?>
+                <div class="notice notice-warning inline" style="margin: 0 0 15px 0;">
+                    <p>
+                        <strong>🕐 <?php echo esc_html( $wait_message ); ?></strong><br>
+                        <small><?php _e( 'This helps avoid Google API rate limits.', 'lealez' ); ?></small>
+                    </p>
+                </div>
+            <?php endif; ?>
+            
+            <!-- ACTION BUTTONS -->
+            <p style="margin: 15px 0;">
+                <button type="button" class="button button-secondary lealez-disconnect-gmb">
+                    <span class="dashicons dashicons-dismiss" style="margin-top: 3px;"></span>
+                    <?php _e( 'Disconnect Account', 'lealez' ); ?>
+                </button>
+                
+                <button type="button" class="button button-primary lealez-refresh-gmb-locations" <?php echo ! $can_refresh ? 'disabled' : ''; ?>>
+                    <span class="dashicons dashicons-update" style="margin-top: 3px;"></span>
+                    <?php _e( 'Refresh Locations', 'lealez' ); ?>
+                </button>
+            </p>
+            
+            <p class="description" style="margin: 10px 0 20px 0;">
+                <?php _e( '💡 <strong>Tip:</strong> To avoid API rate limits, please wait at least 15 minutes between manual refreshes.', 'lealez' ); ?>
+            </p>
+
+        <?php else : ?>
+            <!-- NOT CONNECTED -->
+            <div class="notice notice-info inline" style="margin: 0 0 15px 0;">
+                <p>
+                    <strong><?php _e( 'Not Connected', 'lealez' ); ?></strong><br>
+                    <?php _e( 'Connect your Google My Business account to sync locations, metrics, and reviews.', 'lealez' ); ?>
+                </p>
+            </div>
+            
+            <p>
+                <button type="button" class="button button-primary lealez-connect-gmb">
+                    <span class="dashicons dashicons-google" style="margin-top: 3px;"></span>
+                    <?php _e( 'Connect with Google My Business', 'lealez' ); ?>
+                </button>
+            </p>
+            
+            <p class="description" style="margin: 10px 0 20px 0;">
+                <?php _e( 'After connecting, click "Refresh Locations" to load your Google My Business data.', 'lealez' ); ?>
+            </p>
+        <?php endif; ?>
+
+        <hr>
+
+        <!-- SYNC CONFIGURATION -->
+        <h3 style="margin: 20px 0 10px 0;"><?php _e( '⚙️ Sync Configuration', 'lealez' ); ?></h3>
+        <table class="form-table">
+            <tr>
+                <th style="width: 250px;">
+                    <label for="gmb_auto_refresh_token">
+                        <?php _e( 'Auto-Refresh Tokens', 'lealez' ); ?>
+                        <span style="color: #46b450; font-size: 11px; vertical-align: super;">✓ ACTIVE</span>
+                    </label>
+                </th>
+                <td>
+                    <label>
+                        <input type="checkbox" 
+                               id="gmb_auto_refresh_token" 
+                               name="gmb_auto_refresh_token" 
+                               value="1" 
+                               <?php checked( get_post_meta( $post->ID, '_gmb_auto_refresh_token', true ), '1' ); ?> />
+                        <?php _e( 'Automatically renew OAuth tokens before expiration', 'lealez' ); ?>
+                    </label>
+                    <p class="description">
+                        <?php _e( 'Recommended: Keep enabled to maintain continuous connection with Google.', 'lealez' ); ?>
+                    </p>
+                </td>
+            </tr>
+            
+            <tr>
+                <th>
+                    <label for="gmb_delegation_enabled">
+                        <?php _e( 'Allow Delegation', 'lealez' ); ?>
+                        <span style="color: #999; font-size: 11px; vertical-align: super;">⏳ COMING SOON</span>
+                    </label>
+                </th>
+                <td>
+                    <label>
+                        <input type="checkbox" 
+                               id="gmb_delegation_enabled" 
+                               name="gmb_delegation_enabled" 
+                               value="1" 
+                               <?php checked( get_post_meta( $post->ID, '_gmb_delegation_enabled', true ), '1' ); ?>
+                               disabled />
+                        <?php _e( 'Allow other users to create locations using this GMB connection', 'lealez' ); ?>
+                    </label>
+                    <p class="description">
+                        <?php _e( 'Feature not yet implemented. Will be available in a future update.', 'lealez' ); ?>
+                    </p>
+                </td>
+            </tr>
+            
+            <tr>
+                <th>
+                    <label for="gmb_total_auto_sync_enabled">
+                        <?php _e( 'Auto-Sync Metrics', 'lealez' ); ?>
+                        <span style="color: #999; font-size: 11px; vertical-align: super;">⏳ COMING SOON</span>
+                    </label>
+                </th>
+                <td>
+                    <label>
+                        <input type="checkbox" 
+                               id="gmb_total_auto_sync_enabled" 
+                               name="gmb_total_auto_sync_enabled" 
+                               value="1" 
+                               <?php checked( get_post_meta( $post->ID, '_gmb_total_auto_sync_enabled', true ), '1' ); ?>
+                               disabled />
+                        <?php _e( 'Automatically sync metrics and performance data', 'lealez' ); ?>
+                    </label>
+                    <p class="description">
+                        <?php _e( 'Feature not yet implemented. Will be available in a future update.', 'lealez' ); ?>
+                    </p>
+                </td>
+            </tr>
+            
+            <tr>
+                <th>
+                    <label for="gmb_total_sync_frequency">
+                        <?php _e( 'Sync Frequency', 'lealez' ); ?>
+                        <span style="color: #999; font-size: 11px; vertical-align: super;">⏳ COMING SOON</span>
+                    </label>
+                </th>
+                <td>
+                    <select id="gmb_total_sync_frequency" 
+                            name="gmb_total_sync_frequency"
+                            disabled>
+                        <option value="daily" <?php selected( get_post_meta( $post->ID, '_gmb_total_sync_frequency', true ), 'daily' ); ?>><?php _e( 'Daily', 'lealez' ); ?></option>
+                        <option value="weekly" <?php selected( get_post_meta( $post->ID, '_gmb_total_sync_frequency', true ), 'weekly' ); ?>><?php _e( 'Weekly', 'lealez' ); ?></option>
+                        <option value="monthly" <?php selected( get_post_meta( $post->ID, '_gmb_total_sync_frequency', true ), 'monthly' ); ?>><?php _e( 'Monthly', 'lealez' ); ?></option>
+                    </select>
+                    <p class="description">
+                        <?php _e( 'Feature not yet implemented. Will be available in a future update.', 'lealez' ); ?>
+                    </p>
+                </td>
+            </tr>
+        </table>
+
+        <hr>
+
+        <!-- REPORTS CONFIGURATION -->
+        <h3 style="margin: 20px 0 10px 0;"><?php _e( '📧 Reports Configuration', 'lealez' ); ?></h3>
+        <table class="form-table">
+            <tr>
+                <th style="width: 250px;">
+                    <label for="gmb_reports_email_enabled">
+                        <?php _e( 'Email Reports', 'lealez' ); ?>
+                        <span style="color: #999; font-size: 11px; vertical-align: super;">⏳ COMING SOON</span>
+                    </label>
+                </th>
+                <td>
+                    <label>
+                        <input type="checkbox" 
+                               id="gmb_reports_email_enabled" 
+                               name="gmb_reports_email_enabled" 
+                               value="1" 
+                               <?php checked( get_post_meta( $post->ID, '_gmb_reports_email_enabled', true ), '1' ); ?>
+                               disabled />
+                        <?php _e( 'Send periodic performance reports via email', 'lealez' ); ?>
+                    </label>
+                    <p class="description">
+                        <?php _e( 'Feature not yet implemented. Will be available in a future update.', 'lealez' ); ?>
+                    </p>
+                </td>
+            </tr>
+            
+            <tr>
+                <th>
+                    <label for="gmb_reports_frequency">
+                        <?php _e( 'Report Frequency', 'lealez' ); ?>
+                        <span style="color: #999; font-size: 11px; vertical-align: super;">⏳ COMING SOON</span>
+                    </label>
+                </th>
+                <td>
+                    <select id="gmb_reports_frequency" 
+                            name="gmb_reports_frequency"
+                            disabled>
+                        <option value="weekly" <?php selected( get_post_meta( $post->ID, '_gmb_reports_frequency', true ), 'weekly' ); ?>><?php _e( 'Weekly', 'lealez' ); ?></option>
+                        <option value="monthly" <?php selected( get_post_meta( $post->ID, '_gmb_reports_frequency', true ), 'monthly' ); ?>><?php _e( 'Monthly', 'lealez' ); ?></option>
+                        <option value="quarterly" <?php selected( get_post_meta( $post->ID, '_gmb_reports_frequency', true ), 'quarterly' ); ?>><?php _e( 'Quarterly', 'lealez' ); ?></option>
+                    </select>
+                    <p class="description">
+                        <?php _e( 'Feature not yet implemented. Will be available in a future update.', 'lealez' ); ?>
+                    </p>
+                </td>
+            </tr>
+        </table>
+
+        <div class="notice notice-info inline" style="margin: 20px 0 0 0;">
+            <p>
+                <strong>💡 <?php _e( 'About Feature Status', 'lealez' ); ?></strong><br>
+                <?php _e( '<span style="color: #46b450;">✓ ACTIVE</span> = Feature is fully functional', 'lealez' ); ?><br>
+                <?php _e( '<span style="color: #999;">⏳ COMING SOON</span> = Feature is under development and will be available in a future update', 'lealez' ); ?>
+            </p>
+        </div>
+    </div>
+    <?php
+}
 
     /**
      * Render Stats Meta Box
