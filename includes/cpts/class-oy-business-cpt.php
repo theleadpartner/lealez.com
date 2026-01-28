@@ -547,9 +547,8 @@ public function render_gmb_meta_box( $post ) {
     $gmb_last_manual_refresh = get_post_meta( $post->ID, '_gmb_last_manual_refresh', true );
     $gmb_accounts_last_fetch = get_post_meta( $post->ID, '_gmb_accounts_last_fetch', true );
     $gmb_locations_last_fetch = get_post_meta( $post->ID, '_gmb_locations_last_fetch', true );
-    $gmb_locations_available = get_post_meta( $post->ID, '_gmb_locations_available', true );
-    $gmb_total_locations_available = get_post_meta( $post->ID, '_gmb_total_locations_available', true );
-    $gmb_accounts = get_post_meta( $post->ID, '_gmb_accounts', true );
+    $total_accounts = get_post_meta( $post->ID, '_gmb_total_accounts', true );
+    $total_locations = get_post_meta( $post->ID, '_gmb_total_locations_available', true );
     
     // Check if we can refresh now
     $can_refresh = true;
@@ -575,6 +574,21 @@ public function render_gmb_meta_box( $post ) {
                 <?php if ( $gmb_connection_date ) : ?>
                     <p><?php _e( 'Conectado el:', 'lealez' ); ?> <?php echo date_i18n( get_option( 'date_format' ), $gmb_connection_date ); ?></p>
                 <?php endif; ?>
+            </div>
+            
+            <!-- SECCIÓN NUEVA: Status Summary -->
+            <div class="notice notice-info inline" style="margin-top: 10px;">
+                <p><strong><?php _e( 'Estado de la Integración:', 'lealez' ); ?></strong></p>
+                <table style="width: 100%; margin-top: 10px;">
+                    <tr>
+                        <td style="width: 50%;"><strong><?php _e( 'Cuentas GMB:', 'lealez' ); ?></strong></td>
+                        <td><?php echo $total_accounts ? '<span style="color: #46b450;">✓ ' . esc_html( $total_accounts ) . ' cuenta(s)</span>' : '<span style="color: #dc3232;">✗ No cargadas</span>'; ?></td>
+                    </tr>
+                    <tr>
+                        <td><strong><?php _e( 'Ubicaciones GMB:', 'lealez' ); ?></strong></td>
+                        <td><?php echo $total_locations ? '<span style="color: #46b450;">✓ ' . esc_html( $total_locations ) . ' ubicación(es)</span>' : '<span style="color: #dc3232;">✗ No cargadas</span>'; ?></td>
+                    </tr>
+                </table>
             </div>
             
             <?php if ( $gmb_last_manual_refresh || $gmb_accounts_last_fetch || $gmb_locations_last_fetch ) : ?>
@@ -605,105 +619,26 @@ public function render_gmb_meta_box( $post ) {
                 </div>
             <?php endif; ?>
             
-            <!-- ACCOUNTS INFORMATION -->
-            <?php if ( ! empty( $gmb_accounts ) && is_array( $gmb_accounts ) ) : ?>
-                <div style="margin-top: 20px;">
-                    <h3><?php _e( 'Cuentas de Google My Business', 'lealez' ); ?></h3>
-                    <table class="widefat striped">
-                        <thead>
-                            <tr>
-                                <th><?php _e( 'Nombre de la Cuenta', 'lealez' ); ?></th>
-                                <th><?php _e( 'Tipo', 'lealez' ); ?></th>
-                                <th><?php _e( 'Role', 'lealez' ); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ( $gmb_accounts as $account ) : ?>
-                                <tr>
-                                    <td>
-                                        <strong><?php echo esc_html( $account['accountName'] ?? $account['name'] ?? __( 'Sin nombre', 'lealez' ) ); ?></strong>
-                                    </td>
-                                    <td><?php echo esc_html( $account['type'] ?? '—' ); ?></td>
-                                    <td><?php echo esc_html( $account['role'] ?? '—' ); ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+            <!-- SECCIÓN NUEVA: Activity Log -->
+            <?php if ( class_exists( 'Lealez_GMB_Logger' ) ) : 
+                $logs = Lealez_GMB_Logger::get_logs( $post->ID, 10 );
+                if ( ! empty( $logs ) ) :
+            ?>
+                <div style="margin-top: 15px;">
+                    <h4 style="margin-bottom: 10px;">
+                        <?php _e( 'Recent Activity Log', 'lealez' ); ?>
+                        <button type="button" class="button button-small" onclick="if(confirm('<?php esc_attr_e( 'Clear all logs?', 'lealez' ); ?>')) { jQuery.post(ajaxurl, {action: 'lealez_gmb_clear_logs', business_id: <?php echo $post->ID; ?>, nonce: '<?php echo wp_create_nonce( 'lealez_gmb_nonce' ); ?>'}, function() { location.reload(); }); }"><?php _e( 'Clear Log', 'lealez' ); ?></button>
+                    </h4>
+                    <div style="max-height: 300px; overflow-y: auto; background: #fff; border: 1px solid #ddd; padding: 10px;">
+                        <?php foreach ( $logs as $log ) : ?>
+                            <?php echo Lealez_GMB_Logger::format_log_entry( $log ); ?>
+                        <?php endforeach; ?>
+                    </div>
                 </div>
-            <?php endif; ?>
-
-            <!-- LOCATIONS INFORMATION -->
-            <div style="margin-top: 20px;">
-                <h3><?php _e( 'Ubicaciones Disponibles en Google My Business', 'lealez' ); ?></h3>
-                
-                <?php if ( ! empty( $gmb_locations_available ) && is_array( $gmb_locations_available ) ) : ?>
-                    <div class="notice notice-success inline">
-                        <p>
-                            <strong><?php printf( __( 'Se encontraron %d ubicaciones en tu cuenta de Google My Business', 'lealez' ), count( $gmb_locations_available ) ); ?></strong>
-                        </p>
-                    </div>
-                    
-                    <table class="widefat striped" style="margin-top: 15px;">
-                        <thead>
-                            <tr>
-                                <th><?php _e( 'Nombre', 'lealez' ); ?></th>
-                                <th><?php _e( 'Dirección', 'lealez' ); ?></th>
-                                <th><?php _e( 'Teléfono', 'lealez' ); ?></th>
-                                <th><?php _e( 'GMB ID', 'lealez' ); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ( $gmb_locations_available as $location ) : ?>
-                                <?php
-                                $location_name = $location['title'] ?? __( 'Sin nombre', 'lealez' );
-                                $location_id = $location['name'] ?? '';
-                                
-                                // Extract address
-                                $address_parts = array();
-                                if ( isset( $location['storefrontAddress'] ) ) {
-                                    $addr = $location['storefrontAddress'];
-                                    if ( ! empty( $addr['addressLines'] ) ) {
-                                        $address_parts[] = implode( ', ', $addr['addressLines'] );
-                                    }
-                                    if ( ! empty( $addr['locality'] ) ) {
-                                        $address_parts[] = $addr['locality'];
-                                    }
-                                    if ( ! empty( $addr['administrativeArea'] ) ) {
-                                        $address_parts[] = $addr['administrativeArea'];
-                                    }
-                                }
-                                $full_address = ! empty( $address_parts ) ? implode( ', ', $address_parts ) : '—';
-                                
-                                // Extract phone
-                                $phone = '—';
-                                if ( ! empty( $location['phoneNumbers']['primaryPhone'] ) ) {
-                                    $phone = $location['phoneNumbers']['primaryPhone'];
-                                }
-                                ?>
-                                <tr>
-                                    <td><strong><?php echo esc_html( $location_name ); ?></strong></td>
-                                    <td><?php echo esc_html( $full_address ); ?></td>
-                                    <td><?php echo esc_html( $phone ); ?></td>
-                                    <td><code style="font-size: 11px;"><?php echo esc_html( $location_id ); ?></code></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                    
-                    <p style="margin-top: 15px;">
-                        <strong><?php _e( 'Nota:', 'lealez' ); ?></strong> 
-                        <?php _e( 'Para usar estas ubicaciones, crea nuevos posts de tipo "Ubicación" y selecciona la ubicación GMB correspondiente.', 'lealez' ); ?>
-                    </p>
-                    
-                <?php else : ?>
-                    <div class="notice notice-warning inline">
-                        <p>
-                            <strong><?php _e( 'No se han cargado ubicaciones aún', 'lealez' ); ?></strong>
-                        </p>
-                        <p><?php _e( 'Haz clic en el botón "Actualizar Ubicaciones" a continuación para cargar tus ubicaciones desde Google My Business.', 'lealez' ); ?></p>
-                    </div>
-                <?php endif; ?>
-            </div>
+            <?php 
+                endif;
+            endif; 
+            ?>
             
             <p style="margin-top: 15px;">
                 <button type="button" class="button button-secondary lealez-disconnect-gmb"><?php _e( 'Desconectar Cuenta', 'lealez' ); ?></button>
@@ -722,7 +657,7 @@ public function render_gmb_meta_box( $post ) {
                 <button type="button" class="button button-primary lealez-connect-gmb"><?php _e( 'Conectar con Google My Business', 'lealez' ); ?></button>
             </p>
             <p class="description">
-                <?php _e( 'After connecting, your Google My Business accounts and locations will be loaded automatically.', 'lealez' ); ?>
+                <?php _e( 'After connecting, click "Refresh Locations" to load your Google My Business data.', 'lealez' ); ?>
             </p>
         <?php endif; ?>
     </div>
@@ -796,22 +731,6 @@ public function render_gmb_meta_box( $post ) {
             </td>
         </tr>
     </table>
-    
-    <style>
-    .lealez-gmb-connection .widefat {
-        margin-top: 10px;
-    }
-    .lealez-gmb-connection .widefat th {
-        background: #f0f0f1;
-        font-weight: 600;
-    }
-    .lealez-gmb-connection code {
-        background: #f0f0f1;
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 11px;
-    }
-    </style>
     <?php
 }
 
