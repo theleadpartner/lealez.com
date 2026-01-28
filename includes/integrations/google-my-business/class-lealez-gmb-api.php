@@ -34,6 +34,56 @@ class Lealez_GMB_API {
     private static $max_retries = 3;
 
     /**
+     * Minimum minutes between manual refreshes
+     *
+     * @var int
+     */
+    private static $min_refresh_interval = 15;
+
+    /**
+     * Check if we can refresh now
+     *
+     * @param int $business_id Business post ID
+     * @return bool
+     */
+    public static function can_refresh_now( $business_id ) {
+        $last_refresh = get_post_meta( $business_id, '_gmb_last_manual_refresh', true );
+        
+        if ( ! $last_refresh ) {
+            return true;
+        }
+
+        $time_since_refresh = time() - $last_refresh;
+        $min_seconds = self::$min_refresh_interval * 60;
+
+        return $time_since_refresh >= $min_seconds;
+    }
+
+    /**
+     * Get minutes until next refresh allowed
+     *
+     * @param int $business_id Business post ID
+     * @return int
+     */
+    public static function get_minutes_until_next_refresh( $business_id ) {
+        $last_refresh = get_post_meta( $business_id, '_gmb_last_manual_refresh', true );
+        
+        if ( ! $last_refresh ) {
+            return 0;
+        }
+
+        $time_since_refresh = time() - $last_refresh;
+        $min_seconds = self::$min_refresh_interval * 60;
+        $remaining_seconds = $min_seconds - $time_since_refresh;
+
+        if ( $remaining_seconds <= 0 ) {
+            return 0;
+        }
+
+        return ceil( $remaining_seconds / 60 );
+    }
+
+    /**
      * Make API request with rate limiting and retry logic
      *
      * @param int    $business_id Business post ID
@@ -118,9 +168,20 @@ class Lealez_GMB_API {
 
             // Success
             if ( $response_code >= 200 && $response_code < 300 ) {
-                // Cache successful GET requests
+                // Cache successful GET requests with appropriate duration
                 if ( 'GET' === $method && $use_cache ) {
-                    Lealez_GMB_Rate_Limiter::set_cached_response( $cache_key, $response_body );
+                    // Cache duration based on endpoint
+                    $cache_duration = 3600; // Default 1 hour
+                    
+                    if ( strpos( $endpoint, '/accounts' ) !== false && strpos( $endpoint, '/locations' ) === false ) {
+                        // Accounts endpoint: cache for 24 hours
+                        $cache_duration = 86400;
+                    } elseif ( strpos( $endpoint, '/locations' ) !== false ) {
+                        // Locations endpoint: cache for 12 hours
+                        $cache_duration = 43200;
+                    }
+                    
+                    Lealez_GMB_Rate_Limiter::set_cached_response( $cache_key, $response_body, $cache_duration );
                 }
                 return $response_body;
             }
@@ -135,7 +196,7 @@ class Lealez_GMB_API {
                 
                 return new WP_Error(
                     'rate_limit_exceeded',
-                    __( 'Google API rate limit exceeded. The accounts will be fetched automatically in a few minutes. You can also try clicking "Refresh Locations" later.', 'lealez' )
+                    __( 'Google API rate limit exceeded. Please wait at least 15 minutes before trying again.', 'lealez' )
                 );
             }
 
@@ -160,8 +221,8 @@ class Lealez_GMB_API {
             $cached_accounts = get_post_meta( $business_id, '_gmb_accounts', true );
             $last_fetch = get_post_meta( $business_id, '_gmb_accounts_last_fetch', true );
             
-            // Use cache if less than 1 hour old
-            if ( ! empty( $cached_accounts ) && $last_fetch && ( time() - $last_fetch ) < 3600 ) {
+            // Use cache if less than 24 hours old
+            if ( ! empty( $cached_accounts ) && $last_fetch && ( time() - $last_fetch ) < 86400 ) {
                 return $cached_accounts;
             }
         }
@@ -220,10 +281,6 @@ class Lealez_GMB_API {
             );
         }
 
-        update_post_meta( $business_id, '_gmb_locations_available', $processed_locations );
-        update_post_meta( $business_id, '_gmb_locations_last_fetch', time() );
-        update_post_meta( $business_id, '_gmb_total_locations_available', count( $processed_locations ) );
-
         return $processed_locations;
     }
 
@@ -235,6 +292,17 @@ class Lealez_GMB_API {
      * @return array|WP_Error
      */
     public static function get_all_locations( $business_id, $force_refresh = false ) {
+        // Check cache first unless force refresh
+        if ( ! $force_refresh ) {
+            $cached_locations = get_post_meta( $business_id, '_gmb_locations_available', true );
+            $last_fetch = get_post_meta( $business_id, '_gmb_locations_last_fetch', true );
+            
+            // Use cache if less than 12 hours old
+            if ( ! empty( $cached_locations ) && $last_fetch && ( time() - $last_fetch ) < 43200 ) {
+                return $cached_locations;
+            }
+        }
+
         $accounts = self::get_accounts( $business_id, $force_refresh );
         
         if ( is_wp_error( $accounts ) ) {
@@ -251,9 +319,9 @@ class Lealez_GMB_API {
                 continue;
             }
 
-            // Add a small delay between account requests
+            // Add a delay between account requests (5 seconds instead of 2)
             if ( ! empty( $all_locations ) ) {
-                sleep( 2 );
+                sleep( 5 );
             }
 
             $locations = self::get_locations( $business_id, $account_name, $force_refresh );
@@ -266,7 +334,14 @@ class Lealez_GMB_API {
             $all_locations = array_merge( $all_locations, $locations );
         }
 
-        // If we have some locations but also some errors, return locations with a notice
+        // Store locations
+        if ( ! empty( $all_locations ) ) {
+            update_post_meta( $business_id, '_gmb_locations_available', $all_locations );
+            update_post_meta( $business_id, '_gmb_locations_last_fetch', time() );
+            update_post_meta( $business_id, '_gmb_total_locations_available', count( $all_locations ) );
+        }
+
+        // If we have some locations but also some errors, log errors
         if ( ! empty( $all_locations ) && ! empty( $errors ) ) {
             update_post_meta( $business_id, '_gmb_last_sync_errors', $errors );
         }
@@ -301,6 +376,7 @@ class Lealez_GMB_API {
     public static function clear_business_cache( $business_id ) {
         delete_post_meta( $business_id, '_gmb_accounts_last_fetch' );
         delete_post_meta( $business_id, '_gmb_locations_last_fetch' );
+        delete_post_meta( $business_id, '_gmb_last_manual_refresh' );
         
         // Clear transient cache
         $cache_key = md5( $business_id . '/accounts' );
