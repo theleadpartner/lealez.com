@@ -157,7 +157,8 @@ private function include_cpts() {
     require_once LEALEZ_INCLUDES_DIR . 'taxonomies/class-oy-customer-category-taxonomy.php';
     
     // Include GMB integration
-    if ( file_exists( LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php' ) ) {
+    if ( file_exists( LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php' ) ) {
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php';
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php';
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-oauth.php';
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-api.php';
