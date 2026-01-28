@@ -297,6 +297,10 @@ class Lealez_GMB_OAuth {
         delete_post_meta( $business_id, '_gmb_oauth_state' );
         delete_post_meta( $business_id, '_gmb_accounts' );
         delete_post_meta( $business_id, '_gmb_locations_available' );
+        delete_post_meta( $business_id, '_gmb_total_accounts' );
+        delete_post_meta( $business_id, '_gmb_total_locations_available' );
+        delete_post_meta( $business_id, '_gmb_accounts_last_fetch' );
+        delete_post_meta( $business_id, '_gmb_locations_last_fetch' );
 
         return true;
     }
