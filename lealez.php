@@ -160,6 +160,7 @@ private function include_cpts() {
     if ( file_exists( LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php' ) ) {
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php';
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php';
+        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-logger.php'; 
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-oauth.php';
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-api.php';
         require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-ajax.php';
