@@ -24,14 +24,14 @@ class Lealez_GMB_Rate_Limiter {
      *
      * @var int
      */
-    private static $max_requests_per_minute = 50;
+    private static $max_requests_per_minute = 30;
 
     /**
-     * Cache duration in seconds
+     * Cache duration in seconds (30 minutes default)
      *
      * @var int
      */
-    private static $cache_duration = 300; // 5 minutes
+    private static $cache_duration = 1800;
 
     /**
      * Check if we can make a request
