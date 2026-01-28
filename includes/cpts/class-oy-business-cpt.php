@@ -536,7 +536,7 @@ class Lealez_Business_CPT {
         <?php
     }
 
-    /**
+/**
      * Render GMB Meta Box
      */
     public function render_gmb_meta_box( $post ) {
@@ -544,25 +544,60 @@ class Lealez_Business_CPT {
         $gmb_account_name = get_post_meta( $post->ID, '_gmb_account_name', true );
         $gmb_account_email = get_post_meta( $post->ID, '_gmb_account_email', true );
         $gmb_connection_date = get_post_meta( $post->ID, '_gmb_connection_date', true );
+        $last_sync_error = get_post_meta( $post->ID, '_gmb_last_sync_error', true );
+        $accounts_last_fetch = get_post_meta( $post->ID, '_gmb_accounts_last_fetch', true );
         ?>
         <div class="lealez-gmb-connection">
             <?php if ( $gmb_connected ) : ?>
                 <div class="notice notice-success inline">
                     <p><strong><?php _e( 'Cuenta de Google My Business Conectada', 'lealez' ); ?></strong></p>
-                    <p><?php _e( 'Cuenta:', 'lealez' ); ?> <strong><?php echo esc_html( $gmb_account_name ); ?></strong></p>
-                    <p><?php _e( 'Email:', 'lealez' ); ?> <?php echo esc_html( $gmb_account_email ); ?></p>
+                    <?php if ( $gmb_account_name ) : ?>
+                        <p><?php _e( 'Cuenta:', 'lealez' ); ?> <strong><?php echo esc_html( $gmb_account_name ); ?></strong></p>
+                    <?php endif; ?>
+                    <?php if ( $gmb_account_email ) : ?>
+                        <p><?php _e( 'Email:', 'lealez' ); ?> <?php echo esc_html( $gmb_account_email ); ?></p>
+                    <?php endif; ?>
                     <p><?php _e( 'Conectado el:', 'lealez' ); ?> <?php echo date_i18n( get_option( 'date_format' ), $gmb_connection_date ); ?></p>
+                    <?php if ( $accounts_last_fetch ) : ?>
+                        <p><small><?php _e( 'Última actualización de cuentas:', 'lealez' ); ?> <?php echo human_time_diff( $accounts_last_fetch, time() ); ?> <?php _e( 'ago', 'lealez' ); ?></small></p>
+                    <?php endif; ?>
                 </div>
-                <p>
-                    <button type="button" class="button button-secondary lealez-disconnect-gmb"><?php _e( 'Desconectar Cuenta', 'lealez' ); ?></button>
-                    <button type="button" class="button button-primary lealez-refresh-gmb-locations"><?php _e( 'Actualizar Ubicaciones', 'lealez' ); ?></button>
+
+                <?php if ( ! empty( $last_sync_error ) && is_array( $last_sync_error ) ) : ?>
+                    <div class="notice notice-warning inline" style="margin-top: 10px;">
+                        <p><strong><?php _e( 'Last sync had issues:', 'lealez' ); ?></strong></p>
+                        <p><?php echo esc_html( $last_sync_error['message'] ); ?></p>
+                        <p><small><?php echo human_time_diff( $last_sync_error['time'], time() ); ?> <?php _e( 'ago', 'lealez' ); ?></small></p>
+                    </div>
+                <?php endif; ?>
+
+                <p style="margin-top: 15px;">
+                    <button type="button" class="button button-secondary lealez-disconnect-gmb">
+                        <?php _e( 'Desconectar Cuenta', 'lealez' ); ?>
+                    </button>
+                    <button type="button" class="button button-primary lealez-refresh-gmb-locations" style="margin-left: 5px;">
+                        <?php _e( 'Actualizar Ubicaciones', 'lealez' ); ?>
+                    </button>
+                    <button type="button" class="button button-secondary lealez-test-gmb-connection" style="margin-left: 5px;">
+                        <?php _e( 'Probar Conexión', 'lealez' ); ?>
+                    </button>
                 </p>
+
+                <p class="description" style="margin-top: 10px;">
+                    <?php _e( 'Nota: Para evitar límites de API, las cuentas se cargan en segundo plano. Haz clic en "Actualizar Ubicaciones" si necesitas refrescar los datos.', 'lealez' ); ?>
+                </p>
+
             <?php else : ?>
                 <div class="notice notice-info inline">
                     <p><?php _e( 'No hay ninguna cuenta de Google My Business conectada.', 'lealez' ); ?></p>
                 </div>
-                <p>
-                    <button type="button" class="button button-primary lealez-connect-gmb"><?php _e( 'Conectar con Google My Business', 'lealez' ); ?></button>
+                <p style="margin-top: 15px;">
+                    <button type="button" class="button button-primary lealez-connect-gmb">
+                        <?php _e( 'Conectar con Google My Business', 'lealez' ); ?>
+                    </button>
+                </p>
+                <p class="description" style="margin-top: 10px;">
+                    <?php _e( 'Guarda los cambios en esta empresa antes de conectar con Google My Business.', 'lealez' ); ?>
                 </p>
             <?php endif; ?>
         </div>
