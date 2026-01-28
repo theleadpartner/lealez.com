@@ -153,7 +153,7 @@ class Lealez_GMB_Ajax {
         ) );
     }
 
-    /**
+/**
      * Handle OAuth callback
      */
     public function handle_oauth_callback() {
@@ -198,16 +198,15 @@ class Lealez_GMB_Ajax {
             return;
         }
 
-        // Get accounts
-        $accounts = Lealez_GMB_API::get_accounts( $business_id );
+        // Schedule background task to fetch accounts (avoids rate limiting)
+        wp_schedule_single_event( time() + 60, 'lealez_gmb_fetch_accounts_background', array( $business_id ) );
 
-        if ( is_wp_error( $accounts ) ) {
-            $this->render_callback_page( 'warning', __( 'Connected successfully but failed to fetch accounts: ', 'lealez' ) . $accounts->get_error_message(), $business_id );
-            return;
-        }
-
-        // Success
-        $this->render_callback_page( 'success', __( 'Successfully connected to Google My Business!', 'lealez' ), $business_id );
+        // Success - accounts will be fetched in background
+        $this->render_callback_page(
+            'success',
+            __( 'Successfully connected to Google My Business! Your account information will be loaded shortly. You can close this window.', 'lealez' ),
+            $business_id
+        );
     }
 
     /**
@@ -294,6 +293,36 @@ class Lealez_GMB_Ajax {
         </html>
         <?php
     }
+
+    /**
+     * Background task to fetch accounts
+     * Scheduled after OAuth to avoid rate limiting
+     */
+    public static function fetch_accounts_background( $business_id ) {
+        if ( ! $business_id ) {
+            return;
+        }
+
+        // Fetch accounts with retry logic built into API class
+        $accounts = Lealez_GMB_API::get_accounts( $business_id, true );
+
+        if ( is_wp_error( $accounts ) ) {
+            // Log error
+            update_post_meta( $business_id, '_gmb_last_sync_error', array(
+                'message' => $accounts->get_error_message(),
+                'time'    => time(),
+            ) );
+
+            // Reschedule if rate limit error
+            if ( 'rate_limit_exceeded' === $accounts->get_error_code() ) {
+                wp_schedule_single_event( time() + 300, 'lealez_gmb_fetch_accounts_background', array( $business_id ) );
+            }
+        } else {
+            // Clear any previous errors
+            delete_post_meta( $business_id, '_gmb_last_sync_error' );
+        }
+    }
+
 }
 
 // Initialize
