@@ -76,32 +76,38 @@ class Lealez_GMB_Ajax {
     /**
      * Disconnect GMB account
      */
-    public function disconnect() {
-        check_ajax_referer( 'lealez_gmb_nonce', 'nonce' );
+public function disconnect() {
+    check_ajax_referer( 'lealez_gmb_nonce', 'nonce' );
 
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'lealez' ) ) );
-        }
-
-        $business_id = absint( $_POST['business_id'] ?? 0 );
-
-        if ( ! $business_id ) {
-            wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
-        }
-
-        $result = Lealez_GMB_OAuth::disconnect( $business_id );
-
-        if ( $result ) {
-            // Log disconnection
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log( $business_id, 'info', 'GMB account disconnected by user' );
-            }
-            
-            wp_send_json_success( array( 'message' => __( 'Successfully disconnected from Google My Business', 'lealez' ) ) );
-        } else {
-            wp_send_json_error( array( 'message' => __( 'Failed to disconnect', 'lealez' ) ) );
-        }
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'lealez' ) ) );
     }
+
+    $business_id = absint( $_POST['business_id'] ?? 0 );
+
+    if ( ! $business_id ) {
+        wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
+    }
+
+    $result = Lealez_GMB_OAuth::disconnect( $business_id );
+
+    if ( $result ) {
+        // ✅ NEW: limpiar cache/rate-limit flags persistentes para evitar bloqueos en reconexión
+        if ( class_exists( 'Lealez_GMB_API' ) ) {
+            Lealez_GMB_API::clear_business_cache( $business_id );
+        }
+
+        // Log disconnection
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'info', 'GMB account disconnected by user (cache/rate-limit cleared)' );
+        }
+
+        wp_send_json_success( array( 'message' => __( 'Successfully disconnected from Google My Business', 'lealez' ) ) );
+    } else {
+        wp_send_json_error( array( 'message' => __( 'Failed to disconnect', 'lealez' ) ) );
+    }
+}
+
 
     /**
      * Refresh locations from GMB
@@ -273,6 +279,19 @@ public function handle_oauth_callback() {
         return;
     }
 
+    // ✅ NEW: limpiar rate-limit/cache stale ANTES del sync inicial
+    // Evita el caso: "Successfully connected" + "Initial sync failed: Rate limit active"
+    if ( class_exists( 'Lealez_GMB_API' ) ) {
+        Lealez_GMB_API::clear_business_cache( $business_id );
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'OAuth exchange OK: cleared stale cache/rate-limit flags before initial sync'
+            );
+        }
+    }
+
     // Log success
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log(
@@ -282,7 +301,7 @@ public function handle_oauth_callback() {
         );
     }
 
-    // ✅ NUEVO: Sincronización inicial automática (cuentas + ubicaciones)
+    // ✅ Sincronización inicial automática (cuentas + ubicaciones)
     $sync_summary = '';
     if ( class_exists( 'Lealez_GMB_API' ) ) {
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -332,6 +351,7 @@ public function handle_oauth_callback() {
 
     $this->render_callback_page( 'success', $message, $business_id );
 }
+
 
 
     /**
