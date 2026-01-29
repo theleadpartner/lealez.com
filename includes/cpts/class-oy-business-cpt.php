@@ -540,6 +540,7 @@ class Lealez_Business_CPT {
  * Render GMB Meta Box
  */
 public function render_gmb_meta_box( $post ) {
+    // Obtener datos de conexión
     $gmb_connected = get_post_meta( $post->ID, '_gmb_connected', true );
     $gmb_account_name = get_post_meta( $post->ID, '_gmb_account_name', true );
     $gmb_account_email = get_post_meta( $post->ID, '_gmb_account_email', true );
@@ -550,7 +551,7 @@ public function render_gmb_meta_box( $post ) {
     $total_accounts = get_post_meta( $post->ID, '_gmb_total_accounts', true );
     $total_locations = get_post_meta( $post->ID, '_gmb_total_locations_available', true );
     
-    // Check if we can refresh now
+    // Verificar si podemos refrescar ahora
     $can_refresh = true;
     $wait_message = '';
     if ( class_exists( 'Lealez_GMB_API' ) && $gmb_connected ) {
@@ -563,6 +564,9 @@ public function render_gmb_meta_box( $post ) {
     ?>
     <div class="lealez-gmb-connection">
         <?php if ( $gmb_connected ) : ?>
+            <!-- ============================================ -->
+            <!-- SECCIÓN: CUENTA CONECTADA -->
+            <!-- ============================================ -->
             <div class="notice notice-success inline">
                 <p><strong><?php _e( 'Cuenta de Google My Business Conectada', 'lealez' ); ?></strong></p>
                 <?php if ( $gmb_account_name ) : ?>
@@ -576,7 +580,7 @@ public function render_gmb_meta_box( $post ) {
                 <?php endif; ?>
             </div>
             
-            <!-- SECCIÓN NUEVA: Status Summary -->
+            <!-- Status Summary -->
             <div class="notice notice-info inline" style="margin-top: 10px;">
                 <p><strong><?php _e( 'Estado de la Integración:', 'lealez' ); ?></strong></p>
                 <table style="width: 100%; margin-top: 10px;">
@@ -591,6 +595,7 @@ public function render_gmb_meta_box( $post ) {
                 </table>
             </div>
             
+            <!-- Información de Sincronización -->
             <?php if ( $gmb_last_manual_refresh || $gmb_accounts_last_fetch || $gmb_locations_last_fetch ) : ?>
                 <div class="notice notice-info inline" style="margin-top: 10px;">
                     <p><strong><?php _e( 'Información de Sincronización:', 'lealez' ); ?></strong></p>
@@ -612,15 +617,15 @@ public function render_gmb_meta_box( $post ) {
                 </div>
             <?php endif; ?>
             
-<?php if ( ! $can_refresh && $wait_message ) : ?>
-                <div class="notice notice-error inline" style="margin-top: 10px;">
-                    <h4><strong>🚫 <?php echo esc_html( $wait_message ); ?></strong></h4>
-                    <p><?php _e( 'Google My Business API has strict rate limits. Waiting 60 minutes between refreshes helps avoid API quota exhaustion and temporary blocks.', 'lealez' ); ?></p>
-                    <p><?php _e( 'Your current data is cached and will be used automatically.', 'lealez' ); ?></p>
+            <!-- Advertencia de Rate Limit -->
+            <?php if ( ! $can_refresh && $wait_message ) : ?>
+                <div class="notice notice-warning inline" style="margin-top: 10px;">
+                    <p><strong>⚠ <?php echo esc_html( $wait_message ); ?></strong></p>
+                    <p><?php _e( 'This helps avoid Google API rate limits.', 'lealez' ); ?></p>
                 </div>
             <?php endif; ?>
             
-            <!-- SECCIÓN NUEVA: Activity Log -->
+            <!-- Activity Log -->
             <?php if ( class_exists( 'Lealez_GMB_Logger' ) ) : 
                 $logs = Lealez_GMB_Logger::get_logs( $post->ID, 10 );
                 if ( ! empty( $logs ) ) :
@@ -641,31 +646,58 @@ public function render_gmb_meta_box( $post ) {
             endif; 
             ?>
             
+            <!-- Botones de Acción (Cuenta Conectada) -->
             <p style="margin-top: 15px;">
-                <button type="button" class="button button-secondary lealez-disconnect-gmb"><?php _e( 'Desconectar Cuenta', 'lealez' ); ?></button>
+                <button type="button" class="button button-secondary lealez-disconnect-gmb">
+                    <?php _e( 'Desconectar Cuenta', 'lealez' ); ?>
+                </button>
                 <button type="button" class="button button-primary lealez-refresh-gmb-locations" <?php echo ! $can_refresh ? 'disabled' : ''; ?>>
                     <?php _e( 'Actualizar Ubicaciones', 'lealez' ); ?>
                 </button>
             </p>
-<div class="notice notice-warning inline" style="margin-top: 10px;">
-                <h4><?php _e( '⚠️ IMPORTANT: Google API Rate Limits', 'lealez' ); ?></h4>
-                <ul style="margin-left: 20px;">
-                    <li><?php _e( 'Google My Business API has strict limits: 50 requests/minute/project', 'lealez' ); ?></li>
-                    <li><?php _e( 'Wait at least 60 minutes between manual refreshes', 'lealez' ); ?></li>
-                    <li><?php _e( 'Data is cached for 24 hours - use cached data when possible', 'lealez' ); ?></li>
-                    <li><?php _e( 'Frequent API calls may result in temporary blocks', 'lealez' ); ?></li>
-                </ul>
-            </div>
-                <button type="button" class="button button-primary lealez-connect-gmb"><?php _e( 'Conectar con Google My Business', 'lealez' ); ?></button>
-            </p>
             <p class="description">
-                <?php _e( 'After connecting, click "Refresh Locations" to load your Google My Business data.', 'lealez' ); ?>
+                <?php _e( 'Note: To avoid API rate limits, please wait at least 15 minutes between manual refreshes.', 'lealez' ); ?>
             </p>
+            
+        <?php else : ?>
+            <!-- ============================================ -->
+            <!-- SECCIÓN: CUENTA NO CONECTADA -->
+            <!-- ============================================ -->
+            <div class="notice notice-info inline">
+                <p><?php _e( 'No hay ninguna cuenta de Google My Business conectada.', 'lealez' ); ?></p>
+            </div>
+            
+            <!-- BOTÓN PRINCIPAL DE CONEXIÓN -->
+            <p style="margin-top: 15px;">
+                <button type="button" class="button button-primary lealez-connect-gmb">
+                    <span class="dashicons dashicons-google" style="margin-top: 3px;"></span>
+                    <?php _e( 'Conectar con Google My Business', 'lealez' ); ?>
+                </button>
+            </p>
+            
+            <p class="description">
+                <?php _e( 'Connect your Google My Business account to sync locations and metrics.', 'lealez' ); ?><br>
+                <?php _e( 'After connecting, click "Refresh Locations" to load your data.', 'lealez' ); ?>
+            </p>
+            
+            <!-- Instrucciones Adicionales -->
+            <div class="notice notice-warning inline" style="margin-top: 15px;">
+                <p><strong><?php _e( 'Before Connecting:', 'lealez' ); ?></strong></p>
+                <ol style="margin-left: 20px;">
+                    <li><?php _e( 'Save this business post first', 'lealez' ); ?></li>
+                    <li><?php _e( 'Make sure you have configured OAuth credentials in Settings → GMB Settings', 'lealez' ); ?></li>
+                    <li><?php _e( 'Your email must be added as a Test User in Google Cloud Console', 'lealez' ); ?></li>
+                </ol>
+            </div>
+            
         <?php endif; ?>
     </div>
 
     <hr>
 
+    <!-- ============================================ -->
+    <!-- CONFIGURACIÓN DE SINCRONIZACIÓN -->
+    <!-- ============================================ -->
     <h4><?php _e( 'Configuración de Sincronización', 'lealez' ); ?></h4>
     <table class="form-table">
         <tr>
@@ -710,6 +742,9 @@ public function render_gmb_meta_box( $post ) {
 
     <hr>
 
+    <!-- ============================================ -->
+    <!-- CONFIGURACIÓN DE REPORTES -->
+    <!-- ============================================ -->
     <h4><?php _e( 'Configuración de Reportes', 'lealez' ); ?></h4>
     <table class="form-table">
         <tr>
