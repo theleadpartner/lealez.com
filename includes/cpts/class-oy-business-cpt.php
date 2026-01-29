@@ -95,39 +95,47 @@ class Lealez_Business_CPT {
     /**
      * Enqueue admin scripts
      */
-    public function enqueue_admin_scripts( $hook ) {
-        global $post_type;
-        
-        // Only load on oy_business edit pages
-        if ( ( 'post.php' === $hook || 'post-new.php' === $hook ) && 'oy_business' === $post_type ) {
-            
-            // Enqueue GMB connection script
-            wp_enqueue_script(
-                'lealez-gmb-connection',
-                LEALEZ_ASSETS_URL . 'js/admin/lealez-gmb-connection.js',
-                array( 'jquery' ),
-                LEALEZ_VERSION,
-                true
-            );
+public function enqueue_admin_scripts( $hook ) {
+    global $post_type;
 
-            // Localize script
-            wp_localize_script(
-                'lealez-gmb-connection',
-                'lealezGMBData',
-                array(
-                    'nonce'             => wp_create_nonce( 'lealez_gmb_nonce' ),
-                    'businessId'        => get_the_ID(),
-                    'ajaxUrl'           => admin_url( 'admin-ajax.php' ),
-                    'i18n'              => array(
-                        'processing'        => __( 'Procesando...', 'lealez' ),
-                        'error'             => __( 'Error', 'lealez' ),
-                        'saveFirst'         => __( 'Por favor guarda el post primero', 'lealez' ),
-                        'confirmDisconnect' => __( '¿Estás seguro de que deseas desconectar la cuenta de Google My Business?', 'lealez' ),
-                    ),
-                )
-            );
-        }
+    // Only load on oy_business edit pages
+    if ( ( 'post.php' === $hook || 'post-new.php' === $hook ) && 'oy_business' === $post_type ) {
+
+        // Enqueue GMB connection script
+        wp_enqueue_script(
+            'lealez-gmb-connection',
+            LEALEZ_ASSETS_URL . 'js/admin/lealez-gmb-connection.js',
+            array( 'jquery' ),
+            LEALEZ_VERSION,
+            true
+        );
+
+        // Localize script
+        wp_localize_script(
+            'lealez-gmb-connection',
+            'lealezGMBData',
+            array(
+                'nonce'      => wp_create_nonce( 'lealez_gmb_nonce' ),
+                'businessId' => get_the_ID(),
+                'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+                'i18n'       => array(
+                    'processing'        => __( 'Procesando...', 'lealez' ),
+                    'error'             => __( 'Error', 'lealez' ),
+                    'saveFirst'         => __( 'Por favor guarda el post primero', 'lealez' ),
+                    'confirmDisconnect' => __( '¿Estás seguro de que deseas desconectar la cuenta de Google My Business?', 'lealez' ),
+
+                    // ✅ Nuevos (recomendado)
+                    'connectBtn'        => __( 'Conectar con Google My Business', 'lealez' ),
+                    'disconnectBtn'     => __( 'Desconectar Cuenta', 'lealez' ),
+                    'refreshBtn'        => __( 'Actualizar Ubicaciones', 'lealez' ),
+                    'testBtn'           => __( 'Probar Conexión', 'lealez' ),
+                    'popupBlocked'      => __( 'Por favor, permite las ventanas emergentes para conectar con Google.', 'lealez' ),
+                ),
+            )
+        );
     }
+}
+
 
     /**
      * Add meta boxes
