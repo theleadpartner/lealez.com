@@ -26,12 +26,12 @@ class Lealez_GMB_Rate_Limiter {
      */
     private static $max_requests_per_minute = 30;
 
-/**
-     * Cache duration in seconds (24 hours default - Google recommends aggressive caching)
+    /**
+     * Cache duration in seconds (12 hours for locations, 24 hours for accounts)
      *
      * @var int
      */
-    private static $cache_duration = 86400; // 24 hours
+    private static $cache_duration = 43200;
 
     /**
      * Check if we can make a request
