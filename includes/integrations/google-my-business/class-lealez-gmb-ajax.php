@@ -103,7 +103,7 @@ class Lealez_GMB_Ajax {
         }
     }
 
-    /**
+/**
      * Refresh locations from GMB
      */
     public function refresh_locations() {
@@ -124,7 +124,7 @@ class Lealez_GMB_Ajax {
             $wait_minutes = Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
             wp_send_json_error( array( 
                 'message' => sprintf(
-                    __( 'Please wait %d minutes before refreshing again to avoid API rate limits.', 'lealez' ),
+                    __( 'Please wait %d minutes before refreshing again. Google My Business API has strict rate limits (50 requests/minute). Frequent refreshes may result in temporary API blocks.', 'lealez' ),
                     $wait_minutes
                 )
             ) );
@@ -132,20 +132,34 @@ class Lealez_GMB_Ajax {
 
         // Log refresh start
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( $business_id, 'info', 'Manual refresh started' );
+            Lealez_GMB_Logger::log( $business_id, 'info', 'Manual refresh started by user' );
         }
 
-        // First get accounts
+        // First get accounts with conservative approach
         $accounts = Lealez_GMB_API::get_accounts( $business_id, true );
 
         if ( is_wp_error( $accounts ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( 
+                    $business_id, 
+                    'error', 
+                    'Failed to retrieve accounts: ' . $accounts->get_error_message() 
+                );
+            }
             wp_send_json_error( array( 'message' => $accounts->get_error_message() ) );
         }
 
-        // Then get all locations
+        // Then get all locations (with delays between calls)
         $locations = Lealez_GMB_API::get_all_locations( $business_id, true );
 
         if ( is_wp_error( $locations ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( 
+                    $business_id, 
+                    'error', 
+                    'Failed to retrieve locations: ' . $locations->get_error_message() 
+                );
+            }
             wp_send_json_error( array( 'message' => $locations->get_error_message() ) );
         }
 
@@ -162,7 +176,11 @@ class Lealez_GMB_Ajax {
         }
 
         wp_send_json_success( array(
-            'message'   => sprintf( __( 'Successfully retrieved %d locations', 'lealez' ), count( $locations ) ),
+            'message'   => sprintf( 
+                __( 'Successfully retrieved %d locations. Data cached for 24 hours. Next manual refresh available in %d minutes.', 'lealez' ), 
+                count( $locations ),
+                Lealez_GMB_API::get_minutes_until_next_refresh( $business_id )
+            ),
             'locations' => $locations,
         ) );
     }
