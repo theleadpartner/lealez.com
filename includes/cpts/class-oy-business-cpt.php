@@ -612,10 +612,11 @@ public function render_gmb_meta_box( $post ) {
                 </div>
             <?php endif; ?>
             
-            <?php if ( ! $can_refresh && $wait_message ) : ?>
-                <div class="notice notice-warning inline" style="margin-top: 10px;">
-                    <p><strong>⚠ <?php echo esc_html( $wait_message ); ?></strong></p>
-                    <p><?php _e( 'This helps avoid Google API rate limits.', 'lealez' ); ?></p>
+<?php if ( ! $can_refresh && $wait_message ) : ?>
+                <div class="notice notice-error inline" style="margin-top: 10px;">
+                    <h4><strong>🚫 <?php echo esc_html( $wait_message ); ?></strong></h4>
+                    <p><?php _e( 'Google My Business API has strict rate limits. Waiting 60 minutes between refreshes helps avoid API quota exhaustion and temporary blocks.', 'lealez' ); ?></p>
+                    <p><?php _e( 'Your current data is cached and will be used automatically.', 'lealez' ); ?></p>
                 </div>
             <?php endif; ?>
             
@@ -646,14 +647,15 @@ public function render_gmb_meta_box( $post ) {
                     <?php _e( 'Actualizar Ubicaciones', 'lealez' ); ?>
                 </button>
             </p>
-            <p class="description">
-                <?php _e( 'Note: To avoid API rate limits, please wait at least 15 minutes between manual refreshes.', 'lealez' ); ?>
-            </p>
-        <?php else : ?>
-            <div class="notice notice-info inline">
-                <p><?php _e( 'No hay ninguna cuenta de Google My Business conectada.', 'lealez' ); ?></p>
+<div class="notice notice-warning inline" style="margin-top: 10px;">
+                <h4><?php _e( '⚠️ IMPORTANT: Google API Rate Limits', 'lealez' ); ?></h4>
+                <ul style="margin-left: 20px;">
+                    <li><?php _e( 'Google My Business API has strict limits: 50 requests/minute/project', 'lealez' ); ?></li>
+                    <li><?php _e( 'Wait at least 60 minutes between manual refreshes', 'lealez' ); ?></li>
+                    <li><?php _e( 'Data is cached for 24 hours - use cached data when possible', 'lealez' ); ?></li>
+                    <li><?php _e( 'Frequent API calls may result in temporary blocks', 'lealez' ); ?></li>
+                </ul>
             </div>
-            <p>
                 <button type="button" class="button button-primary lealez-connect-gmb"><?php _e( 'Conectar con Google My Business', 'lealez' ); ?></button>
             </p>
             <p class="description">
