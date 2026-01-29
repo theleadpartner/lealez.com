@@ -140,22 +140,33 @@ public function refresh_locations() {
 
         // ✅ Validar cooldown/rate-limit/intervalo mínimo
         if ( ! Lealez_GMB_API::can_refresh_now( $business_id ) ) {
-            $wait_minutes = Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
+            $wait_minutes  = (int) Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
             $delay_seconds = max( 60, $wait_minutes * 60 );
 
-            // ✅ Programar cron automático
-            $ts = Lealez_GMB_API::schedule_locations_refresh( $business_id, $delay_seconds, 'manual_refresh_blocked' );
+            // ✅ Programar cron automático (devuelve el timestamp final real; respeta “keep earliest”)
+            $ts = (int) Lealez_GMB_API::schedule_locations_refresh( $business_id, $delay_seconds, 'manual_refresh_blocked' );
+
+            $scheduled_human = date_i18n(
+                get_option( 'date_format' ) . ' ' . get_option( 'time_format' ),
+                $ts
+            );
 
             $msg = sprintf(
-                __( 'Rate limit / cooldown active. Please wait %d minutes. An automatic refresh has been scheduled.', 'lealez' ),
-                $wait_minutes
+                __( 'Rate limit / cooldown active. Please wait %d minutes. An automatic refresh has been scheduled for %s.', 'lealez' ),
+                $wait_minutes,
+                $scheduled_human
             );
 
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log( $business_id, 'warning', $msg, array( 'scheduled_for' => $ts ) );
             }
 
-            wp_send_json_error( array( 'message' => $msg ) );
+            wp_send_json_error( array(
+                'message'             => $msg,
+                'wait_minutes'        => $wait_minutes,
+                'scheduled_for'       => $ts,
+                'scheduled_for_human' => $scheduled_human,
+            ) );
         }
 
         // Log refresh start
@@ -173,10 +184,20 @@ public function refresh_locations() {
         if ( is_wp_error( $locations ) ) {
             // ✅ Si fue rate limit, programar reintento automático
             if ( in_array( $locations->get_error_code(), array( 'rate_limit_exceeded', 'rate_limit_active', 'local_rate_limit' ), true ) ) {
-                $wait_minutes  = Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
+                $wait_minutes  = (int) Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
                 $delay_seconds = max( 60, $wait_minutes * 60 );
 
-                $ts = Lealez_GMB_API::schedule_locations_refresh( $business_id, $delay_seconds, 'manual_refresh_rate_limited' );
+                $ts = (int) Lealez_GMB_API::schedule_locations_refresh( $business_id, $delay_seconds, 'manual_refresh_rate_limited' );
+
+                $scheduled_human = date_i18n(
+                    get_option( 'date_format' ) . ' ' . get_option( 'time_format' ),
+                    $ts
+                );
+
+                $msg = $locations->get_error_message() . ' ' . sprintf(
+                    __( 'An automatic refresh has been scheduled for %s.', 'lealez' ),
+                    $scheduled_human
+                );
 
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                     Lealez_GMB_Logger::log(
@@ -184,14 +205,19 @@ public function refresh_locations() {
                         'warning',
                         'Manual refresh hit rate limit; scheduled automatic refresh.',
                         array(
-                            'error'         => $locations->get_error_message(),
-                            'scheduled_for' => $ts,
+                            'error'              => $locations->get_error_message(),
+                            'scheduled_for'      => $ts,
+                            'scheduled_human'    => $scheduled_human,
+                            'wait_minutes'       => $wait_minutes,
                         )
                     );
                 }
 
                 wp_send_json_error( array(
-                    'message' => $locations->get_error_message() . ' ' . __( 'An automatic refresh has been scheduled.', 'lealez' ),
+                    'message'             => $msg,
+                    'wait_minutes'        => $wait_minutes,
+                    'scheduled_for'       => $ts,
+                    'scheduled_for_human' => $scheduled_human,
                 ) );
             }
 
@@ -220,6 +246,7 @@ public function refresh_locations() {
         Lealez_GMB_API::release_sync_lock( $business_id );
     }
 }
+
 
 
     /**
