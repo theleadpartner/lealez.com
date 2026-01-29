@@ -34,25 +34,39 @@ class Lealez_GMB_API {
     private static $business_api_base = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 
     /**
-     * Max retry attempts
+     * Max retry attempts (solo para errores de red, NO para rate limits)
      *
      * @var int
      */
-    private static $max_retries = 2;
+    private static $max_retries = 1;
 
     /**
-     * Minimum minutes between manual refreshes
+     * Minimum minutes between manual refreshes (aumentado a 60 min)
      *
      * @var int
      */
-    private static $min_refresh_interval = 15;
+    private static $min_refresh_interval = 60;
 
     /**
-     * Delay between API calls (seconds)
+     * Delay between API calls (seconds) - aumentado a 5s
      *
      * @var int
      */
-    private static $delay_between_calls = 2;
+    private static $delay_between_calls = 5;
+
+    /**
+     * Cache duration for accounts (24 hours)
+     *
+     * @var int
+     */
+    private static $cache_duration_accounts = 86400;
+
+    /**
+     * Cache duration for locations (24 hours)
+     *
+     * @var int
+     */
+    private static $cache_duration_locations = 86400;
 
     /**
      * Check if we can refresh now
@@ -98,7 +112,7 @@ class Lealez_GMB_API {
     }
 
     /**
-     * Make API request with rate limiting and retry logic
+     * Make API request with conservative rate limiting
      *
      * @param int    $business_id Business post ID
      * @param string $endpoint    API endpoint (full path)
@@ -180,12 +194,12 @@ class Lealez_GMB_API {
             $args['body'] = wp_json_encode( $body );
         }
 
-        // Retry logic with exponential backoff
+        // SOLO 1 intento inicial - NO reintentar en rate limits
         $attempt = 0;
         $response = null;
 
         while ( $attempt < self::$max_retries ) {
-            // Add delay before request (except first attempt)
+            // Add delay before request (excepto primer intento)
             if ( $attempt > 0 ) {
                 $wait_time = pow( 2, $attempt ) * self::$delay_between_calls;
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -244,12 +258,11 @@ class Lealez_GMB_API {
                 
                 // Cache successful GET requests
                 if ( 'GET' === $method && $use_cache && is_array( $data ) ) {
-                    $cache_duration = 3600; // Default 1 hour
-                    
+                    // Determine cache duration based on endpoint
                     if ( strpos( $endpoint, '/accounts' ) !== false && strpos( $endpoint, '/locations' ) === false ) {
-                        $cache_duration = 86400; // 24 hours for accounts
-                    } elseif ( strpos( $endpoint, '/locations' ) !== false ) {
-                        $cache_duration = 43200; // 12 hours for locations
+                        $cache_duration = self::$cache_duration_accounts;
+                    } else {
+                        $cache_duration = self::$cache_duration_locations;
                     }
                     
                     Lealez_GMB_Rate_Limiter::set_cached_response( $cache_key, $data, $cache_duration );
@@ -258,28 +271,30 @@ class Lealez_GMB_API {
                 return $data;
             }
 
-            // Rate limit error
+            // Rate limit error - NO REINTENTAR, devolver error inmediatamente
             if ( 429 === $response_code || ( isset( $data['error']['status'] ) && 'RESOURCE_EXHAUSTED' === $data['error']['status'] ) ) {
-                $attempt++;
+                
+                // Check for Retry-After header
+                $retry_after = wp_remote_retrieve_header( $response, 'Retry-After' );
+                $wait_minutes = self::$min_refresh_interval;
+                
+                if ( $retry_after ) {
+                    $wait_minutes = ceil( intval( $retry_after ) / 60 );
+                }
+                
+                $error_msg = sprintf(
+                    __( 'Google API rate limit exceeded. Please wait at least %d minutes before trying again. Google recommends waiting longer periods between API calls.', 'lealez' ),
+                    $wait_minutes
+                );
                 
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                    Lealez_GMB_Logger::log( 
-                        $business_id, 
-                        'warning', 
-                        sprintf( 'Rate limit hit (attempt %d/%d)', $attempt, self::$max_retries )
-                    );
+                    Lealez_GMB_Logger::log( $business_id, 'error', $error_msg );
                 }
                 
-                if ( $attempt >= self::$max_retries ) {
-                    $error_msg = __( 'Google API rate limit exceeded. Please wait at least 15 minutes before trying again.', 'lealez' );
-                    
-                    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                        Lealez_GMB_Logger::log( $business_id, 'error', $error_msg );
-                    }
-                    
-                    return new WP_Error( 'rate_limit_exceeded', $error_msg );
-                }
-                continue;
+                // Marcar timestamp para evitar más llamadas
+                update_post_meta( $business_id, '_gmb_last_rate_limit', time() );
+                
+                return new WP_Error( 'rate_limit_exceeded', $error_msg );
             }
 
             // Permission errors
@@ -301,7 +316,25 @@ class Lealez_GMB_API {
                 return new WP_Error( 'permission_denied', $error_msg );
             }
 
-            // Other errors
+            // Other errors - solo reintentar errores de red (5xx)
+            if ( $response_code >= 500 ) {
+                $attempt++;
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( 
+                        $business_id, 
+                        'warning', 
+                        sprintf( 'Server error (HTTP %d), attempt %d/%d', $response_code, $attempt, self::$max_retries )
+                    );
+                }
+                
+                if ( $attempt >= self::$max_retries ) {
+                    $error_message = $data['error']['message'] ?? __( 'Server error', 'lealez' );
+                    return new WP_Error( 'server_error', $error_message, array( 'code' => $response_code ) );
+                }
+                continue;
+            }
+
+            // Client errors (4xx) - no reintentar
             $error_message = $data['error']['message'] ?? __( 'API request failed', 'lealez' );
             
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -323,20 +356,30 @@ class Lealez_GMB_API {
     }
 
     /**
-     * Get accounts (with caching)
+     * Get accounts (with aggressive caching)
      *
      * @param int  $business_id Business post ID
      * @param bool $force_refresh Force refresh from API
      * @return array|WP_Error
      */
     public static function get_accounts( $business_id, $force_refresh = false ) {
+        // Check for recent rate limit
+        $last_rate_limit = get_post_meta( $business_id, '_gmb_last_rate_limit', true );
+        if ( $last_rate_limit && ( time() - $last_rate_limit ) < ( self::$min_refresh_interval * 60 ) ) {
+            $wait_minutes = ceil( ( ( self::$min_refresh_interval * 60 ) - ( time() - $last_rate_limit ) ) / 60 );
+            return new WP_Error(
+                'rate_limit_active',
+                sprintf( __( 'Rate limit active. Please wait %d minutes before making more requests.', 'lealez' ), $wait_minutes )
+            );
+        }
+
         // Check cache first unless force refresh
         if ( ! $force_refresh ) {
             $cached_accounts = get_post_meta( $business_id, '_gmb_accounts', true );
             $last_fetch = get_post_meta( $business_id, '_gmb_accounts_last_fetch', true );
             
             // Use cache if less than 24 hours old
-            if ( ! empty( $cached_accounts ) && $last_fetch && ( time() - $last_fetch ) < 86400 ) {
+            if ( ! empty( $cached_accounts ) && $last_fetch && ( time() - $last_fetch ) < self::$cache_duration_accounts ) {
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                     Lealez_GMB_Logger::log( $business_id, 'info', 'Using cached accounts data' );
                 }
@@ -352,7 +395,7 @@ class Lealez_GMB_API {
 
         $accounts = $result['accounts'] ?? array();
         
-        // Store accounts
+        // Store accounts in post_meta for persistent cache
         update_post_meta( $business_id, '_gmb_accounts', $accounts );
         update_post_meta( $business_id, '_gmb_accounts_last_fetch', time() );
         update_post_meta( $business_id, '_gmb_total_accounts', count( $accounts ) );
@@ -375,7 +418,7 @@ class Lealez_GMB_API {
     }
 
     /**
-     * Get locations for an account (with caching)
+     * Get locations for an account (with aggressive caching)
      *
      * @param int    $business_id   Business post ID
      * @param string $account_name  Account resource name
@@ -383,9 +426,26 @@ class Lealez_GMB_API {
      * @return array|WP_Error
      */
     public static function get_locations( $business_id, $account_name, $force_refresh = false ) {
+        // Check for recent rate limit
+        $last_rate_limit = get_post_meta( $business_id, '_gmb_last_rate_limit', true );
+        if ( $last_rate_limit && ( time() - $last_rate_limit ) < ( self::$min_refresh_interval * 60 ) ) {
+            $wait_minutes = ceil( ( ( self::$min_refresh_interval * 60 ) - ( time() - $last_rate_limit ) ) / 60 );
+            return new WP_Error(
+                'rate_limit_active',
+                sprintf( __( 'Rate limit active. Please wait %d minutes before making more requests.', 'lealez' ), $wait_minutes )
+            );
+        }
+
         $endpoint = '/' . $account_name . '/locations';
         
-        // Add delay before this call
+        // CRITICAL: Add delay before this call
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( 
+                $business_id, 
+                'info', 
+                sprintf( 'Waiting %d seconds before fetching locations...', self::$delay_between_calls )
+            );
+        }
         sleep( self::$delay_between_calls );
         
         $result = self::make_request( $business_id, $endpoint, self::$business_api_base, 'GET', array(), ! $force_refresh );
@@ -423,20 +483,30 @@ class Lealez_GMB_API {
     }
 
     /**
-     * Get all locations for all accounts (with rate limiting)
+     * Get all locations for all accounts (with conservative rate limiting)
      *
      * @param int  $business_id   Business post ID
      * @param bool $force_refresh Force refresh from API
      * @return array|WP_Error
      */
     public static function get_all_locations( $business_id, $force_refresh = false ) {
+        // Check for recent rate limit
+        $last_rate_limit = get_post_meta( $business_id, '_gmb_last_rate_limit', true );
+        if ( $last_rate_limit && ( time() - $last_rate_limit ) < ( self::$min_refresh_interval * 60 ) ) {
+            $wait_minutes = ceil( ( ( self::$min_refresh_interval * 60 ) - ( time() - $last_rate_limit ) ) / 60 );
+            return new WP_Error(
+                'rate_limit_active',
+                sprintf( __( 'Rate limit active. Please wait %d minutes before making more requests.', 'lealez' ), $wait_minutes )
+            );
+        }
+
         // Check cache first unless force refresh
         if ( ! $force_refresh ) {
             $cached_locations = get_post_meta( $business_id, '_gmb_locations_available', true );
             $last_fetch = get_post_meta( $business_id, '_gmb_locations_last_fetch', true );
             
-            // Use cache if less than 12 hours old
-            if ( ! empty( $cached_locations ) && $last_fetch && ( time() - $last_fetch ) < 43200 ) {
+            // Use cache if less than 24 hours old
+            if ( ! empty( $cached_locations ) && $last_fetch && ( time() - $last_fetch ) < self::$cache_duration_locations ) {
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                     Lealez_GMB_Logger::log( $business_id, 'info', 'Using cached locations data' );
                 }
@@ -468,16 +538,16 @@ class Lealez_GMB_API {
                 continue;
             }
 
-            // Add delay between accounts (except first)
+            // CRITICAL: Add delay between accounts (excepto primero)
             if ( $index > 0 ) {
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                     Lealez_GMB_Logger::log( 
                         $business_id, 
                         'info', 
-                        'Waiting 5 seconds before fetching next account locations...'
+                        sprintf( 'Waiting %d seconds before fetching next account locations...', self::$delay_between_calls * 2 )
                     );
                 }
-                sleep( 5 );
+                sleep( self::$delay_between_calls * 2 ); // 10 segundos entre cuentas
             }
 
             $locations = self::get_locations( $business_id, $account_name, $force_refresh );
@@ -491,13 +561,19 @@ class Lealez_GMB_API {
                         sprintf( 'Failed to get locations for account %s: %s', $account_name, $locations->get_error_message() )
                     );
                 }
+                
+                // Si es rate limit, detener inmediatamente
+                if ( $locations->get_error_code() === 'rate_limit_exceeded' || $locations->get_error_code() === 'rate_limit_active' ) {
+                    break;
+                }
+                
                 continue;
             }
 
             $all_locations = array_merge( $all_locations, $locations );
         }
 
-        // Store locations
+        // Store locations in post_meta for persistent cache
         if ( ! empty( $all_locations ) ) {
             update_post_meta( $business_id, '_gmb_locations_available', $all_locations );
             update_post_meta( $business_id, '_gmb_locations_last_fetch', time() );
@@ -554,6 +630,7 @@ class Lealez_GMB_API {
         delete_post_meta( $business_id, '_gmb_accounts_last_fetch' );
         delete_post_meta( $business_id, '_gmb_locations_last_fetch' );
         delete_post_meta( $business_id, '_gmb_last_manual_refresh' );
+        delete_post_meta( $business_id, '_gmb_last_rate_limit' );
         
         // Clear transient cache
         $cache_key = md5( $business_id . '/accounts' );
