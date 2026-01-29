@@ -656,7 +656,7 @@ public function render_gmb_meta_box( $post ) {
                 </button>
             </p>
             <p class="description">
-                <?php _e( 'Note: To avoid API rate limits, please wait at least 15 minutes between manual refreshes.', 'lealez' ); ?>
+                <?php _e( 'Note: To avoid API rate limits, please wait at least 60 minutes between manual refreshes.', 'lealez' ); ?>
             </p>
             
         <?php else : ?>
