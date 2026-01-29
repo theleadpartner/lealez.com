@@ -112,57 +112,100 @@ public function disconnect() {
     /**
      * Refresh locations from GMB
      */
-    public function refresh_locations() {
-        check_ajax_referer( 'lealez_gmb_nonce', 'nonce' );
+public function refresh_locations() {
+    check_ajax_referer( 'lealez_gmb_nonce', 'nonce' );
 
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'lealez' ) ) );
-        }
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'lealez' ) ) );
+    }
 
-        $business_id = absint( $_POST['business_id'] ?? 0 );
+    $business_id = absint( $_POST['business_id'] ?? 0 );
 
-        if ( ! $business_id ) {
-            wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
-        }
+    if ( ! $business_id ) {
+        wp_send_json_error( array( 'message' => __( 'Invalid business ID', 'lealez' ) ) );
+    }
 
-        // Check if we can refresh (not too recent)
+    if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+        wp_send_json_error( array( 'message' => __( 'GMB API class not available.', 'lealez' ) ) );
+    }
+
+    // ✅ Bloqueo para evitar refresh concurrente (manual/cron/otro admin)
+    if ( ! Lealez_GMB_API::acquire_sync_lock( $business_id, 300 ) ) {
+        wp_send_json_error( array(
+            'message' => __( 'A sync is already in progress. Please wait a moment and try again.', 'lealez' ),
+        ) );
+    }
+
+    try {
+
+        // ✅ Validar cooldown/rate-limit/intervalo mínimo
         if ( ! Lealez_GMB_API::can_refresh_now( $business_id ) ) {
             $wait_minutes = Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
-            wp_send_json_error( array( 
-                'message' => sprintf(
-                    __( 'Please wait %d minutes before refreshing again to avoid API rate limits.', 'lealez' ),
-                    $wait_minutes
-                )
-            ) );
+            $delay_seconds = max( 60, $wait_minutes * 60 );
+
+            // ✅ Programar cron automático
+            $ts = Lealez_GMB_API::schedule_locations_refresh( $business_id, $delay_seconds, 'manual_refresh_blocked' );
+
+            $msg = sprintf(
+                __( 'Rate limit / cooldown active. Please wait %d minutes. An automatic refresh has been scheduled.', 'lealez' ),
+                $wait_minutes
+            );
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'warning', $msg, array( 'scheduled_for' => $ts ) );
+            }
+
+            wp_send_json_error( array( 'message' => $msg ) );
         }
 
         // Log refresh start
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( $business_id, 'info', 'Manual refresh started' );
+            Lealez_GMB_Logger::log( $business_id, 'info', 'Manual refresh started (accounts + locations)' );
         }
 
-        // First get accounts
-        $accounts = Lealez_GMB_API::get_accounts( $business_id, true );
-
-        if ( is_wp_error( $accounts ) ) {
-            wp_send_json_error( array( 'message' => $accounts->get_error_message() ) );
-        }
-
-        // Then get all locations
+        /**
+         * ✅ IMPORTANTE:
+         * NO llamamos get_accounts() aquí, porque get_all_locations() ya llama get_accounts().
+         * Esto elimina llamadas duplicadas a /accounts.
+         */
         $locations = Lealez_GMB_API::get_all_locations( $business_id, true );
 
         if ( is_wp_error( $locations ) ) {
+            // ✅ Si fue rate limit, programar reintento automático
+            if ( in_array( $locations->get_error_code(), array( 'rate_limit_exceeded', 'rate_limit_active', 'local_rate_limit' ), true ) ) {
+                $wait_minutes  = Lealez_GMB_API::get_minutes_until_next_refresh( $business_id );
+                $delay_seconds = max( 60, $wait_minutes * 60 );
+
+                $ts = Lealez_GMB_API::schedule_locations_refresh( $business_id, $delay_seconds, 'manual_refresh_rate_limited' );
+
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log(
+                        $business_id,
+                        'warning',
+                        'Manual refresh hit rate limit; scheduled automatic refresh.',
+                        array(
+                            'error'         => $locations->get_error_message(),
+                            'scheduled_for' => $ts,
+                        )
+                    );
+                }
+
+                wp_send_json_error( array(
+                    'message' => $locations->get_error_message() . ' ' . __( 'An automatic refresh has been scheduled.', 'lealez' ),
+                ) );
+            }
+
             wp_send_json_error( array( 'message' => $locations->get_error_message() ) );
         }
 
-        // Update last refresh timestamp
+        // ✅ Guardar timestamp de refresh manual exitoso
         update_post_meta( $business_id, '_gmb_last_manual_refresh', time() );
 
         // Log success
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( 
-                $business_id, 
-                'success', 
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
                 sprintf( 'Manual refresh completed: %d locations retrieved', count( $locations ) )
             );
         }
@@ -171,7 +214,13 @@ public function disconnect() {
             'message'   => sprintf( __( 'Successfully retrieved %d locations', 'lealez' ), count( $locations ) ),
             'locations' => $locations,
         ) );
+
+    } finally {
+        // ✅ Liberar lock siempre
+        Lealez_GMB_API::release_sync_lock( $business_id );
     }
+}
+
 
     /**
      * Test GMB connection
@@ -279,15 +328,44 @@ public function handle_oauth_callback() {
         return;
     }
 
-    // ✅ NEW: limpiar rate-limit/cache stale ANTES del sync inicial
-    // Evita el caso: "Successfully connected" + "Initial sync failed: Rate limit active"
+    // ✅ Limpiar cache viejo (NO llamamos API aquí)
     if ( class_exists( 'Lealez_GMB_API' ) ) {
-        Lealez_GMB_API::clear_business_cache( $business_id );
+        Lealez_GMB_API::clear_business_cache( $business_id, false );
+
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                'OAuth exchange OK: cleared stale cache/rate-limit flags before initial sync'
+                'OAuth exchange OK: cache cleared. No API sync executed in callback (2-step flow enabled).'
+            );
+        }
+
+        /**
+         * ✅ PASO 1 SOLO CONECTA.
+         * Para evitar 429 inmediatamente después de conectar, activamos un cooldown post-connect.
+         * Y programamos un cron de auto-sync en el momento permitido.
+         */
+        $cooldown_minutes = Lealez_GMB_API::get_min_refresh_interval_minutes();
+        $cooldown_until   = time() + ( $cooldown_minutes * 60 );
+
+        update_post_meta( $business_id, '_gmb_post_connect_cooldown_until', $cooldown_until );
+
+        // Programar auto refresh al terminar cooldown
+        $scheduled_ts = Lealez_GMB_API::schedule_locations_refresh(
+            $business_id,
+            ( $cooldown_minutes * 60 ),
+            'post_connect_auto_refresh'
+        );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                sprintf(
+                    'Post-connect cooldown enabled (%d min). Auto refresh scheduled.',
+                    $cooldown_minutes
+                ),
+                array( 'scheduled_for' => $scheduled_ts )
             );
         }
     }
@@ -301,56 +379,23 @@ public function handle_oauth_callback() {
         );
     }
 
-    // ✅ Sincronización inicial automática (cuentas + ubicaciones)
-    $sync_summary = '';
-    if ( class_exists( 'Lealez_GMB_API' ) ) {
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( $business_id, 'info', 'Initial sync after OAuth connect started' );
-        }
-
-        $sync_result = Lealez_GMB_API::bootstrap_after_connect( $business_id );
-
-        if ( is_wp_error( $sync_result ) ) {
-            $sync_summary .= __( "Connection OK, but initial sync failed:\n", 'lealez' );
-            $sync_summary .= $sync_result->get_error_message() . "\n\n";
-            $sync_summary .= __( 'You can still try "Actualizar Ubicaciones" from the Business page.', 'lealez' );
-
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'warning',
-                    'Initial sync after connect failed: ' . $sync_result->get_error_message()
-                );
-            }
-        } else {
-            $accounts_count  = intval( $sync_result['accounts'] ?? 0 );
-            $locations_count = intval( $sync_result['locations'] ?? 0 );
-
-            $sync_summary .= __( "Initial sync completed successfully:\n", 'lealez' );
-            $sync_summary .= sprintf( __( "- Accounts: %d\n", 'lealez' ), $accounts_count );
-            $sync_summary .= sprintf( __( "- Locations: %d\n\n", 'lealez' ), $locations_count );
-            $sync_summary .= __( 'You can close this window.', 'lealez' );
-
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'success',
-                    sprintf( 'Initial sync completed: %d accounts / %d locations', $accounts_count, $locations_count )
-                );
-            }
-        }
-    } else {
-        $sync_summary .= __( 'Connected, but API class not available. Please reload and try refresh from the Business page.', 'lealez' );
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( $business_id, 'warning', 'Lealez_GMB_API class not found during OAuth callback' );
-        }
-    }
-
+    // ✅ Mensaje final (sin sync en callback)
     $message  = __( 'Successfully connected to Google My Business!', 'lealez' ) . "\n\n";
-    $message .= $sync_summary;
+    $message .= __( "Next step:\n", 'lealez' );
+    $message .= __( '- Go back to the Business page and click "Actualizar Ubicaciones".', 'lealez' ) . "\n\n";
+
+    if ( class_exists( 'Lealez_GMB_API' ) ) {
+        $cooldown_minutes = Lealez_GMB_API::get_min_refresh_interval_minutes();
+        $message .= sprintf(
+            __( "To avoid Google rate limits, an automatic refresh has been scheduled in ~%d minutes.\n", 'lealez' ),
+            $cooldown_minutes
+        );
+        $message .= __( 'If you try to refresh earlier, the system will schedule it automatically when allowed.', 'lealez' );
+    }
 
     $this->render_callback_page( 'success', $message, $business_id );
 }
+
 
 
 
