@@ -199,49 +199,68 @@
         /**
          * Refresh GMB locations
          */
-        refreshLocations: function(e) {
-            e.preventDefault();
+refreshLocations: function(e) {
+    e.preventDefault();
 
-            if (!this.ensureData()) return;
+    if (!this.ensureData()) return;
 
-            const $button = $(e.currentTarget);
-            this.setButtonLoading($button, true, this.t('processing', 'Procesando...'), this.t('refreshBtn', 'Actualizar Ubicaciones'));
+    const $button = $(e.currentTarget);
+    this.setButtonLoading($button, true, this.t('processing', 'Procesando...'), this.t('refreshBtn', 'Actualizar Ubicaciones'));
 
-            $.ajax({
-                url: lealezGMBData.ajaxUrl,
-                type: 'POST',
-                dataType: 'json',
-                data: {
-                    action: 'lealez_gmb_refresh_locations',
-                    nonce: lealezGMBData.nonce,
-                    business_id: lealezGMBData.businessId
-                },
-                success: (response) => {
-                    if (response && response.success) {
-                        const msg = (response.data && response.data.message) ? response.data.message : 'OK';
-                        alert(msg);
-                        location.reload();
-                    } else {
-                        const msg = (response && response.data && response.data.message)
-                            ? response.data.message
-                            : this.t('error', 'Error');
-
-                        alert(msg);
-                        this.setButtonLoading($button, false, '', this.t('refreshBtn', 'Actualizar Ubicaciones'));
-                    }
-                },
-                error: (xhr) => {
-                    let msg = this.t('error', 'Error');
-                    try {
-                        const r = xhr.responseJSON;
-                        if (r && r.data && r.data.message) msg = r.data.message;
-                    } catch (e) {}
-
-                    alert(msg);
-                    this.setButtonLoading($button, false, '', this.t('refreshBtn', 'Actualizar Ubicaciones'));
-                }
-            });
+    $.ajax({
+        url: lealezGMBData.ajaxUrl,
+        type: 'POST',
+        dataType: 'json',
+        data: {
+            action: 'lealez_gmb_refresh_locations',
+            nonce: lealezGMBData.nonce,
+            business_id: lealezGMBData.businessId
         },
+        success: (response) => {
+            if (response && response.success) {
+                const msg = (response.data && response.data.message) ? response.data.message : 'OK';
+                alert(msg);
+                location.reload();
+                return;
+            }
+
+            const msg = (response && response.data && response.data.message)
+                ? response.data.message
+                : this.t('error', 'Error');
+
+            alert(msg);
+
+            // ✅ Si el backend programó un cron, recargamos para que el metabox muestre "programado para..."
+            if (response && response.data && response.data.scheduled_for) {
+                location.reload();
+                return;
+            }
+
+            this.setButtonLoading($button, false, '', this.t('refreshBtn', 'Actualizar Ubicaciones'));
+        },
+        error: (xhr) => {
+            let msg = this.t('error', 'Error');
+            let scheduled = false;
+
+            try {
+                const r = xhr.responseJSON;
+                if (r && r.data && r.data.message) msg = r.data.message;
+                if (r && r.data && r.data.scheduled_for) scheduled = true;
+            } catch (e) {}
+
+            alert(msg);
+
+            // ✅ Si vino “scheduled_for”, recargamos igual
+            if (scheduled) {
+                location.reload();
+                return;
+            }
+
+            this.setButtonLoading($button, false, '', this.t('refreshBtn', 'Actualizar Ubicaciones'));
+        }
+    });
+},
+
 
         /**
          * Test GMB connection
