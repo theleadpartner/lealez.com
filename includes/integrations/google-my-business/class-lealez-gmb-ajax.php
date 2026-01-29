@@ -223,74 +223,116 @@ class Lealez_GMB_Ajax {
     /**
      * Handle OAuth callback
      */
-    public function handle_oauth_callback() {
-        // Get parameters from URL
-        $code = sanitize_text_field( $_GET['code'] ?? '' );
-        $state = sanitize_text_field( $_GET['state'] ?? '' );
-        $error = sanitize_text_field( $_GET['error'] ?? '' );
+public function handle_oauth_callback() {
+    // Get parameters from URL
+    $code  = sanitize_text_field( $_GET['code'] ?? '' );
+    $state = sanitize_text_field( $_GET['state'] ?? '' );
+    $error = sanitize_text_field( $_GET['error'] ?? '' );
 
-        // Handle error
-        if ( ! empty( $error ) ) {
-            $this->render_callback_page( 'error', __( 'OAuth error: ', 'lealez' ) . $error );
-            return;
-        }
+    // Handle error
+    if ( ! empty( $error ) ) {
+        $this->render_callback_page( 'error', __( 'OAuth error: ', 'lealez' ) . $error );
+        return;
+    }
 
-        // Validate state
-        if ( empty( $state ) || empty( $code ) ) {
-            $this->render_callback_page( 'error', __( 'Invalid OAuth callback parameters', 'lealez' ) );
-            return;
-        }
+    // Validate state
+    if ( empty( $state ) || empty( $code ) ) {
+        $this->render_callback_page( 'error', __( 'Invalid OAuth callback parameters', 'lealez' ) );
+        return;
+    }
 
-        // Extract business_id from state
-        $state_parts = explode( '|', $state );
-        if ( count( $state_parts ) !== 2 ) {
-            $this->render_callback_page( 'error', __( 'Invalid state parameter', 'lealez' ) );
-            return;
-        }
+    // Extract business_id from state
+    $state_parts = explode( '|', $state );
+    if ( count( $state_parts ) !== 2 ) {
+        $this->render_callback_page( 'error', __( 'Invalid state parameter', 'lealez' ) );
+        return;
+    }
 
-        list( $nonce, $business_id ) = $state_parts;
-        $business_id = absint( $business_id );
+    list( $nonce, $business_id ) = $state_parts;
+    $business_id = absint( $business_id );
 
-        // Verify nonce
-        if ( ! wp_verify_nonce( $nonce, 'lealez_gmb_oauth_' . $business_id ) ) {
-            $this->render_callback_page( 'error', __( 'Security verification failed', 'lealez' ) );
-            return;
-        }
+    // Verify nonce
+    if ( ! wp_verify_nonce( $nonce, 'lealez_gmb_oauth_' . $business_id ) ) {
+        $this->render_callback_page( 'error', __( 'Security verification failed', 'lealez' ) );
+        return;
+    }
 
-        // Exchange code for tokens
-        $result = Lealez_GMB_OAuth::exchange_code_for_tokens( $code, $business_id );
+    // Exchange code for tokens
+    $result = Lealez_GMB_OAuth::exchange_code_for_tokens( $code, $business_id );
 
-        if ( is_wp_error( $result ) ) {
-            // Log error
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log( 
-                    $business_id, 
-                    'error', 
-                    'OAuth token exchange failed: ' . $result->get_error_message() 
-                );
-            }
-            
-            $this->render_callback_page( 'error', $result->get_error_message() );
-            return;
-        }
-
-        // Log success
+    if ( is_wp_error( $result ) ) {
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( 
-                $business_id, 
-                'success', 
-                'Successfully connected to Google My Business' 
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'error',
+                'OAuth token exchange failed: ' . $result->get_error_message()
             );
         }
 
-        // Success - NO LLAMAMOS A LA API INMEDIATAMENTE
-        // El usuario debe hacer clic en "Refresh Locations" cuando este listo
-        $message = __( 'Successfully connected to Google My Business!', 'lealez' ) . "\n\n";
-        $message .= __( 'IMPORTANT: Click "Refresh Locations" in the business page to load your data.', 'lealez' ) . "\n\n";
-        $message .= __( 'You can close this window.', 'lealez' );
-        
-        $this->render_callback_page( 'success', $message, $business_id );
+        $this->render_callback_page( 'error', $result->get_error_message() );
+        return;
     }
+
+    // Log success
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            'Successfully connected to Google My Business'
+        );
+    }
+
+    // ✅ NUEVO: Sincronización inicial automática (cuentas + ubicaciones)
+    $sync_summary = '';
+    if ( class_exists( 'Lealez_GMB_API' ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'info', 'Initial sync after OAuth connect started' );
+        }
+
+        $sync_result = Lealez_GMB_API::bootstrap_after_connect( $business_id );
+
+        if ( is_wp_error( $sync_result ) ) {
+            $sync_summary .= __( "Connection OK, but initial sync failed:\n", 'lealez' );
+            $sync_summary .= $sync_result->get_error_message() . "\n\n";
+            $sync_summary .= __( 'You can still try "Actualizar Ubicaciones" from the Business page.', 'lealez' );
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'Initial sync after connect failed: ' . $sync_result->get_error_message()
+                );
+            }
+        } else {
+            $accounts_count  = intval( $sync_result['accounts'] ?? 0 );
+            $locations_count = intval( $sync_result['locations'] ?? 0 );
+
+            $sync_summary .= __( "Initial sync completed successfully:\n", 'lealez' );
+            $sync_summary .= sprintf( __( "- Accounts: %d\n", 'lealez' ), $accounts_count );
+            $sync_summary .= sprintf( __( "- Locations: %d\n\n", 'lealez' ), $locations_count );
+            $sync_summary .= __( 'You can close this window.', 'lealez' );
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'success',
+                    sprintf( 'Initial sync completed: %d accounts / %d locations', $accounts_count, $locations_count )
+                );
+            }
+        }
+    } else {
+        $sync_summary .= __( 'Connected, but API class not available. Please reload and try refresh from the Business page.', 'lealez' );
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'warning', 'Lealez_GMB_API class not found during OAuth callback' );
+        }
+    }
+
+    $message  = __( 'Successfully connected to Google My Business!', 'lealez' ) . "\n\n";
+    $message .= $sync_summary;
+
+    $this->render_callback_page( 'success', $message, $business_id );
+}
+
 
     /**
      * Render callback page
