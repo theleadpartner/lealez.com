@@ -74,18 +74,217 @@ class Lealez_GMB_API {
      * @param int $business_id Business post ID
      * @return bool
      */
-    public static function can_refresh_now( $business_id ) {
-        $last_refresh = get_post_meta( $business_id, '_gmb_last_manual_refresh', true );
-        
-        if ( ! $last_refresh ) {
-            return true;
+public static function can_refresh_now( $business_id ) {
+    $business_id = absint( $business_id );
+
+    // 1) Cooldown post-connect (nuevo)
+    $cooldown_until = (int) get_post_meta( $business_id, '_gmb_post_connect_cooldown_until', true );
+    if ( $cooldown_until && time() < $cooldown_until ) {
+        return false;
+    }
+
+    // 2) Rate limit reciente (ya existe, lo respetamos)
+    $last_rate_limit = (int) get_post_meta( $business_id, '_gmb_last_rate_limit', true );
+    if ( $last_rate_limit && ( time() - $last_rate_limit ) < ( self::$min_refresh_interval * 60 ) ) {
+        return false;
+    }
+
+    // 3) Intervalo mínimo entre refresh manuales
+    $last_refresh = (int) get_post_meta( $business_id, '_gmb_last_manual_refresh', true );
+
+    if ( ! $last_refresh ) {
+        return true;
+    }
+
+    $time_since_refresh = time() - $last_refresh;
+    $min_seconds = self::$min_refresh_interval * 60;
+
+    return $time_since_refresh >= $min_seconds;
+}
+
+
+    /**
+ * Get min refresh interval in minutes (public helper)
+ *
+ * @return int
+ */
+public static function get_min_refresh_interval_minutes() {
+    return (int) self::$min_refresh_interval;
+}
+
+/**
+ * Acquire a sync lock to prevent concurrent syncs (manual/cron)
+ *
+ * @param int $business_id
+ * @param int $ttl_seconds
+ * @return bool
+ */
+public static function acquire_sync_lock( $business_id, $ttl_seconds = 300 ) {
+    $key = 'lealez_gmb_sync_lock_' . absint( $business_id );
+    if ( get_transient( $key ) ) {
+        return false;
+    }
+    set_transient( $key, time(), max( 60, (int) $ttl_seconds ) );
+    return true;
+}
+
+/**
+ * Release sync lock
+ *
+ * @param int $business_id
+ * @return void
+ */
+public static function release_sync_lock( $business_id ) {
+    $key = 'lealez_gmb_sync_lock_' . absint( $business_id );
+    delete_transient( $key );
+}
+
+/**
+ * Schedule a single automatic refresh (accounts + locations)
+ *
+ * @param int    $business_id
+ * @param int    $delay_seconds
+ * @param string $reason
+ * @return int Scheduled timestamp
+ */
+public static function schedule_locations_refresh( $business_id, $delay_seconds, $reason = 'scheduled' ) {
+    $business_id    = absint( $business_id );
+    $delay_seconds  = max( 60, (int) $delay_seconds );
+    $hook           = 'lealez_gmb_scheduled_refresh';
+    $args           = array( $business_id );
+    $timestamp      = time() + $delay_seconds;
+
+    // Avoid duplicates: if a schedule exists, keep the earliest one
+    $existing = wp_next_scheduled( $hook, $args );
+    if ( $existing ) {
+        // If existing is sooner than what we want, keep it
+        if ( $existing <= $timestamp ) {
+            update_post_meta( $business_id, '_gmb_next_scheduled_refresh', $existing );
+            return (int) $existing;
         }
 
-        $time_since_refresh = time() - $last_refresh;
-        $min_seconds = self::$min_refresh_interval * 60;
-
-        return $time_since_refresh >= $min_seconds;
+        // Existing is later; replace with earlier schedule
+        wp_unschedule_event( $existing, $hook, $args );
     }
+
+    wp_schedule_single_event( $timestamp, $hook, $args );
+
+    update_post_meta( $business_id, '_gmb_next_scheduled_refresh', $timestamp );
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Scheduled automatic GMB refresh.',
+            array(
+                'reason'        => $reason,
+                'scheduled_for' => $timestamp,
+            )
+        );
+    }
+
+    return (int) $timestamp;
+}
+
+/**
+ * Cron runner for scheduled refresh
+ *
+ * @param int $business_id
+ * @return void
+ */
+public static function run_scheduled_refresh( $business_id ) {
+    $business_id = absint( $business_id );
+
+    if ( ! $business_id ) {
+        return;
+    }
+
+    // Must be connected
+    $connected = get_post_meta( $business_id, '_gmb_connected', true );
+    if ( ! $connected ) {
+        return;
+    }
+
+    if ( ! self::acquire_sync_lock( $business_id, 600 ) ) {
+        // Another sync running
+        return;
+    }
+
+    try {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'info', 'Scheduled refresh started (cron).' );
+        }
+
+        // Respect cooldown / rate limit windows
+        if ( ! self::can_refresh_now( $business_id ) ) {
+            $wait_minutes  = self::get_minutes_until_next_refresh( $business_id );
+            $delay_seconds = max( 60, $wait_minutes * 60 );
+
+            self::schedule_locations_refresh( $business_id, $delay_seconds, 'cron_rescheduled_due_to_cooldown' );
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'Scheduled refresh rescheduled due to cooldown/rate-limit.',
+                    array( 'wait_minutes' => $wait_minutes )
+                );
+            }
+            return;
+        }
+
+        $locations = self::get_all_locations( $business_id, true );
+
+        if ( is_wp_error( $locations ) ) {
+            // If rate-limited, reschedule
+            if ( in_array( $locations->get_error_code(), array( 'rate_limit_exceeded', 'rate_limit_active', 'local_rate_limit' ), true ) ) {
+                $wait_minutes  = self::get_minutes_until_next_refresh( $business_id );
+                $delay_seconds = max( 60, $wait_minutes * 60 );
+
+                self::schedule_locations_refresh( $business_id, $delay_seconds, 'cron_rate_limited_reschedule' );
+
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log(
+                        $business_id,
+                        'warning',
+                        'Scheduled refresh hit rate limit; rescheduled.',
+                        array(
+                            'error'       => $locations->get_error_message(),
+                            'waitMinutes' => $wait_minutes,
+                        )
+                    );
+                }
+                return;
+            }
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'error',
+                    'Scheduled refresh failed.',
+                    array( 'error' => $locations->get_error_message() )
+                );
+            }
+            return;
+        }
+
+        update_post_meta( $business_id, '_gmb_last_scheduled_refresh', time() );
+        delete_post_meta( $business_id, '_gmb_post_connect_cooldown_until' );
+        delete_post_meta( $business_id, '_gmb_next_scheduled_refresh' );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'Scheduled refresh completed: %d locations retrieved', is_array( $locations ) ? count( $locations ) : 0 )
+            );
+        }
+
+    } finally {
+        self::release_sync_lock( $business_id );
+    }
+}
+
 
     /**
      * Get minutes until next refresh allowed
@@ -93,23 +292,47 @@ class Lealez_GMB_API {
      * @param int $business_id Business post ID
      * @return int
      */
-    public static function get_minutes_until_next_refresh( $business_id ) {
-        $last_refresh = get_post_meta( $business_id, '_gmb_last_manual_refresh', true );
-        
-        if ( ! $last_refresh ) {
-            return 0;
-        }
+public static function get_minutes_until_next_refresh( $business_id ) {
+    $business_id = absint( $business_id );
 
-        $time_since_refresh = time() - $last_refresh;
-        $min_seconds = self::$min_refresh_interval * 60;
-        $remaining_seconds = $min_seconds - $time_since_refresh;
+    $now = time();
+    $min_seconds = self::$min_refresh_interval * 60;
 
-        if ( $remaining_seconds <= 0 ) {
-            return 0;
-        }
+    $candidates = array();
 
-        return ceil( $remaining_seconds / 60 );
+    // Post-connect cooldown
+    $cooldown_until = (int) get_post_meta( $business_id, '_gmb_post_connect_cooldown_until', true );
+    if ( $cooldown_until && $cooldown_until > $now ) {
+        $candidates[] = $cooldown_until - $now;
     }
+
+    // Rate limit window
+    $last_rate_limit = (int) get_post_meta( $business_id, '_gmb_last_rate_limit', true );
+    if ( $last_rate_limit ) {
+        $remain = $min_seconds - ( $now - $last_rate_limit );
+        if ( $remain > 0 ) {
+            $candidates[] = $remain;
+        }
+    }
+
+    // Manual refresh window
+    $last_refresh = (int) get_post_meta( $business_id, '_gmb_last_manual_refresh', true );
+    if ( $last_refresh ) {
+        $remain = $min_seconds - ( $now - $last_refresh );
+        if ( $remain > 0 ) {
+            $candidates[] = $remain;
+        }
+    }
+
+    if ( empty( $candidates ) ) {
+        return 0;
+    }
+
+    $remaining_seconds = max( $candidates );
+
+    return (int) ceil( $remaining_seconds / 60 );
+}
+
 
     /**
      * Make API request with conservative rate limiting
@@ -198,6 +421,26 @@ private static function make_request( $business_id, $endpoint, $api_base, $metho
 
     if ( ! empty( $body ) && in_array( $method, array( 'POST', 'PUT', 'PATCH' ), true ) ) {
         $args['body'] = wp_json_encode( $body );
+    }
+
+    // ✅ Local limiter (evita bursts desde el mismo WP)
+    if ( class_exists( 'Lealez_GMB_Rate_Limiter' ) ) {
+        $endpoint_key = $api_base . $endpoint;
+
+        if ( ! Lealez_GMB_Rate_Limiter::can_make_request( $endpoint_key ) ) {
+            $wait = Lealez_GMB_Rate_Limiter::get_wait_time( $endpoint_key );
+
+            $msg = sprintf(
+                __( 'Local rate limiter: too many requests. Please wait %d seconds and try again.', 'lealez' ),
+                $wait
+            );
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'warning', $msg );
+            }
+
+            return new WP_Error( 'local_rate_limit', $msg );
+        }
     }
 
     // SOLO 1 intento inicial - NO reintentar en rate limits
@@ -351,6 +594,7 @@ private static function make_request( $business_id, $endpoint, $api_base, $metho
 
     return new WP_Error( 'max_retries_exceeded', __( 'Maximum retry attempts exceeded', 'lealez' ) );
 }
+
 
 
     /**
@@ -806,14 +1050,23 @@ public static function bootstrap_after_connect( $business_id ) {
      * @param int $business_id Business post ID
      * @return void
      */
-public static function clear_business_cache( $business_id ) {
+public static function clear_business_cache( $business_id, $preserve_rate_limit = false ) {
+    $business_id = absint( $business_id );
+
     // Timestamps / flags
     delete_post_meta( $business_id, '_gmb_accounts_last_fetch' );
     delete_post_meta( $business_id, '_gmb_locations_last_fetch' );
     delete_post_meta( $business_id, '_gmb_last_manual_refresh' );
-    delete_post_meta( $business_id, '_gmb_last_rate_limit' );
 
-    // Persistent cached data (important so UI doesn't stay stuck)
+    if ( ! $preserve_rate_limit ) {
+        delete_post_meta( $business_id, '_gmb_last_rate_limit' );
+    }
+
+    // New: post-connect cooldown
+    delete_post_meta( $business_id, '_gmb_post_connect_cooldown_until' );
+    delete_post_meta( $business_id, '_gmb_next_scheduled_refresh' );
+
+    // Persistent cached data
     delete_post_meta( $business_id, '_gmb_accounts' );
     delete_post_meta( $business_id, '_gmb_total_accounts' );
     delete_post_meta( $business_id, '_gmb_account_name' );
@@ -822,13 +1075,16 @@ public static function clear_business_cache( $business_id ) {
     delete_post_meta( $business_id, '_gmb_total_locations_available' );
     delete_post_meta( $business_id, '_gmb_last_sync_errors' );
 
-    // Transient cache:
-    // Nota: el cache_key anterior no corresponde con el md5 real usado en make_request(),
-    // pero lo mantenemos para no romper compatibilidad con tu implementación anterior.
+    // Transient cache (compat)
     $cache_key = md5( $business_id . '/accounts' );
     if ( class_exists( 'Lealez_GMB_Rate_Limiter' ) ) {
         Lealez_GMB_Rate_Limiter::clear_cache( $cache_key );
     }
 }
 
+
 }
+
+// WP-Cron hook for scheduled refresh
+add_action( 'lealez_gmb_scheduled_refresh', array( 'Lealez_GMB_API', 'run_scheduled_refresh' ), 10, 1 );
+
