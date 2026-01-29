@@ -328,32 +328,30 @@ public function handle_oauth_callback() {
         return;
     }
 
-    // ✅ Limpiar cache viejo (NO llamamos API aquí)
+    /**
+     * ✅ IMPORTANTE:
+     * Mantenemos el "2-step flow": el callback NO hace llamadas a la API para evitar 429.
+     * PERO: NO bloqueamos el refresh manual por 60 minutos, porque eso deja al usuario “conectado sin datos”.
+     */
     if ( class_exists( 'Lealez_GMB_API' ) ) {
+        // Limpia cache/flags (incluye rate-limit viejo) para que el primer refresh manual pueda ejecutarse.
         Lealez_GMB_API::clear_business_cache( $business_id, false );
+
+        // Por si existía un cooldown viejo, lo removemos explícitamente.
+        delete_post_meta( $business_id, '_gmb_post_connect_cooldown_until' );
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                'OAuth exchange OK: cache cleared. No API sync executed in callback (2-step flow enabled).'
+                'OAuth exchange OK: cache cleared. Refresh is allowed immediately (no post-connect cooldown).'
             );
         }
 
-        /**
-         * ✅ PASO 1 SOLO CONECTA.
-         * Para evitar 429 inmediatamente después de conectar, activamos un cooldown post-connect.
-         * Y programamos un cron de auto-sync en el momento permitido.
-         */
-        $cooldown_minutes = Lealez_GMB_API::get_min_refresh_interval_minutes();
-        $cooldown_until   = time() + ( $cooldown_minutes * 60 );
-
-        update_post_meta( $business_id, '_gmb_post_connect_cooldown_until', $cooldown_until );
-
-        // Programar auto refresh al terminar cooldown
+        // Auto-refresh de respaldo (NO bloquea al usuario). Evita que quede sin datos si no presiona el botón.
         $scheduled_ts = Lealez_GMB_API::schedule_locations_refresh(
             $business_id,
-            ( $cooldown_minutes * 60 ),
+            90, // 90 segundos: margen mínimo para volver al edit screen sin saturar
             'post_connect_auto_refresh'
         );
 
@@ -361,10 +359,7 @@ public function handle_oauth_callback() {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                sprintf(
-                    'Post-connect cooldown enabled (%d min). Auto refresh scheduled.',
-                    $cooldown_minutes
-                ),
+                'Post-connect: automatic refresh scheduled (user can still refresh manually right now).',
                 array( 'scheduled_for' => $scheduled_ts )
             );
         }
@@ -379,22 +374,15 @@ public function handle_oauth_callback() {
         );
     }
 
-    // ✅ Mensaje final (sin sync en callback)
+    // Mensaje final
     $message  = __( 'Successfully connected to Google My Business!', 'lealez' ) . "\n\n";
     $message .= __( "Next step:\n", 'lealez' );
-    $message .= __( '- Go back to the Business page and click "Actualizar Ubicaciones".', 'lealez' ) . "\n\n";
-
-    if ( class_exists( 'Lealez_GMB_API' ) ) {
-        $cooldown_minutes = Lealez_GMB_API::get_min_refresh_interval_minutes();
-        $message .= sprintf(
-            __( "To avoid Google rate limits, an automatic refresh has been scheduled in ~%d minutes.\n", 'lealez' ),
-            $cooldown_minutes
-        );
-        $message .= __( 'If you try to refresh earlier, the system will schedule it automatically when allowed.', 'lealez' );
-    }
+    $message .= __( '- Go back to the Business page and click "Actualizar Ubicaciones" now (recommended).', 'lealez' ) . "\n\n";
+    $message .= __( 'An automatic refresh has also been scheduled as a backup (in ~90 seconds).', 'lealez' );
 
     $this->render_callback_page( 'success', $message, $business_id );
 }
+
 
 
 
