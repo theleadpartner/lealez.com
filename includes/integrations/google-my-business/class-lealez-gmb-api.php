@@ -668,9 +668,17 @@ public static function get_locations( $business_id, $account_name, $force_refres
     }
 
 
-    public static function bootstrap_after_connect( $business_id ) {
-    // Intento de "sync inicial" sin marcar _gmb_last_manual_refresh
-    // (así NO bloqueas el botón manual por 60 min)
+public static function bootstrap_after_connect( $business_id ) {
+    // 1) MUY IMPORTANTE:
+    // Si hubo un rate limit anterior, queda guardado en _gmb_last_rate_limit y bloquea TODO por 60 min,
+    // incluso aunque la reconexión OAuth haya sido exitosa.
+    // Al conectar de nuevo, arrancamos limpio para permitir el sync inicial.
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log( $business_id, 'info', 'bootstrap_after_connect: clearing stale cache/rate-limit flags before initial sync' );
+    }
+    self::clear_business_cache( $business_id );
+
+    // 2) Fetch accounts (solo una vez)
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log( $business_id, 'info', 'bootstrap_after_connect: fetching accounts (force_refresh=true)' );
     }
@@ -680,20 +688,98 @@ public static function get_locations( $business_id, $account_name, $force_refres
         return $accounts;
     }
 
+    // 3) Fetch locations sin volver a pedir accounts (evitamos duplicidad de llamadas)
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log( $business_id, 'info', 'bootstrap_after_connect: fetching locations (force_refresh=true)' );
+        Lealez_GMB_Logger::log( $business_id, 'info', 'bootstrap_after_connect: fetching locations per account (force_refresh=true)' );
     }
 
-    $locations = self::get_all_locations( $business_id, true );
-    if ( is_wp_error( $locations ) ) {
-        return $locations;
+    if ( empty( $accounts ) || ! is_array( $accounts ) ) {
+        $error = new WP_Error( 'no_accounts', __( 'No GMB accounts found for this user', 'lealez' ) );
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'error', 'bootstrap_after_connect: No GMB accounts found' );
+        }
+        return $error;
+    }
+
+    $all_locations = array();
+    $errors        = array();
+
+    foreach ( $accounts as $index => $account ) {
+        $account_name = $account['name'] ?? '';
+
+        if ( empty( $account_name ) ) {
+            continue;
+        }
+
+        // Delay conservador entre cuentas (excepto la primera)
+        if ( $index > 0 ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    sprintf( 'bootstrap_after_connect: waiting %d seconds before next account locations...', self::$delay_between_calls * 2 )
+                );
+            }
+            sleep( self::$delay_between_calls * 2 );
+        }
+
+        $locations = self::get_locations( $business_id, $account_name, true );
+
+        if ( is_wp_error( $locations ) ) {
+            $errors[] = $locations->get_error_message();
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'error',
+                    sprintf( 'bootstrap_after_connect: Failed to get locations for account %s: %s', $account_name, $locations->get_error_message() )
+                );
+            }
+
+            // Si es rate limit, detenemos inmediatamente
+            if ( in_array( $locations->get_error_code(), array( 'rate_limit_exceeded', 'rate_limit_active' ), true ) ) {
+                break;
+            }
+
+            continue;
+        }
+
+        if ( is_array( $locations ) && ! empty( $locations ) ) {
+            $all_locations = array_merge( $all_locations, $locations );
+        }
+    }
+
+    // 4) Persistimos locations como en get_all_locations()
+    if ( ! empty( $all_locations ) ) {
+        update_post_meta( $business_id, '_gmb_locations_available', $all_locations );
+        update_post_meta( $business_id, '_gmb_locations_last_fetch', time() );
+        update_post_meta( $business_id, '_gmb_total_locations_available', count( $all_locations ) );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'bootstrap_after_connect: Total of %d location(s) retrieved successfully', count( $all_locations ) )
+            );
+        }
+    }
+
+    if ( ! empty( $errors ) ) {
+        update_post_meta( $business_id, '_gmb_last_sync_errors', $errors );
+    }
+
+    // 5) Si no hay ubicaciones, devolvemos error con detalle
+    if ( empty( $all_locations ) ) {
+        $error_msg = ! empty( $errors ) ? implode( '; ', $errors ) : __( 'No locations found in any account', 'lealez' );
+        return new WP_Error( 'no_locations', $error_msg );
     }
 
     return array(
         'accounts'  => is_array( $accounts ) ? count( $accounts ) : 0,
-        'locations' => is_array( $locations ) ? count( $locations ) : 0,
+        'locations' => is_array( $all_locations ) ? count( $all_locations ) : 0,
     );
 }
+
 
 
     /**
@@ -720,14 +806,29 @@ public static function get_locations( $business_id, $account_name, $force_refres
      * @param int $business_id Business post ID
      * @return void
      */
-    public static function clear_business_cache( $business_id ) {
-        delete_post_meta( $business_id, '_gmb_accounts_last_fetch' );
-        delete_post_meta( $business_id, '_gmb_locations_last_fetch' );
-        delete_post_meta( $business_id, '_gmb_last_manual_refresh' );
-        delete_post_meta( $business_id, '_gmb_last_rate_limit' );
-        
-        // Clear transient cache
-        $cache_key = md5( $business_id . '/accounts' );
+public static function clear_business_cache( $business_id ) {
+    // Timestamps / flags
+    delete_post_meta( $business_id, '_gmb_accounts_last_fetch' );
+    delete_post_meta( $business_id, '_gmb_locations_last_fetch' );
+    delete_post_meta( $business_id, '_gmb_last_manual_refresh' );
+    delete_post_meta( $business_id, '_gmb_last_rate_limit' );
+
+    // Persistent cached data (important so UI doesn't stay stuck)
+    delete_post_meta( $business_id, '_gmb_accounts' );
+    delete_post_meta( $business_id, '_gmb_total_accounts' );
+    delete_post_meta( $business_id, '_gmb_account_name' );
+
+    delete_post_meta( $business_id, '_gmb_locations_available' );
+    delete_post_meta( $business_id, '_gmb_total_locations_available' );
+    delete_post_meta( $business_id, '_gmb_last_sync_errors' );
+
+    // Transient cache:
+    // Nota: el cache_key anterior no corresponde con el md5 real usado en make_request(),
+    // pero lo mantenemos para no romper compatibilidad con tu implementación anterior.
+    $cache_key = md5( $business_id . '/accounts' );
+    if ( class_exists( 'Lealez_GMB_Rate_Limiter' ) ) {
         Lealez_GMB_Rate_Limiter::clear_cache( $cache_key );
     }
+}
+
 }
