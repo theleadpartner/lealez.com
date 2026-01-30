@@ -14,6 +14,10 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// ✅ Metabox externo: Snapshot de cuentas/ubicaciones GMB (solo lectura)
+require_once dirname( __FILE__ ) . '/metaboxes/class-oy-business-gmb-snapshot-metabox.php';
+
+
 /**
  * Lealez_Business_CPT Class
  *
