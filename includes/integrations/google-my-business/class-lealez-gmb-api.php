@@ -713,8 +713,14 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
     $endpoint = '/' . $account_name . '/locations';
 
-    // readMask recomendado/normalmente requerido para Business Information API en list
-    $read_mask = 'name,title,storefrontAddress,phoneNumbers,websiteUri,regularHours,primaryCategory,latlng';
+    /**
+     * ✅ Business Information API v1 (Location)
+     * El recurso Location NO tiene "primaryCategory" como campo top-level.
+     * El campo correcto es "categories" (dentro viene primaryCategory, additionalCategories, etc).
+     *
+     * Si usamos "primaryCategory" en readMask => INVALID_ARGUMENT (invalid field mask).
+     */
+    $read_mask = 'name,title,storefrontAddress,phoneNumbers,websiteUri,regularHours,categories,latlng';
 
     $all_locations = array();
     $page_token    = '';
@@ -763,6 +769,15 @@ public static function get_locations( $business_id, $account_name, $force_refres
         $locations = $result['locations'] ?? array();
         if ( ! empty( $locations ) ) {
             foreach ( $locations as $location ) {
+
+                // ✅ Derivar primaryCategory SIN romper compatibilidad con código viejo
+                $categories       = $location['categories'] ?? array();
+                $primary_category = array();
+
+                if ( isset( $categories['primaryCategory'] ) && is_array( $categories['primaryCategory'] ) ) {
+                    $primary_category = $categories['primaryCategory'];
+                }
+
                 $all_locations[] = array(
                     'name'              => $location['name'] ?? '',
                     'title'             => $location['title'] ?? '',
@@ -770,7 +785,13 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     'phoneNumbers'      => $location['phoneNumbers'] ?? array(),
                     'websiteUri'        => $location['websiteUri'] ?? '',
                     'regularHours'      => $location['regularHours'] ?? array(),
-                    'primaryCategory'   => $location['primaryCategory'] ?? array(),
+
+                    // ✅ Nuevo: el campo correcto en la API
+                    'categories'        => $categories,
+
+                    // ✅ Compat: mantenemos "primaryCategory" como antes
+                    'primaryCategory'   => $primary_category,
+
                     'latlng'            => $location['latlng'] ?? array(),
                 );
             }
@@ -789,6 +810,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
     return $all_locations;
 }
+
 
 
     /**
@@ -1033,16 +1055,33 @@ public static function bootstrap_after_connect( $business_id ) {
      * @param string $location_name GMB location resource name
      * @return array|WP_Error
      */
-    public static function sync_location_data( $business_id, $location_name ) {
-        $endpoint = '/' . $location_name;
-        $result = self::make_request( $business_id, $endpoint, self::$business_api_base, 'GET', array(), false );
+public static function sync_location_data( $business_id, $location_name ) {
+    $endpoint  = '/' . $location_name;
 
-        if ( is_wp_error( $result ) ) {
-            return $result;
-        }
+    // ✅ locations.get requiere readMask en Business Information API v1
+    $read_mask = 'name,title,storefrontAddress,phoneNumbers,websiteUri,regularHours,categories,latlng';
 
+    $query_args = array(
+        'readMask' => $read_mask,
+    );
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$business_api_base,
+        'GET',
+        array(),
+        false,
+        $query_args
+    );
+
+    if ( is_wp_error( $result ) ) {
         return $result;
     }
+
+    return $result;
+}
+
 
     /**
      * Clear cache for a business
