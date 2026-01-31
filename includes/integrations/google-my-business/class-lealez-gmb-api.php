@@ -34,6 +34,13 @@ class Lealez_GMB_API {
     private static $business_api_base = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 
     /**
+     * Verifications API base URL
+     *
+     * @var string
+     */
+    private static $verifications_api_base = 'https://mybusinessverifications.googleapis.com/v1';
+
+    /**
      * Max retry attempts (solo para errores de red, NO para rate limits)
      *
      * @var int
@@ -692,6 +699,145 @@ public static function get_accounts( $business_id, $force_refresh = false ) {
 }
 
 
+
+    /**
+ * Extract locationId for Verifications API from a GBP location resource name.
+ *
+ * Examples it supports:
+ * - "locations/1234567890" -> "1234567890"
+ * - "accounts/123/locations/456" -> "456"
+ *
+ * @param string $location_name
+ * @return string
+ */
+private static function extract_location_id_from_name( $location_name ) {
+    $location_name = (string) $location_name;
+    $location_name = trim( $location_name );
+
+    if ( '' === $location_name ) {
+        return '';
+    }
+
+    // Normalize
+    $location_name = trim( $location_name, '/' );
+
+    // Common pattern: accounts/{acc}/locations/{id}
+    if ( strpos( $location_name, '/locations/' ) !== false ) {
+        $parts = explode( '/locations/', $location_name );
+        $maybe = end( $parts );
+        $maybe = trim( (string) $maybe, '/' );
+        return $maybe;
+    }
+
+    // Pattern: locations/{id}
+    if ( strpos( $location_name, 'locations/' ) === 0 ) {
+        $maybe = substr( $location_name, strlen( 'locations/' ) );
+        $maybe = trim( (string) $maybe, '/' );
+        return $maybe;
+    }
+
+    // Fallback: last segment
+    $chunks = explode( '/', $location_name );
+    $last   = end( $chunks );
+    return trim( (string) $last, '/' );
+}
+
+    /**
+ * Get verification state for a location using My Business Verifications API.
+ *
+ * Uses caching by default to avoid excessive requests.
+ * Returns array like: ['state' => 'VERIFIED', 'name' => '...', 'createTime' => '...']
+ *
+ * @param int    $business_id
+ * @param string $location_id
+ * @param bool   $use_cache
+ * @return array
+ */
+private static function get_location_verification_state( $business_id, $location_id, $use_cache = true ) {
+    $business_id  = absint( $business_id );
+    $location_id  = (string) $location_id;
+    $location_id  = trim( $location_id );
+
+    if ( ! $business_id || '' === $location_id ) {
+        return array();
+    }
+
+    // Endpoint: /locations/{locationId}/verifications
+    $endpoint = '/locations/' . rawurlencode( $location_id ) . '/verifications';
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$verifications_api_base,
+        'GET',
+        array(),
+        (bool) $use_cache,
+        array()
+    );
+
+    if ( is_wp_error( $result ) ) {
+        // No rompemos el flujo general: solo log y devolvemos vacío
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'warning',
+                'Verifications API: could not retrieve verification state for location.',
+                array(
+                    'location_id' => $location_id,
+                    'error'       => $result->get_error_message(),
+                    'error_code'  => $result->get_error_code(),
+                )
+            );
+        }
+        return array();
+    }
+
+    $verifications = $result['verifications'] ?? array();
+    if ( ! is_array( $verifications ) || empty( $verifications ) ) {
+        return array();
+    }
+
+    // Tomar el "más reciente" si existe createTime, si no el primero
+    $latest = null;
+
+    foreach ( $verifications as $v ) {
+        if ( ! is_array( $v ) ) {
+            continue;
+        }
+
+        if ( null === $latest ) {
+            $latest = $v;
+            continue;
+        }
+
+        $t1 = isset( $latest['createTime'] ) ? strtotime( (string) $latest['createTime'] ) : 0;
+        $t2 = isset( $v['createTime'] ) ? strtotime( (string) $v['createTime'] ) : 0;
+
+        if ( $t2 > $t1 ) {
+            $latest = $v;
+        }
+    }
+
+    if ( ! is_array( $latest ) ) {
+        return array();
+    }
+
+    $out = array();
+
+    if ( ! empty( $latest['state'] ) ) {
+        $out['state'] = (string) $latest['state'];
+    }
+    if ( ! empty( $latest['name'] ) ) {
+        $out['name'] = (string) $latest['name'];
+    }
+    if ( ! empty( $latest['createTime'] ) ) {
+        $out['createTime'] = (string) $latest['createTime'];
+    }
+
+    return $out;
+}
+
+
     /**
      * Get locations for an account (with aggressive caching)
      *
@@ -770,6 +916,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
         $locations = $result['locations'] ?? array();
         if ( ! empty( $locations ) ) {
+
             foreach ( $locations as $location ) {
 
                 // ✅ Derivar primaryCategory SIN romper compatibilidad con código viejo
@@ -778,6 +925,16 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
                 if ( isset( $categories['primaryCategory'] ) && is_array( $categories['primaryCategory'] ) ) {
                     $primary_category = $categories['primaryCategory'];
+                }
+
+                // ✅ NUEVO: Consultar estado de verificación (Verifications API)
+                // Importante: usamos cache SIEMPRE para no multiplicar requests aunque el refresh sea "force".
+                $location_name = $location['name'] ?? '';
+                $location_id   = self::extract_location_id_from_name( $location_name );
+
+                $verification = array();
+                if ( ! empty( $location_id ) ) {
+                    $verification = self::get_location_verification_state( $business_id, $location_id, true );
                 }
 
                 $all_locations[] = array(
@@ -806,6 +963,10 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     'languageCode'       => $location['languageCode'] ?? '',
                     'profile'            => $location['profile'] ?? array(),
                     'serviceArea'        => $location['serviceArea'] ?? array(),
+
+                    // ✅ NUEVO: verificación desde My Business Verifications API
+                    // Estructura pedida: ['state' => ...]
+                    'verification'       => is_array( $verification ) ? $verification : array(),
                 );
             }
         }
@@ -823,6 +984,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
     return $all_locations;
 }
+
 
 
 
