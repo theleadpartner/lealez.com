@@ -860,15 +860,20 @@ public static function get_locations( $business_id, $account_name, $force_refres
     $endpoint = '/' . $account_name . '/locations';
 
     /**
-     * ✅ Business Information API v1 (Location)
-     * - NO usar "primaryCategory" top-level: debe ser "categories"
-     * - Ampliamos readMask para poder mostrar:
-     *   - verificación/estado (locationState)
-     *   - IDs y links (metadata: placeId, mapsUri, newReviewUri, hasPendingEdits, etc.)
-     *   - estado abierto/cerrado (openInfo)
-     *   - storeCode, labels, languageCode, etc.
+     * ✅ Business Information API v1 (accounts.locations.list)
+     *
+     * Problema real: algunos campos NO son válidos en list (p.ej. "profile", "serviceArea") y disparan:
+     * - HTTP 400 INVALID_ARGUMENT
+     * - "Invalid field mask provided" en read_mask
+     *
+     * Solución:
+     * 1) Usar un readMask "seguro" para list (mantiene lo que tu UI necesita: locationState + metadata).
+     * 2) Si Google igual rechaza el mask (cambios/variantes), hacemos 1 fallback con un mask mínimo.
      */
-    $read_mask = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,labels,languageCode,profile,serviceArea';
+    $read_mask_safe = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,labels,languageCode';
+
+    // Fallback mínimo pero suficiente para tu snapshot/metabox (estado + ids + contacto + categoría)
+    $read_mask_min  = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,openInfo,locationState,metadata,labels,languageCode';
 
     $all_locations = array();
     $page_token    = '';
@@ -891,8 +896,9 @@ public static function get_locations( $business_id, $account_name, $force_refres
         }
         sleep( self::$delay_between_calls );
 
+        // Primer intento: safe mask
         $query_args = array(
-            'readMask' => $read_mask,
+            'readMask' => $read_mask_safe,
             'pageSize' => 100,
         );
 
@@ -910,8 +916,54 @@ public static function get_locations( $business_id, $account_name, $force_refres
             $query_args
         );
 
+        // ✅ Si falla por readMask inválido, reintentar 1 vez con mask mínimo
         if ( is_wp_error( $result ) ) {
-            return $result;
+            $maybe_mask_error = false;
+
+            $msg  = (string) $result->get_error_message();
+            $code = (string) $result->get_error_code();
+
+            // Detectores típicos del error de field mask (Google puede variar el texto)
+            if ( false !== stripos( $msg, 'field mask' ) || false !== stripos( $msg, 'read_mask' ) || false !== stripos( $msg, 'Invalid field' ) ) {
+                $maybe_mask_error = true;
+            }
+
+            // Si el WP_Error viene como api_error, también puede ser mask inválido.
+            if ( 'api_error' === $code && $maybe_mask_error ) {
+                // nada extra: ya marcado
+            }
+
+            if ( $maybe_mask_error ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log(
+                        $business_id,
+                        'warning',
+                        'Locations list failed due to possible invalid readMask. Retrying with minimal readMask...',
+                        array(
+                            'account' => $account_name,
+                            'error'   => $msg,
+                        )
+                    );
+                }
+
+                $query_args['readMask'] = $read_mask_min;
+
+                $result = self::make_request(
+                    $business_id,
+                    $endpoint,
+                    self::$business_api_base,
+                    'GET',
+                    array(),
+                    ! $force_refresh,
+                    $query_args
+                );
+
+                if ( is_wp_error( $result ) ) {
+                    return $result;
+                }
+            } else {
+                return $result;
+            }
         }
 
         $locations = $result['locations'] ?? array();
@@ -927,8 +979,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     $primary_category = $categories['primaryCategory'];
                 }
 
-                // ✅ NUEVO: Consultar estado de verificación (Verifications API)
-                // Importante: usamos cache SIEMPRE para no multiplicar requests aunque el refresh sea "force".
+                // ✅ Verifications API (cache siempre)
                 $location_name = $location['name'] ?? '';
                 $location_id   = self::extract_location_id_from_name( $location_name );
 
@@ -938,10 +989,10 @@ public static function get_locations( $business_id, $account_name, $force_refres
                 }
 
                 $all_locations[] = array(
-                    // ✅ Nuevo: para poder agrupar en UI
+                    // Para agrupar en UI
                     'account_name'       => $account_name,
 
-                    // Campos básicos existentes
+                    // Campos base
                     'name'               => $location['name'] ?? '',
                     'title'              => $location['title'] ?? '',
                     'storefrontAddress'  => $location['storefrontAddress'] ?? array(),
@@ -952,7 +1003,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     'primaryCategory'    => $primary_category,
                     'latlng'             => $location['latlng'] ?? array(),
 
-                    // ✅ Nuevos campos ricos
+                    // Campos ricos (los que tu metabox ya renderiza)
                     'storeCode'          => $location['storeCode'] ?? '',
                     'specialHours'       => $location['specialHours'] ?? array(),
                     'moreHours'          => $location['moreHours'] ?? array(),
@@ -961,11 +1012,8 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     'metadata'           => $location['metadata'] ?? array(),
                     'labels'             => $location['labels'] ?? array(),
                     'languageCode'       => $location['languageCode'] ?? '',
-                    'profile'            => $location['profile'] ?? array(),
-                    'serviceArea'        => $location['serviceArea'] ?? array(),
 
-                    // ✅ NUEVO: verificación desde My Business Verifications API
-                    // Estructura pedida: ['state' => ...]
+                    // ✅ Verificación (My Business Verifications API)
                     'verification'       => is_array( $verification ) ? $verification : array(),
                 );
             }
@@ -984,6 +1032,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
     return $all_locations;
 }
+
 
 
 
@@ -1232,16 +1281,19 @@ public static function bootstrap_after_connect( $business_id ) {
      * @return array|WP_Error
      */
 public static function sync_location_data( $business_id, $location_name ) {
-    $endpoint  = '/' . $location_name;
+    $endpoint = '/' . $location_name;
 
     /**
-     * ✅ locations.get requiere readMask en Business Information API v1
-     * Ampliamos para traer campos ricos (verificación, metadata IDs, openInfo, etc.)
+     * ✅ locations.get (Business Information API v1)
+     *
+     * Igual que en list: algunos campos pueden causar "Invalid field mask".
+     * Usamos un mask seguro y un fallback mínimo.
      */
-    $read_mask = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,labels,languageCode,profile,serviceArea';
+    $read_mask_safe = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,labels,languageCode';
+    $read_mask_min  = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,openInfo,locationState,metadata,labels,languageCode';
 
     $query_args = array(
-        'readMask' => $read_mask,
+        'readMask' => $read_mask_safe,
     );
 
     $result = self::make_request(
@@ -1255,11 +1307,48 @@ public static function sync_location_data( $business_id, $location_name ) {
     );
 
     if ( is_wp_error( $result ) ) {
+        $msg = (string) $result->get_error_message();
+
+        $maybe_mask_error = (
+            false !== stripos( $msg, 'field mask' ) ||
+            false !== stripos( $msg, 'read_mask' ) ||
+            false !== stripos( $msg, 'Invalid field' )
+        );
+
+        if ( $maybe_mask_error ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'Location get failed due to possible invalid readMask. Retrying with minimal readMask...',
+                    array(
+                        'location' => $location_name,
+                        'error'    => $msg,
+                    )
+                );
+            }
+
+            $query_args['readMask'] = $read_mask_min;
+
+            $result = self::make_request(
+                $business_id,
+                $endpoint,
+                self::$business_api_base,
+                'GET',
+                array(),
+                false,
+                $query_args
+            );
+        }
+    }
+
+    if ( is_wp_error( $result ) ) {
         return $result;
     }
 
     return $result;
 }
+
 
 
 
