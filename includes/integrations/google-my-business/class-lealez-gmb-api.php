@@ -862,18 +862,35 @@ public static function get_locations( $business_id, $account_name, $force_refres
     /**
      * ✅ Business Information API v1 (accounts.locations.list)
      *
-     * Problema real: algunos campos NO son válidos en list (p.ej. "profile", "serviceArea") y disparan:
+     * Problema observado en tu log:
      * - HTTP 400 INVALID_ARGUMENT
-     * - "Invalid field mask provided" en read_mask
+     * - BadRequest.fieldViolations: read_mask -> "Invalid field mask provided"
      *
-     * Solución:
-     * 1) Usar un readMask "seguro" para list (mantiene lo que tu UI necesita: locationState + metadata).
-     * 2) Si Google igual rechaza el mask (cambios/variantes), hacemos 1 fallback con un mask mínimo.
+     * Causa:
+     * - Google puede rechazar ciertos campos en list() dependiendo del entorno/versionado,
+     *   incluso si existen en el recurso Location.
+     *
+     * Solución robusta:
+     * - Intentar una cadena de readMasks desde el más completo al más seguro.
+     * - SOLO hacemos fallback si el error "parece" ser de field mask.
+     * - Si el error no es de field mask, devolvemos el error tal cual.
      */
-    $read_mask_safe = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,labels,languageCode';
+    $read_masks = array(
+        // 1) Intento más completo (pero sin "labels" porque es un sospechoso frecuente)
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode',
 
-    // Fallback mínimo pero suficiente para tu snapshot/metabox (estado + ids + contacto + categoría)
-    $read_mask_min  = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,openInfo,locationState,metadata,labels,languageCode';
+        // 2) Similar, quitando metadata/locationState/openInfo (campos que a veces fallan en list)
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,languageCode',
+
+        // 3) Más minimal (contacto + categoría + address)
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,languageCode',
+
+        // 4) Ultra seguro (lo mínimo para identificar sucursal)
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
+
+        // 5) Último recurso
+        'name,title',
+    );
 
     $all_locations = array();
     $page_token    = '';
@@ -896,74 +913,89 @@ public static function get_locations( $business_id, $account_name, $force_refres
         }
         sleep( self::$delay_between_calls );
 
-        // Primer intento: safe mask
-        $query_args = array(
-            'readMask' => $read_mask_safe,
-            'pageSize' => 100,
-        );
+        $result     = null;
+        $used_mask  = '';
+        $last_error = null;
 
-        if ( ! empty( $page_token ) ) {
-            $query_args['pageToken'] = $page_token;
-        }
+        foreach ( $read_masks as $mask ) {
 
-        $result = self::make_request(
-            $business_id,
-            $endpoint,
-            self::$business_api_base,
-            'GET',
-            array(),
-            ! $force_refresh,
-            $query_args
-        );
+            $query_args = array(
+                'readMask' => $mask,
+                'pageSize' => 100,
+            );
 
-        // ✅ Si falla por readMask inválido, reintentar 1 vez con mask mínimo
-        if ( is_wp_error( $result ) ) {
-            $maybe_mask_error = false;
-
-            $msg  = (string) $result->get_error_message();
-            $code = (string) $result->get_error_code();
-
-            // Detectores típicos del error de field mask (Google puede variar el texto)
-            if ( false !== stripos( $msg, 'field mask' ) || false !== stripos( $msg, 'read_mask' ) || false !== stripos( $msg, 'Invalid field' ) ) {
-                $maybe_mask_error = true;
+            if ( ! empty( $page_token ) ) {
+                $query_args['pageToken'] = $page_token;
             }
 
-            // Si el WP_Error viene como api_error, también puede ser mask inválido.
-            if ( 'api_error' === $code && $maybe_mask_error ) {
-                // nada extra: ya marcado
-            }
+            $tmp = self::make_request(
+                $business_id,
+                $endpoint,
+                self::$business_api_base,
+                'GET',
+                array(),
+                ! $force_refresh,
+                $query_args
+            );
 
-            if ( $maybe_mask_error ) {
+            if ( ! is_wp_error( $tmp ) ) {
+                $result    = $tmp;
+                $used_mask = $mask;
+
                 if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                     Lealez_GMB_Logger::log(
                         $business_id,
-                        'warning',
-                        'Locations list failed due to possible invalid readMask. Retrying with minimal readMask...',
+                        'success',
+                        'Locations list succeeded with readMask.',
                         array(
-                            'account' => $account_name,
-                            'error'   => $msg,
+                            'account'  => $account_name,
+                            'readMask' => $used_mask,
                         )
                     );
                 }
-
-                $query_args['readMask'] = $read_mask_min;
-
-                $result = self::make_request(
-                    $business_id,
-                    $endpoint,
-                    self::$business_api_base,
-                    'GET',
-                    array(),
-                    ! $force_refresh,
-                    $query_args
-                );
-
-                if ( is_wp_error( $result ) ) {
-                    return $result;
-                }
-            } else {
-                return $result;
+                break;
             }
+
+            // Si falló, decidimos si intentamos el siguiente mask
+            $last_error = $tmp;
+
+            $msg = (string) $tmp->get_error_message();
+
+            $is_mask_error = (
+                false !== stripos( $msg, 'field mask' ) ||
+                false !== stripos( $msg, 'read_mask' ) ||
+                false !== stripos( $msg, 'readmask' ) ||
+                false !== stripos( $msg, 'Invalid field mask' ) ||
+                false !== stripos( $msg, 'Invalid field mask provided' ) ||
+                false !== stripos( $msg, 'Invalid field' )
+            );
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'Locations list failed. Evaluating readMask fallback...',
+                    array(
+                        'account'      => $account_name,
+                        'readMask'     => $mask,
+                        'isMaskError'  => $is_mask_error ? 'yes' : 'no',
+                        'error'        => $msg,
+                        'error_code'   => (string) $tmp->get_error_code(),
+                    )
+                );
+            }
+
+            // Si NO parece error de mask, no seguimos intentando (es otro problema real)
+            if ( ! $is_mask_error ) {
+                return $tmp;
+            }
+
+            // Si parece error de mask, probamos el siguiente mask
+        }
+
+        if ( is_wp_error( $last_error ) && empty( $result ) ) {
+            // No hubo ningún mask que funcionara
+            return $last_error;
         }
 
         $locations = $result['locations'] ?? array();
@@ -1003,7 +1035,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     'primaryCategory'    => $primary_category,
                     'latlng'             => $location['latlng'] ?? array(),
 
-                    // Campos ricos (los que tu metabox ya renderiza)
+                    // Campos ricos (pueden venir vacíos si el mask usado fue mínimo)
                     'storeCode'          => $location['storeCode'] ?? '',
                     'specialHours'       => $location['specialHours'] ?? array(),
                     'moreHours'          => $location['moreHours'] ?? array(),
@@ -1015,6 +1047,9 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
                     // ✅ Verificación (My Business Verifications API)
                     'verification'       => is_array( $verification ) ? $verification : array(),
+
+                    // Debug útil (no rompe nada si no lo usas)
+                    '_used_read_mask'    => $used_mask,
                 );
             }
         }
@@ -1032,6 +1067,7 @@ public static function get_locations( $business_id, $account_name, $force_refres
 
     return $all_locations;
 }
+
 
 
 
@@ -1286,68 +1322,89 @@ public static function sync_location_data( $business_id, $location_name ) {
     /**
      * ✅ locations.get (Business Information API v1)
      *
-     * Igual que en list: algunos campos pueden causar "Invalid field mask".
-     * Usamos un mask seguro y un fallback mínimo.
+     * Harden:
+     * - Probamos cadena de masks desde el más completo al más seguro.
+     * - Solo hacemos fallback si el error "parece" de field mask.
      */
-    $read_mask_safe = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,labels,languageCode';
-    $read_mask_min  = 'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,openInfo,locationState,metadata,labels,languageCode';
-
-    $query_args = array(
-        'readMask' => $read_mask_safe,
+    $read_masks = array(
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,languageCode',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
+        'name,title',
     );
 
-    $result = self::make_request(
-        $business_id,
-        $endpoint,
-        self::$business_api_base,
-        'GET',
-        array(),
-        false,
-        $query_args
-    );
+    $last_error = null;
 
-    if ( is_wp_error( $result ) ) {
-        $msg = (string) $result->get_error_message();
+    foreach ( $read_masks as $mask ) {
 
-        $maybe_mask_error = (
-            false !== stripos( $msg, 'field mask' ) ||
-            false !== stripos( $msg, 'read_mask' ) ||
-            false !== stripos( $msg, 'Invalid field' )
+        $query_args = array(
+            'readMask' => $mask,
         );
 
-        if ( $maybe_mask_error ) {
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$business_api_base,
+            'GET',
+            array(),
+            false,
+            $query_args
+        );
+
+        if ( ! is_wp_error( $result ) ) {
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log(
                     $business_id,
-                    'warning',
-                    'Location get failed due to possible invalid readMask. Retrying with minimal readMask...',
+                    'success',
+                    'Location get succeeded with readMask.',
                     array(
                         'location' => $location_name,
-                        'error'    => $msg,
+                        'readMask' => $mask,
                     )
                 );
             }
 
-            $query_args['readMask'] = $read_mask_min;
+            return $result;
+        }
 
-            $result = self::make_request(
+        $last_error = $result;
+
+        $msg = (string) $result->get_error_message();
+
+        $is_mask_error = (
+            false !== stripos( $msg, 'field mask' ) ||
+            false !== stripos( $msg, 'read_mask' ) ||
+            false !== stripos( $msg, 'readmask' ) ||
+            false !== stripos( $msg, 'Invalid field mask' ) ||
+            false !== stripos( $msg, 'Invalid field mask provided' ) ||
+            false !== stripos( $msg, 'Invalid field' )
+        );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
                 $business_id,
-                $endpoint,
-                self::$business_api_base,
-                'GET',
-                array(),
-                false,
-                $query_args
+                'warning',
+                'Location get failed. Evaluating readMask fallback...',
+                array(
+                    'location'     => $location_name,
+                    'readMask'     => $mask,
+                    'isMaskError'  => $is_mask_error ? 'yes' : 'no',
+                    'error'        => $msg,
+                    'error_code'   => (string) $result->get_error_code(),
+                )
             );
+        }
+
+        // Si NO parece error de mask, devolvemos el error (no seguimos intentando).
+        if ( ! $is_mask_error ) {
+            return $result;
         }
     }
 
-    if ( is_wp_error( $result ) ) {
-        return $result;
-    }
-
-    return $result;
+    return is_wp_error( $last_error ) ? $last_error : new WP_Error( 'api_error', __( 'API request failed', 'lealez' ) );
 }
+
 
 
 
