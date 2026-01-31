@@ -285,32 +285,52 @@ private function render_locations_table( $locations ) {
                 $country = $address['regionCode'] ?? '';
 
                 /**
-                 * ✅ VERIFIED (solo este campo queda)
+                 * ✅ Verificación (GBP Verifications API)
                  *
-                 * Fuente principal: My Business Verifications API (guardado en $loc['verification'])
-                 * Fallback: locationState.isVerified si existe en cache (puede venir vacío si el readMask usado fue mínimo)
+                 * IMPORTANTE:
+                 * - En Verifications API, verification.state NO es "VERIFIED".
+                 * - Los valores típicos son: PENDING | COMPLETED | FAILED
+                 * - COMPLETED significa verificación completada (para tu uso: verificado ✓)
+                 *
+                 * Fallback:
+                 * - locationState.isVerified (cuando venga en cache por readMask)
                  */
                 $verification       = isset( $loc['verification'] ) && is_array( $loc['verification'] ) ? $loc['verification'] : array();
                 $verification_state = isset( $verification['state'] ) ? (string) $verification['state'] : '';
 
-                // Map a etiqueta legible
+                // Etiqueta legible del estado del intento
                 $verification_state_label = '';
                 if ( $verification_state ) {
                     $map = array(
-                        'VERIFIED' => __( 'Verificada', 'lealez' ),
-                        'PENDING'  => __( 'Pendiente', 'lealez' ),
-                        'FAILED'   => __( 'Fallida', 'lealez' ),
+                        'COMPLETED'         => __( 'Completada', 'lealez' ),
+                        'PENDING'           => __( 'Pendiente', 'lealez' ),
+                        'FAILED'            => __( 'Fallida', 'lealez' ),
+                        'STATE_UNSPECIFIED' => __( 'No especificado', 'lealez' ),
                     );
                     $verification_state_label = isset( $map[ $verification_state ] ) ? $map[ $verification_state ] : $verification_state;
                 }
 
-                // Determinar boolean final del badge:
-                // - Si tenemos enum: VERIFIED => true, PENDING/FAILED => false
-                // - Si no tenemos enum, usamos locationState.isVerified si está
+                /**
+                 * ✅ Badge final "Verified"
+                 *
+                 * Reglas:
+                 * - COMPLETED => true  (✓)
+                 * - FAILED    => false (✗)
+                 * - PENDING   => null  (-)   (aún en proceso)
+                 * - Si no hay verification_state => fallback a locationState.isVerified si existe
+                 */
                 $is_verified = null;
 
                 if ( $verification_state ) {
-                    $is_verified = ( 'VERIFIED' === $verification_state );
+                    if ( 'COMPLETED' === $verification_state ) {
+                        $is_verified = true;
+                    } elseif ( 'FAILED' === $verification_state ) {
+                        $is_verified = false;
+                    } elseif ( 'PENDING' === $verification_state ) {
+                        $is_verified = null;
+                    } else {
+                        $is_verified = null;
+                    }
                 } else {
                     $location_state = isset( $loc['locationState'] ) && is_array( $loc['locationState'] ) ? $loc['locationState'] : array();
                     if ( array_key_exists( 'isVerified', $location_state ) ) {
@@ -412,6 +432,7 @@ private function render_locations_table( $locations ) {
     </table>
     <?php
 }
+
 
 
 
