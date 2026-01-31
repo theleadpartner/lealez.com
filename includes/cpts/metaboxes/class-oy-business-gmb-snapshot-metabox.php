@@ -276,24 +276,24 @@ private function render_locations_table( $locations ) {
                     continue;
                 }
 
-                $title  = $loc['title'] ?? '';
-                $name   = $loc['name'] ?? ''; // resource name
+                $title      = $loc['title'] ?? '';
+                $name       = $loc['name'] ?? ''; // resource name
                 $store_code = $loc['storeCode'] ?? '';
 
                 $address = isset( $loc['storefrontAddress'] ) && is_array( $loc['storefrontAddress'] ) ? $loc['storefrontAddress'] : array();
                 $city    = $address['locality'] ?? '';
                 $country = $address['regionCode'] ?? '';
 
-                // Verificación / estado (Business Information API)
-                $location_state = isset( $loc['locationState'] ) && is_array( $loc['locationState'] ) ? $loc['locationState'] : array();
-                $is_verified    = isset( $location_state['isVerified'] ) ? (bool) $location_state['isVerified'] : null;
-                $is_published   = isset( $location_state['isPublished'] ) ? (bool) $location_state['isPublished'] : null;
-
-                // ✅ NUEVO: Estado enum desde My Business Verifications API (guardado en cache local)
-                $verification      = isset( $loc['verification'] ) && is_array( $loc['verification'] ) ? $loc['verification'] : array();
+                /**
+                 * ✅ VERIFIED (solo este campo queda)
+                 *
+                 * Fuente principal: My Business Verifications API (guardado en $loc['verification'])
+                 * Fallback: locationState.isVerified si existe en cache (puede venir vacío si el readMask usado fue mínimo)
+                 */
+                $verification       = isset( $loc['verification'] ) && is_array( $loc['verification'] ) ? $loc['verification'] : array();
                 $verification_state = isset( $verification['state'] ) ? (string) $verification['state'] : '';
 
-                // Map opcional a español (sin asumir enums exactos; fallback al raw)
+                // Map a etiqueta legible
                 $verification_state_label = '';
                 if ( $verification_state ) {
                     $map = array(
@@ -304,14 +304,24 @@ private function render_locations_table( $locations ) {
                     $verification_state_label = isset( $map[ $verification_state ] ) ? $map[ $verification_state ] : $verification_state;
                 }
 
-                $open_info = isset( $loc['openInfo'] ) && is_array( $loc['openInfo'] ) ? $loc['openInfo'] : array();
-                $open_status = $open_info['status'] ?? '';
+                // Determinar boolean final del badge:
+                // - Si tenemos enum: VERIFIED => true, PENDING/FAILED => false
+                // - Si no tenemos enum, usamos locationState.isVerified si está
+                $is_verified = null;
 
-                $metadata = isset( $loc['metadata'] ) && is_array( $loc['metadata'] ) ? $loc['metadata'] : array();
-                $place_id = $metadata['placeId'] ?? '';
-                $maps_uri = $metadata['mapsUri'] ?? '';
+                if ( $verification_state ) {
+                    $is_verified = ( 'VERIFIED' === $verification_state );
+                } else {
+                    $location_state = isset( $loc['locationState'] ) && is_array( $loc['locationState'] ) ? $loc['locationState'] : array();
+                    if ( array_key_exists( 'isVerified', $location_state ) ) {
+                        $is_verified = (bool) $location_state['isVerified'];
+                    }
+                }
+
+                $metadata   = isset( $loc['metadata'] ) && is_array( $loc['metadata'] ) ? $loc['metadata'] : array();
+                $place_id   = $metadata['placeId'] ?? '';
+                $maps_uri   = $metadata['mapsUri'] ?? '';
                 $review_uri = $metadata['newReviewUri'] ?? '';
-                $has_pending_edits = isset( $metadata['hasPendingEdits'] ) ? (bool) $metadata['hasPendingEdits'] : null;
 
                 // Contacto
                 $phone_numbers = isset( $loc['phoneNumbers'] ) && is_array( $loc['phoneNumbers'] ) ? $loc['phoneNumbers'] : array();
@@ -325,7 +335,6 @@ private function render_locations_table( $locations ) {
                 } elseif ( isset( $loc['categories']['primaryCategory'] ) && is_array( $loc['categories']['primaryCategory'] ) ) {
                     $primary_cat = $loc['categories']['primaryCategory']['displayName'] ?? ( $loc['categories']['primaryCategory']['name'] ?? '' );
                 }
-
                 ?>
                 <tr>
                     <td>
@@ -360,27 +369,13 @@ private function render_locations_table( $locations ) {
                         <div>
                             <strong><?php esc_html_e( 'Verified:', 'lealez' ); ?></strong>
                             <?php echo $this->format_bool_badge( $is_verified ); ?>
+
                             <?php if ( $verification_state_label ) : ?>
                                 <span style="margin-left:6px; color:#666;">
                                     (<?php echo esc_html( $verification_state_label ); ?>)
                                     <span style="font-family: monospace; color:#999;"><?php echo esc_html( $verification_state ); ?></span>
                                 </span>
                             <?php endif; ?>
-                        </div>
-
-                        <div>
-                            <strong><?php esc_html_e( 'Published:', 'lealez' ); ?></strong>
-                            <?php echo $this->format_bool_badge( $is_published ); ?>
-                        </div>
-
-                        <div>
-                            <strong><?php esc_html_e( 'Open status:', 'lealez' ); ?></strong>
-                            <?php echo esc_html( $open_status ? $open_status : '-' ); ?>
-                        </div>
-
-                        <div>
-                            <strong><?php esc_html_e( 'Pending edits:', 'lealez' ); ?></strong>
-                            <?php echo $this->format_bool_badge( $has_pending_edits ); ?>
                         </div>
                     </td>
 
@@ -417,6 +412,7 @@ private function render_locations_table( $locations ) {
     </table>
     <?php
 }
+
 
 
         /**
