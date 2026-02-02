@@ -53,37 +53,51 @@ class OY_Location_CPT {
     /**
      * Constructor
      */
-    public function __construct() {
-        // Register CPT
-        add_action( 'init', array( $this, 'register_post_type' ) );
+public function __construct() {
+    // Register CPT
+    add_action( 'init', array( $this, 'register_post_type' ) );
 
-        // Add meta boxes
-        add_action( 'add_meta_boxes', array( $this, 'add_meta_boxes' ) );
+    // Add meta boxes
+    add_action( 'add_meta_boxes', array( $this, 'add_meta_boxes' ) );
 
-        // Save meta data
-        add_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 10, 2 );
+    // Save meta data
+    add_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 10, 2 );
 
-        // Customize admin columns
-        add_filter( 'manage_oy_location_posts_columns', array( $this, 'set_custom_columns' ) );
-        add_action( 'manage_oy_location_posts_custom_column', array( $this, 'custom_column_content' ), 10, 2 );
+    // Customize admin columns
+    add_filter( 'manage_oy_location_posts_columns', array( $this, 'set_custom_columns' ) );
+    add_action( 'manage_oy_location_posts_custom_column', array( $this, 'custom_column_content' ), 10, 2 );
 
-        // Make columns sortable
-        add_filter( 'manage_edit-oy_location_sortable_columns', array( $this, 'sortable_columns' ) );
+    // Make columns sortable
+    add_filter( 'manage_edit-oy_location_sortable_columns', array( $this, 'sortable_columns' ) );
 
-        // Admin scripts and styles
-        add_action( 'admin_enqueue_scripts', array( $this, 'admin_scripts' ) );
+    // Admin scripts and styles
+    add_action( 'admin_enqueue_scripts', array( $this, 'admin_scripts' ) );
 
-        // Update parent business counters when location is saved/deleted
-        add_action( 'save_post_oy_location', array( $this, 'update_parent_business_counter' ), 20, 2 );
-        add_action( 'before_delete_post', array( $this, 'update_parent_on_delete' ) );
+    // Update parent business counters when location is saved/deleted
+    add_action( 'save_post_oy_location', array( $this, 'update_parent_business_counter' ), 20, 2 );
+    add_action( 'before_delete_post', array( $this, 'update_parent_on_delete' ) );
 
-        // Update parent business aggregated metrics
-        add_action( 'updated_post_meta', array( $this, 'sync_metrics_to_parent' ), 10, 4 );
+    // Update parent business aggregated metrics
+    add_action( 'updated_post_meta', array( $this, 'sync_metrics_to_parent' ), 10, 4 );
 
-        // ✅ AJAX: traer ubicaciones por business y detalles por location_name
-        add_action( 'wp_ajax_oy_get_gmb_locations_for_business', array( $this, 'ajax_get_gmb_locations_for_business' ) );
-        add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
+    // ✅ AJAX: traer ubicaciones por business y detalles por location_name
+    add_action( 'wp_ajax_oy_get_gmb_locations_for_business', array( $this, 'ajax_get_gmb_locations_for_business' ) );
+    add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
+
+    /**
+     * ✅ Metabox externo: Fotos del propietario (GBP Media)
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-media-metabox.php
+     */
+    $media_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-media-metabox.php';
+    if ( file_exists( $media_metabox_file ) ) {
+        require_once $media_metabox_file;
+
+        if ( class_exists( 'OY_Location_GMB_Media_Metabox' ) ) {
+            new OY_Location_GMB_Media_Metabox();
+        }
     }
+}
+
 
     /**
      * Register the custom post type
