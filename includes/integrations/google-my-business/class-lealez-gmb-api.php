@@ -40,6 +40,14 @@ class Lealez_GMB_API {
      */
     private static $verifications_api_base = 'https://mybusinessverifications.googleapis.com/v1';
 
+/**
+ * My Business API v4 base URL (Media endpoint)
+ *
+ * @var string
+ */
+private static $mybusiness_v4_base = 'https://mybusiness.googleapis.com/v4';
+
+    
     /**
      * Max retry attempts (solo para errores de red, NO para rate limits)
      *
@@ -903,6 +911,154 @@ private static function extract_location_id_from_name( $location_name ) {
     $last   = end( $chunks );
     return trim( (string) $last, '/' );
 }
+
+
+    /**
+ * Extract numeric accountId from account resource name.
+ *
+ * Supports:
+ * - "accounts/123" -> "123"
+ * - "123" -> "123"
+ *
+ * @param string $account_name_or_id
+ * @return string
+ */
+private static function extract_account_id_from_name( $account_name_or_id ) {
+    $v = trim( (string) $account_name_or_id );
+
+    if ( '' === $v ) {
+        return '';
+    }
+
+    // If already numeric-ish
+    if ( preg_match( '/^\d+$/', $v ) ) {
+        return $v;
+    }
+
+    // Normalize
+    $v = trim( $v, '/' );
+
+    // accounts/{id}
+    if ( strpos( $v, 'accounts/' ) === 0 ) {
+        $maybe = substr( $v, strlen( 'accounts/' ) );
+        $maybe = trim( (string) $maybe, '/' );
+        if ( preg_match( '/^\d+$/', $maybe ) ) {
+            return $maybe;
+        }
+        return $maybe; // fallback
+    }
+
+    // If includes "/accounts/"
+    if ( strpos( $v, '/accounts/' ) !== false ) {
+        $parts = explode( '/accounts/', $v );
+        $tail  = end( $parts );
+        $tail  = trim( (string) $tail, '/' );
+        $chunks = explode( '/', $tail );
+        $id = $chunks[0] ?? '';
+        return trim( (string) $id, '/' );
+    }
+
+    // Fallback: last segment
+    $chunks = explode( '/', $v );
+    $last   = end( $chunks );
+    return trim( (string) $last, '/' );
+}
+
+/**
+ * List owner media items (photos/videos) for a GBP location.
+ *
+ * Endpoint:
+ * GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/media
+ *
+ * Returns array similar to:
+ * [
+ *   'mediaItems' => [...],
+ *   'totalMediaItemCount' => 5,
+ * ]
+ *
+ * @param int    $business_id           Business post ID (token holder)
+ * @param string $account_name_or_id    e.g. "accounts/123" or "123"
+ * @param string $location_id           e.g. "456"
+ * @param bool   $force_refresh         bypass local cache
+ * @return array|WP_Error
+ */
+public static function get_location_media_items( $business_id, $account_name_or_id, $location_id, $force_refresh = false ) {
+    $business_id        = absint( $business_id );
+    $account_name_or_id = trim( (string) $account_name_or_id );
+    $location_id        = trim( (string) $location_id );
+
+    if ( ! $business_id || '' === $account_name_or_id || '' === $location_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id/accountId/locationId for media list.', 'lealez' ) );
+    }
+
+    $account_id = self::extract_account_id_from_name( $account_name_or_id );
+    if ( '' === $account_id ) {
+        return new WP_Error( 'invalid_account', __( 'Invalid account id for media list.', 'lealez' ) );
+    }
+
+    // Endpoint v4 media
+    $endpoint = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/media';
+
+    $all_items   = array();
+    $page_token  = '';
+    $loops       = 0;
+
+    do {
+        $loops++;
+        if ( $loops > 30 ) {
+            break; // safety
+        }
+
+        $query_args = array(
+            'pageSize' => 100,
+        );
+
+        if ( ! empty( $page_token ) ) {
+            $query_args['pageToken'] = $page_token;
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'GET',
+            array(),
+            ! $force_refresh,
+            $query_args
+        );
+
+        if ( is_wp_error( $result ) ) {
+            // Log pero devolvemos error para que el metabox lo muestre
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'Media API: could not retrieve location media items.',
+                    array(
+                        'account_id'  => $account_id,
+                        'location_id' => $location_id,
+                        'error'       => $result->get_error_message(),
+                        'error_code'  => $result->get_error_code(),
+                    )
+                );
+            }
+            return $result;
+        }
+
+        $items = $result['mediaItems'] ?? array();
+        if ( is_array( $items ) && ! empty( $items ) ) {
+            $all_items = array_merge( $all_items, $items );
+        }
+
+        $page_token = $result['nextPageToken'] ?? '';
+    } while ( ! empty( $page_token ) );
+
+    return array(
+        'mediaItems'           => $all_items,
+        'totalMediaItemCount'  => (int) ( $result['totalMediaItemCount'] ?? count( $all_items ) ),
+    );
+}
+
 
     /**
  * Get verification state for a location using My Business Verifications API.
