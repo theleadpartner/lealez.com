@@ -1033,9 +1033,10 @@ public static function get_locations( $business_id, $account_name, $force_refres
      * - usamos self::is_field_mask_error($err) para decidir el fallback correctamente
      */
     $read_masks = array(
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,languageCode',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng',
         'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
         'name,title',
     );
@@ -1523,9 +1524,10 @@ public static function sync_location_data( $business_id, $location_name ) {
      * - Ahora la detección usa self::is_field_mask_error() (lee raw_body + details.fieldViolations)
      */
     $read_masks = array(
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,languageCode',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng',
         'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
         'name,title',
     );
@@ -1652,4 +1654,3 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
 
 // WP-Cron hook for scheduled refresh
 add_action( 'lealez_gmb_scheduled_refresh', array( 'Lealez_GMB_API', 'run_scheduled_refresh' ), 10, 1 );
-
