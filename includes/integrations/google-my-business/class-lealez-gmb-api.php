@@ -912,6 +912,106 @@ private static function extract_location_id_from_name( $location_name ) {
     return trim( (string) $last, '/' );
 }
 
+    /**
+ * Extract numeric locationId from various location identifiers.
+ *
+ * Supports:
+ * - "456" -> "456"
+ * - "locations/456" -> "456"
+ * - "accounts/123/locations/456" -> "456"
+ * - "accounts/123/locations/456/media/..." -> "456" (defensivo)
+ *
+ * @param string $location_any
+ * @return string
+ */
+private static function extract_location_id_from_any( $location_any ) {
+    $v = trim( (string) $location_any );
+
+    if ( '' === $v ) {
+        return '';
+    }
+
+    // If already numeric
+    if ( preg_match( '/^\d+$/', $v ) ) {
+        return $v;
+    }
+
+    $v = trim( $v, '/' );
+
+    // accounts/{acc}/locations/{loc}/...
+    if ( strpos( $v, '/locations/' ) !== false ) {
+        $parts = explode( '/locations/', $v );
+        $tail  = end( $parts );
+        $tail  = trim( (string) $tail, '/' );
+
+        // tail could be "456" or "456/media/..."
+        $chunks = explode( '/', $tail );
+        $id     = $chunks[0] ?? '';
+
+        return trim( (string) $id, '/' );
+    }
+
+    // locations/{loc}/...
+    if ( strpos( $v, 'locations/' ) === 0 ) {
+        $tail   = substr( $v, strlen( 'locations/' ) );
+        $tail   = trim( (string) $tail, '/' );
+        $chunks = explode( '/', $tail );
+        $id     = $chunks[0] ?? '';
+
+        return trim( (string) $id, '/' );
+    }
+
+    // Fallback last segment
+    $chunks = explode( '/', $v );
+    $last   = end( $chunks );
+
+    return trim( (string) $last, '/' );
+}
+
+    /**
+ * Extract numeric accountId from a full location resource name.
+ *
+ * Supports:
+ * - "accounts/123/locations/456" -> "123"
+ * - "accounts/123/locations/456/..." -> "123"
+ *
+ * @param string $location_name
+ * @return string
+ */
+private static function extract_account_id_from_location_name( $location_name ) {
+    $v = trim( (string) $location_name );
+
+    if ( '' === $v ) {
+        return '';
+    }
+
+    $v = trim( $v, '/' );
+
+    // Must contain accounts/{id}
+    if ( strpos( $v, 'accounts/' ) === 0 ) {
+        $tail = substr( $v, strlen( 'accounts/' ) );
+        $tail = trim( (string) $tail, '/' );
+
+        $chunks = explode( '/', $tail );
+        $id     = $chunks[0] ?? '';
+
+        return trim( (string) $id, '/' );
+    }
+
+    if ( strpos( $v, '/accounts/' ) !== false ) {
+        $parts  = explode( '/accounts/', $v );
+        $tail   = end( $parts );
+        $tail   = trim( (string) $tail, '/' );
+        $chunks = explode( '/', $tail );
+        $id     = $chunks[0] ?? '';
+
+        return trim( (string) $id, '/' );
+    }
+
+    return '';
+}
+
+
 
     /**
  * Extract numeric accountId from account resource name.
@@ -970,30 +1070,69 @@ private static function extract_account_id_from_name( $account_name_or_id ) {
  * Endpoint:
  * GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/media
  *
- * Returns array similar to:
- * [
- *   'mediaItems' => [...],
- *   'totalMediaItemCount' => 5,
- * ]
+ * IMPORTANT:
+ * - accountId y locationId deben ser numéricos/segmentos finales.
+ * - location_id puede venir como "accounts/123/locations/456" o "locations/456" y aquí lo normalizamos.
  *
- * @param int    $business_id           Business post ID (token holder)
- * @param string $account_name_or_id    e.g. "accounts/123" or "123"
- * @param string $location_id           e.g. "456"
- * @param bool   $force_refresh         bypass local cache
+ * @param int    $business_id
+ * @param string $account_name_or_id        e.g. "accounts/123" or "123" (puede venir vacío si se pasa $location_resource_name)
+ * @param string $location_id               e.g. "456" o "locations/456" o "accounts/123/locations/456"
+ * @param bool   $force_refresh
+ * @param string $location_resource_name    e.g. "accounts/123/locations/456" (opcional, para derivar ids si los metas vienen inconsistentes)
  * @return array|WP_Error
  */
-public static function get_location_media_items( $business_id, $account_name_or_id, $location_id, $force_refresh = false ) {
-    $business_id        = absint( $business_id );
-    $account_name_or_id = trim( (string) $account_name_or_id );
-    $location_id        = trim( (string) $location_id );
+public static function get_location_media_items( $business_id, $account_name_or_id, $location_id, $force_refresh = false, $location_resource_name = '' ) {
+    $business_id           = absint( $business_id );
+    $account_name_or_id    = trim( (string) $account_name_or_id );
+    $location_id           = trim( (string) $location_id );
+    $location_resource_name = trim( (string) $location_resource_name );
 
-    if ( ! $business_id || '' === $account_name_or_id || '' === $location_id ) {
-        return new WP_Error( 'missing_params', __( 'Missing business_id/accountId/locationId for media list.', 'lealez' ) );
+    if ( ! $business_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id for media list.', 'lealez' ) );
     }
 
-    $account_id = self::extract_account_id_from_name( $account_name_or_id );
-    if ( '' === $account_id ) {
-        return new WP_Error( 'invalid_account', __( 'Invalid account id for media list.', 'lealez' ) );
+    /**
+     * 1) Si tenemos location_resource_name (accounts/123/locations/456),
+     *    lo usamos como fuente confiable para derivar accountId + locationId.
+     */
+    if ( '' !== $location_resource_name ) {
+        $acc_from_name = self::extract_account_id_from_location_name( $location_resource_name );
+        $loc_from_name = self::extract_location_id_from_any( $location_resource_name );
+
+        if ( '' !== $acc_from_name ) {
+            $account_name_or_id = $acc_from_name;
+        }
+        if ( '' !== $loc_from_name ) {
+            $location_id = $loc_from_name;
+        }
+    }
+
+    /**
+     * 2) Normalizar accountId
+     */
+    $account_id = '';
+    if ( '' !== $account_name_or_id ) {
+        $account_id = self::extract_account_id_from_name( $account_name_or_id );
+    }
+
+    /**
+     * 3) Normalizar locationId (puede venir como resource name completo)
+     */
+    $location_id = self::extract_location_id_from_any( $location_id );
+
+    /**
+     * 4) Validación final
+     */
+    if ( '' === $account_id || '' === $location_id ) {
+        return new WP_Error(
+            'missing_params',
+            __( 'Missing/invalid accountId or locationId for media list (after normalization).', 'lealez' ),
+            array(
+                'account_name_or_id'     => $account_name_or_id,
+                'location_id_raw'        => $location_id,
+                'location_resource_name' => $location_resource_name,
+            )
+        );
     }
 
     // Endpoint v4 media
@@ -1002,6 +1141,7 @@ public static function get_location_media_items( $business_id, $account_name_or_
     $all_items   = array();
     $page_token  = '';
     $loops       = 0;
+    $last_page_result = array();
 
     do {
         $loops++;
@@ -1028,36 +1168,44 @@ public static function get_location_media_items( $business_id, $account_name_or_
         );
 
         if ( is_wp_error( $result ) ) {
-            // Log pero devolvemos error para que el metabox lo muestre
+
+            // Log robusto incluyendo ids normalizados
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log(
                     $business_id,
                     'warning',
                     'Media API: could not retrieve location media items.',
                     array(
-                        'account_id'  => $account_id,
-                        'location_id' => $location_id,
-                        'error'       => $result->get_error_message(),
-                        'error_code'  => $result->get_error_code(),
+                        'account_id'             => $account_id,
+                        'location_id'            => $location_id,
+                        'location_resource_name' => $location_resource_name,
+                        'error'                  => $result->get_error_message(),
+                        'error_code'             => $result->get_error_code(),
+                        'error_data'             => $result->get_error_data(),
                     )
                 );
             }
+
             return $result;
         }
 
-        $items = $result['mediaItems'] ?? array();
+        $last_page_result = is_array( $result ) ? $result : array();
+
+        $items = $last_page_result['mediaItems'] ?? array();
         if ( is_array( $items ) && ! empty( $items ) ) {
             $all_items = array_merge( $all_items, $items );
         }
 
-        $page_token = $result['nextPageToken'] ?? '';
+        $page_token = $last_page_result['nextPageToken'] ?? '';
+
     } while ( ! empty( $page_token ) );
 
     return array(
-        'mediaItems'           => $all_items,
-        'totalMediaItemCount'  => (int) ( $result['totalMediaItemCount'] ?? count( $all_items ) ),
+        'mediaItems'          => $all_items,
+        'totalMediaItemCount' => (int) ( $last_page_result['totalMediaItemCount'] ?? count( $all_items ) ),
     );
 }
+
 
 
     /**
