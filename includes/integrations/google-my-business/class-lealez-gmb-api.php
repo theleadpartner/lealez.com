@@ -1064,6 +1064,82 @@ private static function extract_account_id_from_name( $account_name_or_id ) {
     return trim( (string) $last, '/' );
 }
 
+    /**
+ * Resolve account resource name (accounts/{id}) for a given location, using cached locations list on the business.
+ *
+ * This fixes the mismatch between:
+ * - Business Information API v1 location names: "locations/{locationId}"
+ * - MyBusiness API v4 media endpoint requires: "accounts/{accountId}/locations/{locationId}/media"
+ *
+ * We search the business cached meta "_gmb_locations_available", where each item includes:
+ * - 'name' (location resource name, often "locations/{id}")
+ * - 'account_name' (account resource name, "accounts/{accountId}")
+ *
+ * @param int    $business_id
+ * @param string $location_any           can be "1050...", "locations/1050...", or even "accounts/.../locations/..."
+ * @param string $location_resource_name optional: same idea, used as extra hint
+ * @return string account resource name e.g. "accounts/123" or empty string
+ */
+public static function resolve_account_resource_name_for_location( $business_id, $location_any, $location_resource_name = '' ) {
+    $business_id            = absint( $business_id );
+    $location_any           = trim( (string) $location_any );
+    $location_resource_name = trim( (string) $location_resource_name );
+
+    if ( ! $business_id ) {
+        return '';
+    }
+
+    // Normalize to numeric locationId
+    $target_location_id = '';
+    if ( '' !== $location_any ) {
+        $target_location_id = self::extract_location_id_from_any( $location_any );
+    }
+    if ( '' === $target_location_id && '' !== $location_resource_name ) {
+        $target_location_id = self::extract_location_id_from_any( $location_resource_name );
+    }
+
+    if ( '' === $target_location_id ) {
+        return '';
+    }
+
+    // 1) Try cached list
+    $cached_locations = get_post_meta( $business_id, '_gmb_locations_available', true );
+
+    // If cache is empty, attempt to populate using existing flow (will use cache unless forced)
+    if ( empty( $cached_locations ) || ! is_array( $cached_locations ) ) {
+        $maybe = self::get_all_locations( $business_id, false );
+        if ( ! is_wp_error( $maybe ) && is_array( $maybe ) ) {
+            $cached_locations = $maybe;
+        }
+    }
+
+    if ( empty( $cached_locations ) || ! is_array( $cached_locations ) ) {
+        return '';
+    }
+
+    foreach ( $cached_locations as $loc ) {
+        if ( ! is_array( $loc ) ) {
+            continue;
+        }
+
+        $loc_name       = (string) ( $loc['name'] ?? '' );          // often "locations/{id}"
+        $loc_account    = (string) ( $loc['account_name'] ?? '' );  // "accounts/{accountId}"
+
+        if ( '' === $loc_name || '' === $loc_account ) {
+            continue;
+        }
+
+        $loc_id = self::extract_location_id_from_any( $loc_name );
+
+        if ( $loc_id && $loc_id === $target_location_id ) {
+            return $loc_account;
+        }
+    }
+
+    return '';
+}
+
+
 /**
  * List owner media items (photos/videos) for a GBP location.
  *
@@ -1071,20 +1147,21 @@ private static function extract_account_id_from_name( $account_name_or_id ) {
  * GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/media
  *
  * IMPORTANT:
- * - accountId y locationId deben ser numéricos/segmentos finales.
- * - location_id puede venir como "accounts/123/locations/456" o "locations/456" y aquí lo normalizamos.
+ * - accountId y locationId deben estar presentes.
+ * - Business Information API v1 usa "locations/{locationId}" (sin account).
+ * - Para resolver accountId, usamos cache del business (_gmb_locations_available) si hace falta.
  *
  * @param int    $business_id
- * @param string $account_name_or_id        e.g. "accounts/123" or "123" (puede venir vacío si se pasa $location_resource_name)
+ * @param string $account_name_or_id        e.g. "accounts/123" or "123" (puede venir vacío)
  * @param string $location_id               e.g. "456" o "locations/456" o "accounts/123/locations/456"
  * @param bool   $force_refresh
- * @param string $location_resource_name    e.g. "accounts/123/locations/456" (opcional, para derivar ids si los metas vienen inconsistentes)
+ * @param string $location_resource_name    e.g. "accounts/123/locations/456" o "locations/456"
  * @return array|WP_Error
  */
 public static function get_location_media_items( $business_id, $account_name_or_id, $location_id, $force_refresh = false, $location_resource_name = '' ) {
-    $business_id           = absint( $business_id );
-    $account_name_or_id    = trim( (string) $account_name_or_id );
-    $location_id           = trim( (string) $location_id );
+    $business_id            = absint( $business_id );
+    $account_name_or_id     = trim( (string) $account_name_or_id );
+    $location_id_raw_input  = trim( (string) $location_id );
     $location_resource_name = trim( (string) $location_resource_name );
 
     if ( ! $business_id ) {
@@ -1092,8 +1169,10 @@ public static function get_location_media_items( $business_id, $account_name_or_
     }
 
     /**
-     * 1) Si tenemos location_resource_name (accounts/123/locations/456),
-     *    lo usamos como fuente confiable para derivar accountId + locationId.
+     * 1) Si tenemos location_resource_name del estilo "accounts/123/locations/456",
+     *    lo usamos para derivar accountId + locationId.
+     *
+     * OJO: Si viene como "locations/456", NO trae accountId.
      */
     if ( '' !== $location_resource_name ) {
         $acc_from_name = self::extract_account_id_from_location_name( $location_resource_name );
@@ -1103,12 +1182,17 @@ public static function get_location_media_items( $business_id, $account_name_or_
             $account_name_or_id = $acc_from_name;
         }
         if ( '' !== $loc_from_name ) {
-            $location_id = $loc_from_name;
+            $location_id_raw_input = $loc_from_name; // ya numérico
         }
     }
 
     /**
-     * 2) Normalizar accountId
+     * 2) Normalizar locationId a numérico siempre
+     */
+    $location_id = self::extract_location_id_from_any( $location_id_raw_input );
+
+    /**
+     * 3) Normalizar accountId si lo tenemos
      */
     $account_id = '';
     if ( '' !== $account_name_or_id ) {
@@ -1116,21 +1200,40 @@ public static function get_location_media_items( $business_id, $account_name_or_
     }
 
     /**
-     * 3) Normalizar locationId (puede venir como resource name completo)
+     * 4) Si NO tenemos accountId, intentamos resolverlo desde la cache del business:
+     *    _gmb_locations_available (cada location tiene 'account_name' => "accounts/{id}")
      */
-    $location_id = self::extract_location_id_from_any( $location_id );
+    $resolved_account_resource = '';
+    if ( '' === $account_id && '' !== $location_id ) {
+        $resolved_account_resource = self::resolve_account_resource_name_for_location(
+            $business_id,
+            $location_id,
+            $location_resource_name
+        );
+
+        if ( '' !== $resolved_account_resource ) {
+            $account_id = self::extract_account_id_from_name( $resolved_account_resource );
+            // Conservamos algo legible como fuente de verdad
+            if ( '' === $account_name_or_id ) {
+                $account_name_or_id = $resolved_account_resource;
+            }
+        }
+    }
 
     /**
-     * 4) Validación final
+     * 5) Validación final
      */
     if ( '' === $account_id || '' === $location_id ) {
         return new WP_Error(
             'missing_params',
             __( 'Missing/invalid accountId or locationId for media list (after normalization).', 'lealez' ),
             array(
-                'account_name_or_id'     => $account_name_or_id,
-                'location_id_raw'        => $location_id,
-                'location_resource_name' => $location_resource_name,
+                'account_name_or_id'          => $account_name_or_id,
+                'account_id_normalized'       => $account_id,
+                'account_resource_resolved'   => $resolved_account_resource,
+                'location_id_raw'             => $location_id_raw_input,
+                'location_id_normalized'      => $location_id,
+                'location_resource_name'      => $location_resource_name,
             )
         );
     }
@@ -1138,9 +1241,9 @@ public static function get_location_media_items( $business_id, $account_name_or_
     // Endpoint v4 media
     $endpoint = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/media';
 
-    $all_items   = array();
-    $page_token  = '';
-    $loops       = 0;
+    $all_items        = array();
+    $page_token       = '';
+    $loops            = 0;
     $last_page_result = array();
 
     do {
@@ -1176,12 +1279,14 @@ public static function get_location_media_items( $business_id, $account_name_or_
                     'warning',
                     'Media API: could not retrieve location media items.',
                     array(
-                        'account_id'             => $account_id,
-                        'location_id'            => $location_id,
-                        'location_resource_name' => $location_resource_name,
-                        'error'                  => $result->get_error_message(),
-                        'error_code'             => $result->get_error_code(),
-                        'error_data'             => $result->get_error_data(),
+                        'account_id'                 => $account_id,
+                        'account_name_or_id'         => $account_name_or_id,
+                        'account_resource_resolved'  => $resolved_account_resource,
+                        'location_id'                => $location_id,
+                        'location_resource_name'     => $location_resource_name,
+                        'error'                      => $result->get_error_message(),
+                        'error_code'                 => $result->get_error_code(),
+                        'error_data'                 => $result->get_error_data(),
                     )
                 );
             }
@@ -1205,6 +1310,7 @@ public static function get_location_media_items( $business_id, $account_name_or_
         'totalMediaItemCount' => (int) ( $last_page_result['totalMediaItemCount'] ?? count( $all_items ) ),
     );
 }
+
 
 
 
