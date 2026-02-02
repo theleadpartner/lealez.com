@@ -346,7 +346,7 @@ class OY_Location_CPT {
                               maxlength="160"
                               placeholder="<?php esc_attr_e( 'Máximo 160 caracteres', 'lealez' ); ?>"><?php echo esc_textarea( $location_short_description ); ?></textarea>
                     <p class="description">
-                        <?php _e( 'Descripción corta (máximo 160 caracteres) - Se usa en listados y previsualizaciones. Este campo es manual, NO se sincroniza desde GMB.', 'lealez' ); ?>
+                        <?php _e( 'Descripción corta (máximo 160 caracteres) - Se usa en listados y previsualizaciones.', 'lealez' ); ?>
                         <span id="char-count">0/160</span>
                     </p>
                 </td>
@@ -553,9 +553,6 @@ class OY_Location_CPT {
                            value="<?php echo esc_attr( $place_id ); ?>"
                            class="large-text"
                            placeholder="ChIJ...">
-                    <p class="description">
-                        <?php _e( 'Este campo es manual. El Place ID NO está disponible directamente en GMB Business Information API.', 'lealez' ); ?>
-                    </p>
                 </td>
             </tr>
             <tr>
@@ -569,9 +566,6 @@ class OY_Location_CPT {
                            value="<?php echo esc_attr( $plus_code ); ?>"
                            class="regular-text"
                            placeholder="849VCWC8+R9">
-                    <p class="description">
-                        <?php _e( 'Este campo es manual. El Plus Code NO está disponible directamente en GMB Business Information API.', 'lealez' ); ?>
-                    </p>
                 </td>
             </tr>
         </table>
@@ -978,53 +972,73 @@ class OY_Location_CPT {
                     <label><?php _e( 'Estado de Verificación (Google)', 'lealez' ); ?></label>
                 </th>
                 <td>
-                    <?php
-                    // Mapear estados de Google a íconos y colores
-                    $verification_states = array(
-                        'VERIFIED'                => array( 'icon' => '✓', 'color' => '#46b450', 'label' => __( 'Verificada', 'lealez' ) ),
-                        'UNVERIFIED'              => array( 'icon' => '⚠', 'color' => '#f0b322', 'label' => __( 'No verificada', 'lealez' ) ),
-                        'VERIFICATION_REQUESTED'  => array( 'icon' => '⏳', 'color' => '#0073aa', 'label' => __( 'Verificación solicitada', 'lealez' ) ),
-                        'VERIFICATION_IN_PROGRESS'=> array( 'icon' => '⏳', 'color' => '#0073aa', 'label' => __( 'Verificación en proceso', 'lealez' ) ),
-                        'SUSPENDED'               => array( 'icon' => '✖', 'color' => '#dc3232', 'label' => __( 'Suspendida', 'lealez' ) ),
-                    );
+                    <?php 
+                    // ✅ CORRECCIÓN: Display visual basado en gmb_verification_state
+                    $state = strtoupper( (string) $gmb_verification_state );
+                    $icon = '';
+                    $color = '';
+                    $text = __( 'No disponible', 'lealez' );
 
-                    $current_state = strtoupper( (string) $gmb_verification_state );
-                    $state_info = isset( $verification_states[ $current_state ] ) ? $verification_states[ $current_state ] : array(
-                        'icon'  => '—',
-                        'color' => '#999',
-                        'label' => __( 'Estado desconocido', 'lealez' )
-                    );
-                    
-                    if ( $gmb_verification_state ) :
+                    if ( $state === 'VERIFIED' ) {
+                        $icon = '✓';
+                        $color = '#46b450'; // verde
+                        $text = __( 'Verificado', 'lealez' );
+                    } elseif ( $state === 'UNVERIFIED' ) {
+                        $icon = '⚠';
+                        $color = '#ffb900'; // amarillo
+                        $text = __( 'No verificado', 'lealez' );
+                    } elseif ( $state === 'VERIFICATION_REQUESTED' ) {
+                        $icon = '⏳';
+                        $color = '#00a0d2'; // azul
+                        $text = __( 'Verificación solicitada', 'lealez' );
+                    } elseif ( $state === 'VERIFICATION_IN_PROGRESS' ) {
+                        $icon = '⏳';
+                        $color = '#00a0d2'; // azul
+                        $text = __( 'Verificación en progreso', 'lealez' );
+                    } elseif ( $state === 'SUSPENDED' ) {
+                        $icon = '✖';
+                        $color = '#dc3232'; // rojo
+                        $text = __( 'Suspendida', 'lealez' );
+                    }
                     ?>
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <span style="color:<?php echo esc_attr( $state_info['color'] ); ?>; font-size:20px; font-weight:bold;">
-                                <?php echo esc_html( $state_info['icon'] ); ?>
-                            </span>
-                            <div>
-                                <strong style="color:<?php echo esc_attr( $state_info['color'] ); ?>;">
-                                    <?php echo esc_html( $state_info['label'] ); ?>
-                                </strong>
+
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; max-width: 400px;">
+                        <span style="font-size: 24px; color: <?php echo esc_attr( $color ); ?>;">
+                            <?php echo esc_html( $icon ); ?>
+                        </span>
+                        <div>
+                            <strong style="color: <?php echo esc_attr( $color ); ?>;">
+                                <?php echo esc_html( $text ); ?>
+                            </strong>
+                            <?php if ( $gmb_verification_state ) : ?>
                                 <br>
-                                <span class="description">
-                                    <?php _e( 'Estado API:', 'lealez' ); ?> <code><?php echo esc_html( $gmb_verification_state ); ?></code>
+                                <small style="color: #666;">
+                                    <?php 
+                                    echo esc_html( sprintf( 
+                                        __( 'Estado API: %s', 'lealez' ), 
+                                        $gmb_verification_state 
+                                    ) ); 
+                                    ?>
                                     <?php if ( $gmb_verification_time ) : ?>
                                         — <?php echo esc_html( $gmb_verification_time ); ?>
                                     <?php endif; ?>
-                                </span>
-                            </div>
+                                </small>
+                            <?php endif; ?>
                         </div>
-                    <?php else : ?>
-                        <span style="color:#999;">
-                            <?php _e( 'No disponible (sincroniza desde Google para obtener el estado)', 'lealez' ); ?>
-                        </span>
-                    <?php endif; ?>
-                    
-                    <!-- Campo oculto para mantener compatibilidad con verificación booleana -->
-                    <input type="hidden" name="gmb_verified" value="<?php echo ( $current_state === 'VERIFIED' ) ? '1' : '0'; ?>">
+                    </div>
+
+                    <!-- ✅ Hidden field para mantener compatibilidad backward -->
+                    <input type="hidden" 
+                           name="gmb_verified" 
+                           value="<?php echo ( $state === 'VERIFIED' ) ? '1' : '0'; ?>">
+
+                    <p class="description" style="margin-top:8px;">
+                        <?php _e( 'Estado de verificación obtenido desde Google My Business Verifications API. Se actualiza automáticamente al importar/sincronizar.', 'lealez' ); ?>
+                    </p>
                 </td>
             </tr>
 
+            <?php if ( $state === 'VERIFIED' ) : ?>
             <tr>
                 <th scope="row">
                     <label for="gmb_verification_method"><?php _e( 'Método de Verificación (manual)', 'lealez' ); ?></label>
@@ -1038,10 +1052,11 @@ class OY_Location_CPT {
                         <option value="video" <?php selected( $gmb_verification_method, 'video' ); ?>><?php _e( 'Video', 'lealez' ); ?></option>
                     </select>
                     <p class="description">
-                        <?php _e( 'Este campo es manual (opcional). El estado real se obtiene automáticamente de Google Verifications API.', 'lealez' ); ?>
+                        <?php _e( 'Este campo es manual (opcional). El estado real se guarda en gmb_verification_state desde Verifications API.', 'lealez' ); ?>
                     </p>
                 </td>
             </tr>
+            <?php endif; ?>
 
             <tr>
                 <th scope="row">
@@ -1361,6 +1376,9 @@ class OY_Location_CPT {
     public function render_attributes_meta_box( $post ) {
         $google_primary_category = get_post_meta( $post->ID, 'google_primary_category', true );
         $price_range             = get_post_meta( $post->ID, 'price_range', true );
+        $attributes_accessibility = get_post_meta( $post->ID, 'attributes_accessibility', true );
+        $attributes_amenities     = get_post_meta( $post->ID, 'attributes_amenities', true );
+        $attributes_payments      = get_post_meta( $post->ID, 'attributes_payments', true );
 
         // ✅ Google RAW categories
         $gmb_categories_raw        = get_post_meta( $post->ID, 'gmb_categories_raw', true );
@@ -1368,14 +1386,18 @@ class OY_Location_CPT {
         $gmb_primary_category_dn   = get_post_meta( $post->ID, 'gmb_primary_category_display_name', true );
         $gmb_additional_categories = get_post_meta( $post->ID, 'gmb_additional_categories', true );
 
-        // ✅ Google RAW attributes (desde GMB - estos son los que importaremos)
-        $gmb_attributes_raw = get_post_meta( $post->ID, 'gmb_attributes_raw', true );
+        if ( ! is_array( $attributes_accessibility ) ) {
+            $attributes_accessibility = array();
+        }
+        if ( ! is_array( $attributes_amenities ) ) {
+            $attributes_amenities = array();
+        }
+        if ( ! is_array( $attributes_payments ) ) {
+            $attributes_payments = array();
+        }
 
         if ( ! is_array( $gmb_additional_categories ) ) {
             $gmb_additional_categories = array();
-        }
-        if ( ! is_array( $gmb_attributes_raw ) ) {
-            $gmb_attributes_raw = array();
         }
         ?>
         <table class="form-table">
@@ -1391,7 +1413,7 @@ class OY_Location_CPT {
                            class="regular-text"
                            placeholder="<?php esc_attr_e( 'Ej: Restaurant, Retail Store, Gym', 'lealez' ); ?>">
                     <p class="description">
-                        <?php _e( 'Este campo es tu vista "humana". Al importar, se poblará desde categories.primaryCategory.displayName.', 'lealez' ); ?>
+                        <?php _e( 'Este campo es tu vista “humana”. Al importar, se poblará desde categories.primaryCategory.displayName.', 'lealez' ); ?>
                     </p>
                 </td>
             </tr>
@@ -1442,64 +1464,179 @@ class OY_Location_CPT {
 
         <hr>
 
-        <h4><?php _e( 'Atributos de Google My Business', 'lealez' ); ?></h4>
-        <p class="description">
-            <?php _e( 'Los atributos se sincronizan automáticamente desde Google My Business. Estos incluyen información sobre accesibilidad, comodidades, métodos de pago, etc.', 'lealez' ); ?>
-        </p>
+        <h4><?php _e( 'Atributos desde Google My Business', 'lealez' ); ?></h4>
+        <?php
+        // ✅ CORRECCIÓN: Mostrar atributos sincronizados desde GMB
+        $gmb_attributes_raw = get_post_meta( $post->ID, 'gmb_attributes_raw', true );
         
-        <?php if ( ! empty( $gmb_attributes_raw ) ) : ?>
-            <div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 15px; margin-top: 10px;">
-                <h5 style="margin-top: 0;"><?php _e( 'Atributos sincronizados desde Google:', 'lealez' ); ?></h5>
-                <div style="display: grid; gap: 10px;">
-                <?php
-                // Procesar y mostrar atributos de manera legible
-                foreach ( $gmb_attributes_raw as $attr ) {
-                    if ( ! is_array( $attr ) ) {
-                        continue;
-                    }
-                    
-                    $attr_id = isset( $attr['attributeId'] ) ? $attr['attributeId'] : '';
-                    $values  = isset( $attr['values'] ) && is_array( $attr['values'] ) ? $attr['values'] : array();
-                    
-                    if ( empty( $attr_id ) ) {
-                        continue;
-                    }
-                    
-                    // Convertir attributeId a formato legible (ej: "has_wheelchair_accessible_entrance" -> "Accesible en silla de ruedas")
-                    $readable_name = ucwords( str_replace( array( 'has_', '_' ), array( '', ' ' ), $attr_id ) );
-                    
-                    echo '<div style="padding: 8px; background: white; border-radius: 3px;">';
-                    echo '<strong>' . esc_html( $readable_name ) . ':</strong> ';
-                    
-                    if ( ! empty( $values ) ) {
-                        $value_strings = array();
-                        foreach ( $values as $val ) {
-                            if ( is_bool( $val ) ) {
-                                $value_strings[] = $val ? __( 'Sí', 'lealez' ) : __( 'No', 'lealez' );
-                            } elseif ( is_string( $val ) ) {
-                                $value_strings[] = esc_html( $val );
-                            }
-                        }
-                        echo implode( ', ', $value_strings );
-                    } else {
-                        echo '<span style="color: #999;">' . __( 'No especificado', 'lealez' ) . '</span>';
-                    }
-                    
-                    echo '</div>';
-                }
-                ?>
-                </div>
-            </div>
-        <?php else : ?>
-            <p style="color: #999; font-style: italic;">
-                <?php _e( 'No hay atributos sincronizados. Importa la ubicación desde Google para obtener los atributos.', 'lealez' ); ?>
-            </p>
-        <?php endif; ?>
+        if ( ! empty( $gmb_attributes_raw ) && is_array( $gmb_attributes_raw ) ) {
+            // Organizar atributos por categorías
+            $accessibility_attrs = array();
+            $amenities_attrs = array();
+            $payment_attrs = array();
+            $other_attrs = array();
 
-        <h5 style="margin-top: 20px;"><?php _e( 'RAW Attributes (objeto completo de GMB):', 'lealez' ); ?></h5>
+            foreach ( $gmb_attributes_raw as $attr ) {
+                if ( ! is_array( $attr ) || empty( $attr['attributeId'] ) ) {
+                    continue;
+                }
+
+                $attr_id = (string) $attr['attributeId'];
+                $attr_name = $this->humanize_attribute_id( $attr_id );
+                $values = isset( $attr['values'] ) && is_array( $attr['values'] ) ? $attr['values'] : array();
+                $value_str = implode( ', ', array_map( 'strval', $values ) );
+
+                // Clasificar por tipo
+                if ( stripos( $attr_id, 'wheelchair' ) !== false || stripos( $attr_id, 'accessible' ) !== false ) {
+                    $accessibility_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
+                } elseif ( stripos( $attr_id, 'wifi' ) !== false || stripos( $attr_id, 'parking' ) !== false || 
+                           stripos( $attr_id, 'restroom' ) !== false || stripos( $attr_id, 'outdoor' ) !== false || 
+                           stripos( $attr_id, 'seating' ) !== false ) {
+                    $amenities_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
+                } elseif ( stripos( $attr_id, 'payment' ) !== false || stripos( $attr_id, 'credit' ) !== false || 
+                           stripos( $attr_id, 'debit' ) !== false || stripos( $attr_id, 'cash' ) !== false || 
+                           stripos( $attr_id, 'mobile_payment' ) !== false ) {
+                    $payment_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
+                } else {
+                    $other_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
+                }
+            }
+
+            // Mostrar Accesibilidad
+            if ( ! empty( $accessibility_attrs ) ) {
+                ?>
+                <h4><?php _e( 'Accesibilidad', 'lealez' ); ?></h4>
+                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
+                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
+                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $accessibility_attrs as $attr ) : ?>
+                            <tr>
+                                <td><?php echo esc_html( $attr['name'] ); ?></td>
+                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
+                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php
+            }
+
+            // Mostrar Comodidades
+            if ( ! empty( $amenities_attrs ) ) {
+                ?>
+                <h4><?php _e( 'Comodidades', 'lealez' ); ?></h4>
+                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
+                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
+                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $amenities_attrs as $attr ) : ?>
+                            <tr>
+                                <td><?php echo esc_html( $attr['name'] ); ?></td>
+                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
+                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php
+            }
+
+            // Mostrar Métodos de Pago
+            if ( ! empty( $payment_attrs ) ) {
+                ?>
+                <h4><?php _e( 'Métodos de Pago', 'lealez' ); ?></h4>
+                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
+                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
+                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $payment_attrs as $attr ) : ?>
+                            <tr>
+                                <td><?php echo esc_html( $attr['name'] ); ?></td>
+                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
+                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php
+            }
+
+            // Mostrar Otros Atributos
+            if ( ! empty( $other_attrs ) ) {
+                ?>
+                <h4><?php _e( 'Otros Atributos', 'lealez' ); ?></h4>
+                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
+                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
+                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $other_attrs as $attr ) : ?>
+                            <tr>
+                                <td><?php echo esc_html( $attr['name'] ); ?></td>
+                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
+                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php
+            }
+        } else {
+            ?>
+            <p class="description">
+                <strong><?php _e( 'No hay atributos sincronizados desde Google My Business.', 'lealez' ); ?></strong>
+                <br>
+                <?php _e( 'Los atributos se sincronizan automáticamente al importar o actualizar la ubicación desde GMB.', 'lealez' ); ?>
+            </p>
+            <?php
+        }
+
+        // Mostrar el RAW completo para debugging
+        ?>
+        <p class="description" style="margin-top: 20px;">
+            <?php _e( 'RAW attributes (array completo) tal cual Google lo entrega:', 'lealez' ); ?>
+        </p>
         <textarea readonly class="large-text" rows="8" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;"><?php
-            echo esc_textarea( ! empty( $gmb_attributes_raw ) ? wp_json_encode( $gmb_attributes_raw, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '' );
+            echo esc_textarea( $gmb_attributes_raw ? wp_json_encode( $gmb_attributes_raw, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '' );
         ?></textarea>
+        <?php
+    }
+
+    /**
+     * Helper: Convert GMB attribute ID to human-readable name
+     *
+     * @param string $attr_id
+     * @return string
+     */
+    private function humanize_attribute_id( $attr_id ) {
+        // Convert snake_case to Title Case
+        $attr_id = str_replace( '_', ' ', $attr_id );
+        $attr_id = ucwords( strtolower( $attr_id ) );
+        
+        // Remove common prefixes
+        $attr_id = str_replace( array( 'Has ', 'Offers ', 'Accepts ' ), '', $attr_id );
+        
+        return $attr_id;
         <?php
     }
 
@@ -1760,6 +1897,9 @@ class OY_Location_CPT {
             }
         }
 
+        // ✅ CORRECCIÓN: Atributos ahora vienen exclusivamente desde GMB (gmb_attributes_raw)
+        // Ya no se guardan manualmente desde checkboxes
+
         // Save system metadata
         update_post_meta( $post_id, 'date_modified', current_time( 'mysql' ) );
         update_post_meta( $post_id, 'modified_by_user_id', get_current_user_id() );
@@ -1933,25 +2073,25 @@ class OY_Location_CPT {
             update_post_meta( $post_id, 'gmb_storefront_address_raw', $addr );
 
             // Map to human fields
-            // addressLines: puede tener 1, 2 o 3 líneas
-            // línea 0 = dirección principal, línea 1+ = información adicional de la calle
             $lines = isset( $addr['addressLines'] ) && is_array( $addr['addressLines'] ) ? $addr['addressLines'] : array();
             if ( ! empty( $lines ) ) {
-                // Primera línea siempre es la dirección principal
                 update_post_meta( $post_id, 'location_address_line1', sanitize_text_field( (string) ( $lines[0] ?? '' ) ) );
+                
+                // ✅ CORRECCIÓN: Complemento usa subPremise primero, fallback a addressLines[1]
+                $complement = '';
+                if ( ! empty( $addr['subPremise'] ) ) {
+                    $complement = sanitize_text_field( (string) $addr['subPremise'] );
+                } elseif ( ! empty( $lines[1] ) ) {
+                    $complement = sanitize_text_field( (string) $lines[1] );
+                }
+                if ( $complement ) {
+                    update_post_meta( $post_id, 'location_address_line2', $complement );
+                }
             }
-            
-            // subPremise: apartamento, piso, local, edificio, etc. (complemento)
-            if ( ! empty( $addr['subPremise'] ) ) {
-                update_post_meta( $post_id, 'location_address_line2', sanitize_text_field( (string) $addr['subPremise'] ) );
-            } elseif ( isset( $lines[1] ) && ! empty( $lines[1] ) ) {
-                // Si no hay subPremise pero sí hay segunda línea en addressLines, usarla como complemento
-                update_post_meta( $post_id, 'location_address_line2', sanitize_text_field( (string) $lines[1] ) );
-            }
-            
             if ( ! empty( $addr['locality'] ) ) {
                 update_post_meta( $post_id, 'location_city', sanitize_text_field( (string) $addr['locality'] ) );
             }
+            // ✅ Estado/Departamento: administrativeArea (ya estaba bien mapeado)
             if ( ! empty( $addr['administrativeArea'] ) ) {
                 update_post_meta( $post_id, 'location_state', sanitize_text_field( (string) $addr['administrativeArea'] ) );
             }
@@ -2002,6 +2142,8 @@ class OY_Location_CPT {
         if ( ! empty( $data['labels'] ) && is_array( $data['labels'] ) ) {
             update_post_meta( $post_id, 'gmb_labels_raw', $data['labels'] );
         }
+
+        // ✅ NUEVO: Guardar attributes desde GMB
         if ( ! empty( $data['attributes'] ) && is_array( $data['attributes'] ) ) {
             update_post_meta( $post_id, 'gmb_attributes_raw', $data['attributes'] );
         }
@@ -2132,8 +2274,8 @@ class OY_Location_CPT {
     }
 
     /**
-     * Extract account ID from location resource name
-     * Example: accounts/123/locations/456 -> 123
+     * Extract account resource name from location resource name
+     * Example: accounts/123/locations/456 -> 123 (solo el ID numérico)
      *
      * @param string $location_name
      * @return string
@@ -2148,10 +2290,12 @@ class OY_Location_CPT {
         if ( strpos( $location_name, '/locations/' ) !== false && strpos( $location_name, 'accounts/' ) === 0 ) {
             $parts = explode( '/locations/', $location_name );
             $left  = $parts[0] ?? '';
-            // Extraer solo el ID de "accounts/123"
-            $account_parts = explode( '/', $left );
-            $account_id = end( $account_parts );
-            return trim( (string) $account_id, '/' );
+            // ✅ CORRECCIÓN: Extraer solo el ID numérico, no "accounts/123"
+            $left = trim( (string) $left, '/' );
+            if ( strpos( $left, 'accounts/' ) === 0 ) {
+                $left = str_replace( 'accounts/', '', $left );
+            }
+            return trim( (string) $left, '/' );
         }
 
         return '';
