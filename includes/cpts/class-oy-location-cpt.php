@@ -1033,7 +1033,21 @@ class OY_Location_CPT {
                            value="<?php echo ( $state === 'VERIFIED' ) ? '1' : '0'; ?>">
 
                     <p class="description" style="margin-top:8px;">
-                        <?php _e( 'Estado de verificación obtenido desde Google My Business Verifications API. Se actualiza automáticamente al importar/sincronizar.', 'lealez' ); ?>
+                        <?php 
+                        if ( empty( $gmb_verification_state ) ) {
+                            $has_location_id = ! empty( get_post_meta( $post->ID, 'gmb_location_id', true ) );
+                            
+                            if ( ! $has_location_id ) {
+                                echo '<strong style="color: #d63638;">⚠ </strong>';
+                                _e( 'Esta ubicación no ha sido importada desde Google My Business. Selecciona una ubicación del dropdown y haz clic en "Importar Ahora" para obtener el estado de verificación.', 'lealez' );
+                            } else {
+                                echo '<strong style="color: #ffb900;">⏳ </strong>';
+                                _e( 'Información de verificación no disponible. Posibles causas: 1) La ubicación no tiene proceso de verificación iniciado en Google, 2) Problemas temporales con Verifications API, o 3) Se requiere sincronización manual. Intenta hacer clic en "Sincronizar Ahora".', 'lealez' );
+                            }
+                        } else {
+                            _e( 'Estado de verificación obtenido desde Google My Business Verifications API. Se actualiza automáticamente al importar/sincronizar.', 'lealez' );
+                        }
+                        ?>
                     </p>
                 </td>
             </tr>
@@ -2159,8 +2173,19 @@ class OY_Location_CPT {
         // Si en el response viene "verification" lo guardamos también
         if ( ! empty( $data['verification'] ) && is_array( $data['verification'] ) ) {
             $v = $data['verification'];
+            
+            // Debug logging
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location Import] Verification data received: ' . print_r( $v, true ) );
+            }
+            
             if ( ! empty( $v['state'] ) ) {
                 update_post_meta( $post_id, 'gmb_verification_state', sanitize_text_field( (string) $v['state'] ) );
+                
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location Import] Saved gmb_verification_state: ' . $v['state'] );
+                }
+                
                 // checkbox boolean
                 if ( strtoupper( (string) $v['state'] ) === 'VERIFIED' ) {
                     update_post_meta( $post_id, 'gmb_verified', 1 );
@@ -2171,6 +2196,11 @@ class OY_Location_CPT {
             }
             if ( ! empty( $v['createTime'] ) ) {
                 update_post_meta( $post_id, 'gmb_verification_create_time', sanitize_text_field( (string) $v['createTime'] ) );
+            }
+        } else {
+            // Debug: no verification data
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location Import] No verification data in import payload for post_id: ' . $post_id );
             }
         }
 
@@ -2417,6 +2447,13 @@ class OY_Location_CPT {
             $location_id = $this->extract_location_id_from_resource_name( $location_name );
             if ( ! empty( $location_id ) ) {
                 $verification = Lealez_GMB_API::get_location_verification_state( $business_id, $location_id, true );
+                
+                // Debug logging
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Verification API call for location_id: ' . $location_id );
+                    error_log( '[OY Location] Verification result: ' . print_r( $verification, true ) );
+                }
+                
                 if ( is_array( $verification ) && ! empty( $verification ) ) {
                     $fresh['verification'] = $verification;
                 } else {
@@ -2424,6 +2461,9 @@ class OY_Location_CPT {
                 }
             } else {
                 $fresh['verification'] = array();
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Could not extract location_id from: ' . $location_name );
+                }
             }
 
             // Attach some compat fields to mimic cached structure
