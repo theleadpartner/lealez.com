@@ -1636,23 +1636,23 @@ class OY_Location_CPT {
         <?php
     }
 
-    /**
-     * Helper: Convert GMB attribute ID to human-readable name
-     *
-     * @param string $attr_id
-     * @return string
-     */
-    private function humanize_attribute_id( $attr_id ) {
-        // Convert snake_case to Title Case
-        $attr_id = str_replace( '_', ' ', $attr_id );
-        $attr_id = ucwords( strtolower( $attr_id ) );
-        
-        // Remove common prefixes
-        $attr_id = str_replace( array( 'Has ', 'Offers ', 'Accepts ' ), '', $attr_id );
-        
-        return $attr_id;
-        <?php
-    }
+/**
+ * Helper: Convert GMB attribute ID to human-readable name
+ *
+ * @param string $attr_id
+ * @return string
+ */
+private function humanize_attribute_id( $attr_id ) {
+    // Convert snake_case to Title Case
+    $attr_id = str_replace( '_', ' ', $attr_id );
+    $attr_id = ucwords( strtolower( $attr_id ) );
+
+    // Remove common prefixes
+    $attr_id = str_replace( array( 'Has ', 'Offers ', 'Accepts ' ), '', $attr_id );
+
+    return $attr_id;
+}
+
 
     /**
      * Render GMB Metrics meta box
