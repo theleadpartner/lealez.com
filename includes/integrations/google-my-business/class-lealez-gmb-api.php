@@ -906,6 +906,7 @@ private static function extract_location_id_from_name( $location_name ) {
 
     /**
  * Get verification state for a location using My Business Verifications API.
+ * ✅ AHORA PUBLIC para permitir llamadas desde Location CPT.
  *
  * Uses caching by default to avoid excessive requests.
  * Returns array like: ['state' => 'VERIFIED', 'name' => '...', 'createTime' => '...']
@@ -915,7 +916,7 @@ private static function extract_location_id_from_name( $location_name ) {
  * @param bool   $use_cache
  * @return array
  */
-private static function get_location_verification_state( $business_id, $location_id, $use_cache = true ) {
+public static function get_location_verification_state( $business_id, $location_id, $use_cache = true ) {
     $business_id  = absint( $business_id );
     $location_id  = (string) $location_id;
     $location_id  = trim( $location_id );
