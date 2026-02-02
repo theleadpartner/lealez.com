@@ -2169,40 +2169,72 @@ private function humanize_attribute_id( $attr_id ) {
             update_post_meta( $post_id, 'gmb_attributes_raw', $data['attributes'] );
         }
 
-        // ✅ Verification details si existen (en tu cache ya traías verification)
-        // Si en el response viene "verification" lo guardamos también
-        if ( ! empty( $data['verification'] ) && is_array( $data['verification'] ) ) {
-            $v = $data['verification'];
-            
-            // Debug logging
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location Import] Verification data received: ' . print_r( $v, true ) );
-            }
-            
-            if ( ! empty( $v['state'] ) ) {
-                update_post_meta( $post_id, 'gmb_verification_state', sanitize_text_field( (string) $v['state'] ) );
-                
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location Import] Saved gmb_verification_state: ' . $v['state'] );
-                }
-                
-                // checkbox boolean
-                if ( strtoupper( (string) $v['state'] ) === 'VERIFIED' ) {
-                    update_post_meta( $post_id, 'gmb_verified', 1 );
-                }
-            }
-            if ( ! empty( $v['name'] ) ) {
-                update_post_meta( $post_id, 'gmb_verification_name', sanitize_text_field( (string) $v['name'] ) );
-            }
-            if ( ! empty( $v['createTime'] ) ) {
-                update_post_meta( $post_id, 'gmb_verification_create_time', sanitize_text_field( (string) $v['createTime'] ) );
-            }
-        } else {
-            // Debug: no verification data
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location Import] No verification data in import payload for post_id: ' . $post_id );
-            }
+// ✅ VERIFICACIÓN (SIEMPRE desde My Business Verifications API)
+// -----------------------------------------------------------------
+// 1) Si el payload ya trae "verification", lo usamos como fallback
+// 2) PERO siempre intentamos refrescar usando Verifications API
+//    porque sync_location_data normalmente viene de Business Information API.
+$verification_payload = array();
+
+// Fallback desde payload (si existe)
+if ( ! empty( $data['verification'] ) && is_array( $data['verification'] ) ) {
+    $verification_payload = $data['verification'];
+}
+
+// Refresco real desde Verifications API
+$location_id_for_verification = $this->extract_location_id_from_resource_name( $location_name );
+
+if ( ! empty( $location_id_for_verification ) && class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_verification_state' ) ) {
+
+    $verification_api = Lealez_GMB_API::get_location_verification_state( $business_id, $location_id_for_verification, true );
+
+    if ( is_array( $verification_api ) && ! empty( $verification_api ) ) {
+        $verification_payload = $verification_api;
+
+        // Para debugging controlado
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location Import] Verification refreshed from Verifications API: ' . print_r( $verification_payload, true ) );
         }
+    } else {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location Import] Verifications API returned empty for location_id: ' . $location_id_for_verification );
+        }
+    }
+} else {
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY Location Import] Cannot refresh verification: missing location_id or Lealez_GMB_API::get_location_verification_state not available.' );
+    }
+}
+
+// Guardar verificación normalizada
+if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
+
+    $state = isset( $verification_payload['state'] ) ? strtoupper( (string) $verification_payload['state'] ) : '';
+
+    if ( $state ) {
+        update_post_meta( $post_id, 'gmb_verification_state', sanitize_text_field( $state ) );
+
+        // ✅ Backward compatibility boolean
+        // Consideramos VERIFIED como verificado real
+        update_post_meta( $post_id, 'gmb_verified', ( $state === 'VERIFIED' ) ? 1 : 0 );
+    }
+
+    if ( ! empty( $verification_payload['name'] ) ) {
+        update_post_meta( $post_id, 'gmb_verification_name', sanitize_text_field( (string) $verification_payload['name'] ) );
+    }
+
+    if ( ! empty( $verification_payload['createTime'] ) ) {
+        update_post_meta( $post_id, 'gmb_verification_create_time', sanitize_text_field( (string) $verification_payload['createTime'] ) );
+    }
+
+} else {
+    // Si no hay datos de verificación, no borramos meta para no perder historial;
+    // simplemente registramos debug.
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY Location Import] No verification payload available after refresh attempt. post_id=' . $post_id );
+    }
+}
+
 
         // Mark last sync timestamp
         update_post_meta( $post_id, 'gmb_last_sync', time() );
@@ -2547,17 +2579,37 @@ private function humanize_attribute_id( $attr_id ) {
                 }
                 break;
 
-            case 'gmb_status':
-                $gmb_verified    = get_post_meta( $post_id, 'gmb_verified', true );
-                $gmb_location_id = get_post_meta( $post_id, 'gmb_location_id', true );
-                if ( $gmb_verified && $gmb_location_id ) {
-                    echo '<span style="color:#46b450;" title="' . esc_attr__( 'Verificada', 'lealez' ) . '">✓</span>';
-                } elseif ( $gmb_location_id ) {
-                    echo '<span style="color:#f0b322;" title="' . esc_attr__( 'Conectada pero no verificada', 'lealez' ) . '">⚠</span>';
-                } else {
-                    echo '<span style="color:#999;" title="' . esc_attr__( 'No conectada', 'lealez' ) . '">—</span>';
-                }
-                break;
+case 'gmb_status':
+    $gmb_location_id        = get_post_meta( $post_id, 'gmb_location_id', true );
+    $gmb_verification_state = strtoupper( (string) get_post_meta( $post_id, 'gmb_verification_state', true ) );
+
+    if ( ! $gmb_location_id ) {
+        echo '<span style="color:#999;" title="' . esc_attr__( 'No conectada', 'lealez' ) . '">—</span>';
+        break;
+    }
+
+    // Icono + color según estado real de Verifications API
+    $icon  = '⚠';
+    $color = '#f0b322';
+    $title = __( 'Conectada pero no verificada', 'lealez' );
+
+    if ( $gmb_verification_state === 'VERIFIED' ) {
+        $icon  = '✓';
+        $color = '#46b450';
+        $title = __( 'Verificada', 'lealez' );
+    } elseif ( in_array( $gmb_verification_state, array( 'VERIFICATION_REQUESTED', 'VERIFICATION_IN_PROGRESS', 'PENDING' ), true ) ) {
+        $icon  = '⏳';
+        $color = '#00a0d2';
+        $title = __( 'Verificación en proceso', 'lealez' );
+    } elseif ( in_array( $gmb_verification_state, array( 'FAILED', 'SUSPENDED' ), true ) ) {
+        $icon  = '✖';
+        $color = '#dc3232';
+        $title = __( 'Verificación fallida / suspendida', 'lealez' );
+    }
+
+    echo '<span style="color:' . esc_attr( $color ) . ';" title="' . esc_attr( $title . ( $gmb_verification_state ? ' [' . $gmb_verification_state . ']' : '' ) ) . '">' . esc_html( $icon ) . '</span>';
+    break;
+
 
             case 'metrics':
                 $views = get_post_meta( $post_id, 'gmb_profile_views_30d', true );
