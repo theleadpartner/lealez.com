@@ -1873,6 +1873,13 @@ class OY_Location_CPT {
                 $value = call_user_func( $sanitize_callback, wp_unslash( $_POST[ $field_name ] ) );
                 update_post_meta( $post_id, $field_name, $value );
             } else {
+                // ✅ Campos readonly que NO deben borrarse si no vienen en POST
+                $readonly_fields = array( 'gmb_location_id', 'gmb_account_id' );
+                if ( in_array( $field_name, $readonly_fields, true ) ) {
+                    // No hacer nada, mantener el valor existente
+                    continue;
+                }
+                
                 // ✅ ojo: checkboxes no vienen si están off
                 if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save' ), true ) ) {
                     delete_post_meta( $post_id, $field_name );
@@ -2404,6 +2411,19 @@ class OY_Location_CPT {
             if ( is_wp_error( $fresh ) || ! is_array( $fresh ) ) {
                 $msg = is_wp_error( $fresh ) ? $fresh->get_error_message() : __( 'No se pudo obtener la ubicación.', 'lealez' );
                 wp_send_json_error( array( 'message' => $msg ) );
+            }
+
+            // ✅ CORRECCIÓN: Obtener verification desde Verifications API
+            $location_id = $this->extract_location_id_from_resource_name( $location_name );
+            if ( ! empty( $location_id ) ) {
+                $verification = Lealez_GMB_API::get_location_verification_state( $business_id, $location_id, true );
+                if ( is_array( $verification ) && ! empty( $verification ) ) {
+                    $fresh['verification'] = $verification;
+                } else {
+                    $fresh['verification'] = array();
+                }
+            } else {
+                $fresh['verification'] = array();
             }
 
             // Attach some compat fields to mimic cached structure
