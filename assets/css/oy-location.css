@@ -1,0 +1,74 @@
+/**
+ * OY Location Admin Styles
+ * 
+ * Estilos adicionales para el admin de Location CPT.
+ * Los estilos principales están inline en el metabox por ahora.
+ * 
+ * @package Lealez
+ * @since 1.0.0
+ */
+
+/* Placeholder para estilos futuros */
+
+/* Debug helper */
+.oy-location-debug {
+    background: #f0f0f1;
+    border-left: 4px solid #2271b1;
+    padding: 12px;
+    margin: 10px 0;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+/* GMB Verification Status Helpers */
+.gmb-verification-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    background: #f5f5f5;
+    border-radius: 4px;
+    max-width: 400px;
+}
+
+.gmb-verification-icon {
+    font-size: 24px;
+}
+
+.gmb-verification-text strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.gmb-verification-text small {
+    color: #666;
+    font-size: 11px;
+}
+
+/* GMB Import Hint Messages */
+.oy-gmb-hint {
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+.oy-gmb-hint.info {
+    background: #d5e5ff;
+    border-left: 4px solid #2271b1;
+}
+
+.oy-gmb-hint.success {
+    background: #d4edda;
+    border-left: 4px solid #46b450;
+}
+
+.oy-gmb-hint.error {
+    background: #f8d7da;
+    border-left: 4px solid #dc3232;
+}
+
+.oy-gmb-hint.warning {
+    background: #fff3cd;
+    border-left: 4px solid #ffb900;
+}
