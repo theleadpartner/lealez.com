@@ -850,539 +850,537 @@ class OY_Location_CPT {
         <?php
     }
 
-    /**
-     * Render GMB Integration meta box
-     */
-    public function render_gmb_meta_box( $post ) {
-        $parent_business_id        = get_post_meta( $post->ID, 'parent_business_id', true );
+/**
+ * Render GMB Integration meta box
+ */
+public function render_gmb_meta_box( $post ) {
+    $parent_business_id        = get_post_meta( $post->ID, 'parent_business_id', true );
 
-        // ✅ "Source" selector (location resource name) + import controls
-        $gmb_location_name         = get_post_meta( $post->ID, 'gmb_location_name', true ); // e.g. accounts/123/locations/456
-        $gmb_location_account_name = get_post_meta( $post->ID, 'gmb_location_account_name', true ); // account resource name used in cached list
-        $gmb_import_on_save        = get_post_meta( $post->ID, 'gmb_import_on_save', true );
-        if ( '' === $gmb_import_on_save ) {
-            // default ON for new posts
-            $gmb_import_on_save = '1';
-        }
+    // ✅ "Source" selector (location resource name) + import controls
+    $gmb_location_name         = get_post_meta( $post->ID, 'gmb_location_name', true ); // e.g. accounts/123/locations/456
+    $gmb_location_account_name = get_post_meta( $post->ID, 'gmb_location_account_name', true ); // account resource name used in cached list
+    $gmb_import_on_save        = get_post_meta( $post->ID, 'gmb_import_on_save', true );
+    if ( '' === $gmb_import_on_save ) {
+        // default ON for new posts
+        $gmb_import_on_save = '1';
+    }
 
-        // Existing meta
-        $gmb_location_id           = get_post_meta( $post->ID, 'gmb_location_id', true );
-        $gmb_account_id            = get_post_meta( $post->ID, 'gmb_account_id', true );
-        $gmb_verified              = get_post_meta( $post->ID, 'gmb_verified', true );
-        $gmb_verification_method   = get_post_meta( $post->ID, 'gmb_verification_method', true );
-        $gmb_auto_sync_enabled     = get_post_meta( $post->ID, 'gmb_auto_sync_enabled', true );
-        $gmb_sync_frequency        = get_post_meta( $post->ID, 'gmb_sync_frequency', true );
-        $gmb_last_sync             = get_post_meta( $post->ID, 'gmb_last_sync', true );
+    // Existing meta
+    $gmb_location_id           = get_post_meta( $post->ID, 'gmb_location_id', true );
+    $gmb_account_id            = get_post_meta( $post->ID, 'gmb_account_id', true );
+    $gmb_verified              = get_post_meta( $post->ID, 'gmb_verified', true );
+    $gmb_verification_method   = get_post_meta( $post->ID, 'gmb_verification_method', true );
+    $gmb_auto_sync_enabled     = get_post_meta( $post->ID, 'gmb_auto_sync_enabled', true );
+    $gmb_sync_frequency        = get_post_meta( $post->ID, 'gmb_sync_frequency', true );
+    $gmb_last_sync             = get_post_meta( $post->ID, 'gmb_last_sync', true );
 
-        // ✅ Verification API RAW fields
-        $gmb_verification_state    = get_post_meta( $post->ID, 'gmb_verification_state', true );
-        $gmb_verification_name     = get_post_meta( $post->ID, 'gmb_verification_name', true );
-        $gmb_verification_time     = get_post_meta( $post->ID, 'gmb_verification_create_time', true );
+    // ✅ Verification API RAW fields
+    $gmb_verification_state    = get_post_meta( $post->ID, 'gmb_verification_state', true );
+    $gmb_verification_name     = get_post_meta( $post->ID, 'gmb_verification_name', true );
+    $gmb_verification_time     = get_post_meta( $post->ID, 'gmb_verification_create_time', true );
 
-        // ✅ Google RAW fields (Location resource)
-        $gmb_location_raw          = get_post_meta( $post->ID, 'gmb_location_raw', true );
+    // ✅ Google RAW fields (Location resource)
+    $gmb_location_raw          = get_post_meta( $post->ID, 'gmb_location_raw', true );
 
-        if ( empty( $gmb_sync_frequency ) ) {
-            $gmb_sync_frequency = 'daily';
-        }
+    if ( empty( $gmb_sync_frequency ) ) {
+        $gmb_sync_frequency = 'daily';
+    }
 
-        $ajax_nonce = wp_create_nonce( $this->ajax_nonce_action );
-        ?>
-        <table class="form-table">
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'Origen (Google Business Profile)', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <p class="description" style="margin-top:0;">
-                        <?php _e( 'Primero selecciona la Empresa (sidebar). Luego podrás elegir una Ubicación de Google para importar y poblar automáticamente los campos del CPT.', 'lealez' ); ?>
-                    </p>
+    $ajax_nonce = wp_create_nonce( $this->ajax_nonce_action );
+    ?>
+    <table class="form-table">
+        <tr>
+            <th scope="row">
+                <label><?php _e( 'Origen (Google Business Profile)', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <p class="description" style="margin-top:0;">
+                    <?php _e( 'Primero selecciona la Empresa (sidebar). Luego podrás elegir una Ubicación de Google para importar y poblar automáticamente los campos del CPT.', 'lealez' ); ?>
+                </p>
 
-                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                        <select
-                            name="gmb_location_name"
-                            id="gmb_location_name"
-                            class="large-text"
-                            style="max-width:520px;"
-                            <?php echo $parent_business_id ? '' : 'disabled'; ?>
-                        >
-                            <option value="">
-                                <?php echo $parent_business_id ? esc_html__( 'Cargando ubicaciones...', 'lealez' ) : esc_html__( 'Selecciona una empresa primero...', 'lealez' ); ?>
-                            </option>
-                        </select>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <select
+                        name="gmb_location_name"
+                        id="gmb_location_name"
+                        class="large-text"
+                        style="max-width:520px;"
+                        <?php echo $parent_business_id ? '' : 'disabled'; ?>
+                    >
+                        <option value="">
+                            <?php echo $parent_business_id ? esc_html__( 'Cargando ubicaciones...', 'lealez' ) : esc_html__( 'Selecciona una empresa primero...', 'lealez' ); ?>
+                        </option>
+                    </select>
 
-                        <button type="button" class="button button-secondary" id="oy-gmb-refresh-location-list" <?php echo $parent_business_id ? '' : 'disabled'; ?>>
-                            <?php _e( 'Recargar Lista', 'lealez' ); ?>
-                        </button>
+                    <button type="button" class="button button-secondary" id="oy-gmb-refresh-location-list" <?php echo $parent_business_id ? '' : 'disabled'; ?>>
+                        <?php _e( 'Recargar Lista', 'lealez' ); ?>
+                    </button>
 
-                        <button type="button" class="button button-primary" id="oy-gmb-import-location-now" <?php echo ( $parent_business_id && $gmb_location_name ) ? '' : 'disabled'; ?>>
-                            <?php _e( 'Importar Ahora', 'lealez' ); ?>
-                        </button>
+                    <button type="button" class="button button-primary" id="oy-gmb-import-location-now" <?php echo ( $parent_business_id && $gmb_location_name ) ? '' : 'disabled'; ?>>
+                        <?php _e( 'Importar Ahora', 'lealez' ); ?>
+                    </button>
+                </div>
+
+                <input type="hidden" name="gmb_location_account_name" id="gmb_location_account_name" value="<?php echo esc_attr( $gmb_location_account_name ); ?>">
+
+                <p style="margin-top:10px;">
+                    <label>
+                        <input type="checkbox" name="gmb_import_on_save" value="1" <?php checked( $gmb_import_on_save, '1' ); ?>>
+                        <?php _e( 'Importar / actualizar desde Google automáticamente al Guardar', 'lealez' ); ?>
+                    </label>
+                </p>
+
+                <div id="oy-gmb-location-hint" style="margin-top:8px; color:#555;"></div>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
+                <label for="gmb_location_id"><?php _e( 'GMB Location ID', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="gmb_location_id"
+                       id="gmb_location_id"
+                       value="<?php echo esc_attr( $gmb_location_id ); ?>"
+                       class="large-text"
+                       readonly>
+                <p class="description">
+                    <?php _e( 'Se deriva del resource name (accounts/.../locations/ID).', 'lealez' ); ?>
+                </p>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
+                <label for="gmb_account_id"><?php _e( 'GMB Account ID', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="gmb_account_id"
+                       id="gmb_account_id"
+                       value="<?php echo esc_attr( $gmb_account_id ); ?>"
+                       class="large-text"
+                       readonly>
+                <p class="description">
+                    <?php _e( 'Se guarda como el account resource name que corresponde a la ubicación.', 'lealez' ); ?>
+                </p>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
+                <label><?php _e( 'Estado de Verificación (Google)', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <?php
+                // ✅ CORRECCIÓN: Verifications API usa COMPLETED para indicar verificación completada.
+                $state = strtoupper( (string) $gmb_verification_state );
+
+                $icon  = '';
+                $color = '';
+                $text  = __( 'No disponible', 'lealez' );
+
+                if ( in_array( $state, array( 'VERIFIED', 'COMPLETED' ), true ) ) {
+                    $icon  = '✓';
+                    $color = '#46b450'; // verde
+                    $text  = __( 'Verificado', 'lealez' );
+                } elseif ( $state === 'UNVERIFIED' ) {
+                    $icon  = '⚠';
+                    $color = '#ffb900'; // amarillo
+                    $text  = __( 'No verificado', 'lealez' );
+                } elseif ( in_array( $state, array( 'VERIFICATION_REQUESTED', 'VERIFICATION_IN_PROGRESS', 'PENDING' ), true ) ) {
+                    $icon  = '⏳';
+                    $color = '#00a0d2'; // azul
+                    $text  = __( 'Verificación en progreso', 'lealez' );
+                } elseif ( in_array( $state, array( 'FAILED', 'SUSPENDED' ), true ) ) {
+                    $icon  = '✖';
+                    $color = '#dc3232'; // rojo
+                    $text  = __( 'Verificación fallida / suspendida', 'lealez' );
+                }
+                ?>
+
+                <div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; max-width: 400px;">
+                    <span style="font-size: 24px; color: <?php echo esc_attr( $color ); ?>;">
+                        <?php echo esc_html( $icon ); ?>
+                    </span>
+                    <div>
+                        <strong style="color: <?php echo esc_attr( $color ); ?>;">
+                            <?php echo esc_html( $text ); ?>
+                        </strong>
+                        <?php if ( $gmb_verification_state ) : ?>
+                            <br>
+                            <small style="color: #666;">
+                                <?php
+                                echo esc_html( sprintf(
+                                    __( 'Estado API: %s', 'lealez' ),
+                                    $gmb_verification_state
+                                ) );
+                                ?>
+                                <?php if ( $gmb_verification_time ) : ?>
+                                    — <?php echo esc_html( $gmb_verification_time ); ?>
+                                <?php endif; ?>
+                            </small>
+                        <?php endif; ?>
                     </div>
+                </div>
 
-                    <input type="hidden" name="gmb_location_account_name" id="gmb_location_account_name" value="<?php echo esc_attr( $gmb_location_account_name ); ?>">
+                <!-- ✅ Hidden field para mantener compatibilidad backward -->
+                <input type="hidden"
+                       name="gmb_verified"
+                       value="<?php echo in_array( $state, array( 'VERIFIED', 'COMPLETED' ), true ) ? '1' : '0'; ?>">
 
-                    <p style="margin-top:10px;">
-                        <label>
-                            <input type="checkbox" name="gmb_import_on_save" value="1" <?php checked( $gmb_import_on_save, '1' ); ?>>
-                            <?php _e( 'Importar / actualizar desde Google automáticamente al Guardar', 'lealez' ); ?>
-                        </label>
-                    </p>
+                <p class="description" style="margin-top:8px;">
+                    <?php
+                    if ( empty( $gmb_verification_state ) ) {
+                        $has_location_id = ! empty( get_post_meta( $post->ID, 'gmb_location_id', true ) );
 
-                    <div id="oy-gmb-location-hint" style="margin-top:8px; color:#555;"></div>
-                </td>
-            </tr>
-
-            <tr>
-                <th scope="row">
-                    <label for="gmb_location_id"><?php _e( 'GMB Location ID', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="gmb_location_id"
-                           id="gmb_location_id"
-                           value="<?php echo esc_attr( $gmb_location_id ); ?>"
-                           class="large-text"
-                           readonly>
-                    <p class="description">
-                        <?php _e( 'Se deriva del resource name (accounts/.../locations/ID).', 'lealez' ); ?>
-                    </p>
-                </td>
-            </tr>
-
-            <tr>
-                <th scope="row">
-                    <label for="gmb_account_id"><?php _e( 'GMB Account ID', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="gmb_account_id"
-                           id="gmb_account_id"
-                           value="<?php echo esc_attr( $gmb_account_id ); ?>"
-                           class="large-text"
-                           readonly>
-                    <p class="description">
-                        <?php _e( 'Se guarda como el account resource name que corresponde a la ubicación.', 'lealez' ); ?>
-                    </p>
-                </td>
-            </tr>
-
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'Estado de Verificación (Google)', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <?php 
-                    // ✅ CORRECCIÓN: Display visual basado en gmb_verification_state
-                    $state = strtoupper( (string) $gmb_verification_state );
-                    $icon = '';
-                    $color = '';
-                    $text = __( 'No disponible', 'lealez' );
-
-                    if ( $state === 'VERIFIED' ) {
-                        $icon = '✓';
-                        $color = '#46b450'; // verde
-                        $text = __( 'Verificado', 'lealez' );
-                    } elseif ( $state === 'UNVERIFIED' ) {
-                        $icon = '⚠';
-                        $color = '#ffb900'; // amarillo
-                        $text = __( 'No verificado', 'lealez' );
-                    } elseif ( $state === 'VERIFICATION_REQUESTED' ) {
-                        $icon = '⏳';
-                        $color = '#00a0d2'; // azul
-                        $text = __( 'Verificación solicitada', 'lealez' );
-                    } elseif ( $state === 'VERIFICATION_IN_PROGRESS' ) {
-                        $icon = '⏳';
-                        $color = '#00a0d2'; // azul
-                        $text = __( 'Verificación en progreso', 'lealez' );
-                    } elseif ( $state === 'SUSPENDED' ) {
-                        $icon = '✖';
-                        $color = '#dc3232'; // rojo
-                        $text = __( 'Suspendida', 'lealez' );
+                        if ( ! $has_location_id ) {
+                            echo '<strong style="color: #d63638;">⚠ </strong>';
+                            _e( 'Esta ubicación no ha sido importada desde Google My Business. Selecciona una ubicación del dropdown y haz clic en "Importar Ahora" para obtener el estado de verificación.', 'lealez' );
+                        } else {
+                            echo '<strong style="color: #ffb900;">⏳ </strong>';
+                            _e( 'Información de verificación no disponible. Posibles causas: 1) La ubicación no tiene proceso de verificación iniciado en Google, 2) Problemas temporales con Verifications API, o 3) Se requiere sincronización manual. Intenta hacer clic en "Sincronizar Ahora".', 'lealez' );
+                        }
+                    } else {
+                        _e( 'Estado de verificación obtenido desde Google My Business Verifications API. Se actualiza automáticamente al importar/sincronizar.', 'lealez' );
                     }
                     ?>
+                </p>
+            </td>
+        </tr>
 
-                    <div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: #f5f5f5; border-radius: 4px; max-width: 400px;">
-                        <span style="font-size: 24px; color: <?php echo esc_attr( $color ); ?>;">
-                            <?php echo esc_html( $icon ); ?>
-                        </span>
-                        <div>
-                            <strong style="color: <?php echo esc_attr( $color ); ?>;">
-                                <?php echo esc_html( $text ); ?>
-                            </strong>
-                            <?php if ( $gmb_verification_state ) : ?>
-                                <br>
-                                <small style="color: #666;">
-                                    <?php 
-                                    echo esc_html( sprintf( 
-                                        __( 'Estado API: %s', 'lealez' ), 
-                                        $gmb_verification_state 
-                                    ) ); 
-                                    ?>
-                                    <?php if ( $gmb_verification_time ) : ?>
-                                        — <?php echo esc_html( $gmb_verification_time ); ?>
-                                    <?php endif; ?>
-                                </small>
-                            <?php endif; ?>
-                        </div>
-                    </div>
+        <?php if ( in_array( $state, array( 'VERIFIED', 'COMPLETED' ), true ) ) : ?>
+        <tr>
+            <th scope="row">
+                <label for="gmb_verification_method"><?php _e( 'Método de Verificación (manual)', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <select name="gmb_verification_method" id="gmb_verification_method" class="regular-text">
+                    <option value=""><?php _e( 'Seleccionar...', 'lealez' ); ?></option>
+                    <option value="email" <?php selected( $gmb_verification_method, 'email' ); ?>><?php _e( 'Email', 'lealez' ); ?></option>
+                    <option value="phone" <?php selected( $gmb_verification_method, 'phone' ); ?>><?php _e( 'Teléfono', 'lealez' ); ?></option>
+                    <option value="postcard" <?php selected( $gmb_verification_method, 'postcard' ); ?>><?php _e( 'Postal', 'lealez' ); ?></option>
+                    <option value="video" <?php selected( $gmb_verification_method, 'video' ); ?>><?php _e( 'Video', 'lealez' ); ?></option>
+                </select>
+                <p class="description">
+                    <?php _e( 'Este campo es manual (opcional). El estado real se guarda en gmb_verification_state desde Verifications API.', 'lealez' ); ?>
+                </p>
+            </td>
+        </tr>
+        <?php endif; ?>
 
-                    <!-- ✅ Hidden field para mantener compatibilidad backward -->
-                    <input type="hidden" 
-                           name="gmb_verified" 
-                           value="<?php echo ( $state === 'VERIFIED' ) ? '1' : '0'; ?>">
+        <tr>
+            <th scope="row">
+                <label><?php _e( 'Sincronización Automática', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <label>
+                    <input type="checkbox"
+                           name="gmb_auto_sync_enabled"
+                           value="1"
+                           <?php checked( $gmb_auto_sync_enabled, '1' ); ?>>
+                    <?php _e( 'Sincronizar automáticamente con Google', 'lealez' ); ?>
+                </label>
+            </td>
+        </tr>
 
-                    <p class="description" style="margin-top:8px;">
-                        <?php 
-                        if ( empty( $gmb_verification_state ) ) {
-                            $has_location_id = ! empty( get_post_meta( $post->ID, 'gmb_location_id', true ) );
-                            
-                            if ( ! $has_location_id ) {
-                                echo '<strong style="color: #d63638;">⚠ </strong>';
-                                _e( 'Esta ubicación no ha sido importada desde Google My Business. Selecciona una ubicación del dropdown y haz clic en "Importar Ahora" para obtener el estado de verificación.', 'lealez' );
-                            } else {
-                                echo '<strong style="color: #ffb900;">⏳ </strong>';
-                                _e( 'Información de verificación no disponible. Posibles causas: 1) La ubicación no tiene proceso de verificación iniciado en Google, 2) Problemas temporales con Verifications API, o 3) Se requiere sincronización manual. Intenta hacer clic en "Sincronizar Ahora".', 'lealez' );
-                            }
-                        } else {
-                            _e( 'Estado de verificación obtenido desde Google My Business Verifications API. Se actualiza automáticamente al importar/sincronizar.', 'lealez' );
-                        }
-                        ?>
-                    </p>
-                </td>
-            </tr>
+        <tr>
+            <th scope="row">
+                <label for="gmb_sync_frequency"><?php _e( 'Frecuencia de Sincronización', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <select name="gmb_sync_frequency" id="gmb_sync_frequency" class="regular-text">
+                    <option value="hourly" <?php selected( $gmb_sync_frequency, 'hourly' ); ?>><?php _e( 'Cada hora', 'lealez' ); ?></option>
+                    <option value="daily" <?php selected( $gmb_sync_frequency, 'daily' ); ?>><?php _e( 'Diariamente', 'lealez' ); ?></option>
+                    <option value="weekly" <?php selected( $gmb_sync_frequency, 'weekly' ); ?>><?php _e( 'Semanalmente', 'lealez' ); ?></option>
+                </select>
+            </td>
+        </tr>
 
-            <?php if ( $state === 'VERIFIED' ) : ?>
-            <tr>
-                <th scope="row">
-                    <label for="gmb_verification_method"><?php _e( 'Método de Verificación (manual)', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <select name="gmb_verification_method" id="gmb_verification_method" class="regular-text">
-                        <option value=""><?php _e( 'Seleccionar...', 'lealez' ); ?></option>
-                        <option value="email" <?php selected( $gmb_verification_method, 'email' ); ?>><?php _e( 'Email', 'lealez' ); ?></option>
-                        <option value="phone" <?php selected( $gmb_verification_method, 'phone' ); ?>><?php _e( 'Teléfono', 'lealez' ); ?></option>
-                        <option value="postcard" <?php selected( $gmb_verification_method, 'postcard' ); ?>><?php _e( 'Postal', 'lealez' ); ?></option>
-                        <option value="video" <?php selected( $gmb_verification_method, 'video' ); ?>><?php _e( 'Video', 'lealez' ); ?></option>
-                    </select>
-                    <p class="description">
-                        <?php _e( 'Este campo es manual (opcional). El estado real se guarda en gmb_verification_state desde Verifications API.', 'lealez' ); ?>
-                    </p>
-                </td>
-            </tr>
-            <?php endif; ?>
+        <?php if ( $gmb_last_sync ) : ?>
+        <tr>
+            <th scope="row">
+                <label><?php _e( 'Última Sincronización', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <?php echo esc_html( date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $gmb_last_sync ) ); ?>
+            </td>
+        </tr>
+        <?php endif; ?>
+    </table>
 
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'Sincronización Automática', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <label>
-                        <input type="checkbox"
-                               name="gmb_auto_sync_enabled"
-                               value="1"
-                               <?php checked( $gmb_auto_sync_enabled, '1' ); ?>>
-                        <?php _e( 'Sincronizar automáticamente con Google', 'lealez' ); ?>
-                    </label>
-                </td>
-            </tr>
+    <p>
+        <button type="button" class="button button-secondary" id="sync-gmb-data">
+            <?php _e( 'Sincronizar Ahora (solo métricas/externo)', 'lealez' ); ?>
+        </button>
+    </p>
 
-            <tr>
-                <th scope="row">
-                    <label for="gmb_sync_frequency"><?php _e( 'Frecuencia de Sincronización', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <select name="gmb_sync_frequency" id="gmb_sync_frequency" class="regular-text">
-                        <option value="hourly" <?php selected( $gmb_sync_frequency, 'hourly' ); ?>><?php _e( 'Cada hora', 'lealez' ); ?></option>
-                        <option value="daily" <?php selected( $gmb_sync_frequency, 'daily' ); ?>><?php _e( 'Diariamente', 'lealez' ); ?></option>
-                        <option value="weekly" <?php selected( $gmb_sync_frequency, 'weekly' ); ?>><?php _e( 'Semanalmente', 'lealez' ); ?></option>
-                    </select>
-                </td>
-            </tr>
+    <hr>
 
-            <?php if ( $gmb_last_sync ) : ?>
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'Última Sincronización', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <?php echo esc_html( date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $gmb_last_sync ) ); ?>
-                </td>
-            </tr>
-            <?php endif; ?>
-        </table>
+    <h4 style="margin-top:10px;"><?php _e( 'Google (RAW) - Location Resource', 'lealez' ); ?></h4>
+    <p class="description">
+        <?php _e( 'Se guarda el objeto Location (Business Information API) tal cual se obtiene en importación. Útil para homologación completa.', 'lealez' ); ?>
+    </p>
+    <textarea readonly class="large-text" rows="10" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;"><?php
+        echo esc_textarea( $gmb_location_raw ? wp_json_encode( $gmb_location_raw, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '' );
+    ?></textarea>
 
-        <p>
-            <button type="button" class="button button-secondary" id="sync-gmb-data">
-                <?php _e( 'Sincronizar Ahora (solo métricas/externo)', 'lealez' ); ?>
-            </button>
-        </p>
+    <script>
+    jQuery(document).ready(function($){
+        var ajaxUrl   = (window.ajaxurl) ? window.ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+        var nonce     = '<?php echo esc_js( $ajax_nonce ); ?>';
 
-        <hr>
+        function setHint(msg, type){
+            var $h = $('#oy-gmb-location-hint');
+            $h.text(msg || '');
+            if(type === 'error'){ $h.css('color','#b32d2e'); }
+            else if(type === 'success'){ $h.css('color','#1e7e34'); }
+            else { $h.css('color','#555'); }
+        }
 
-        <h4 style="margin-top:10px;"><?php _e( 'Google (RAW) - Location Resource', 'lealez' ); ?></h4>
-        <p class="description">
-            <?php _e( 'Se guarda el objeto Location (Business Information API) tal cual se obtiene en importación. Útil para homologación completa.', 'lealez' ); ?>
-        </p>
-        <textarea readonly class="large-text" rows="10" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;"><?php
-            echo esc_textarea( $gmb_location_raw ? wp_json_encode( $gmb_location_raw, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '' );
-        ?></textarea>
+        function normalizeAddressShort(loc){
+            try{
+                var a = loc.storefrontAddress || {};
+                var lines = a.addressLines || [];
+                var city = a.locality || '';
+                var st = a.administrativeArea || '';
+                var out = [];
+                if(lines.length){ out.push(lines.join(' ')); }
+                var cst = [city, st].filter(Boolean).join(', ');
+                if(cst){ out.push(cst); }
+                return out.join(' — ');
+            }catch(e){
+                return '';
+            }
+        }
 
-        <script>
-        jQuery(document).ready(function($){
-            var ajaxUrl   = (window.ajaxurl) ? window.ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
-            var nonce     = '<?php echo esc_js( $ajax_nonce ); ?>';
+        function loadLocationsForBusiness(businessId, selectedLocationName){
+            var $sel = $('#gmb_location_name');
+            $sel.prop('disabled', true).html('<option value=""><?php echo esc_js( __( 'Cargando ubicaciones...', 'lealez' ) ); ?></option>');
+            $('#oy-gmb-refresh-location-list').prop('disabled', true);
+            $('#oy-gmb-import-location-now').prop('disabled', true);
+            setHint('', 'info');
 
-            function setHint(msg, type){
-                var $h = $('#oy-gmb-location-hint');
-                $h.text(msg || '');
-                if(type === 'error'){ $h.css('color','#b32d2e'); }
-                else if(type === 'success'){ $h.css('color','#1e7e34'); }
-                else { $h.css('color','#555'); }
+            if(!businessId){
+                $sel.html('<option value=""><?php echo esc_js( __( 'Selecciona una empresa primero...', 'lealez' ) ); ?></option>');
+                return;
             }
 
-            function normalizeAddressShort(loc){
-                try{
-                    var a = loc.storefrontAddress || {};
-                    var lines = a.addressLines || [];
-                    var city = a.locality || '';
-                    var st = a.administrativeArea || '';
-                    var out = [];
-                    if(lines.length){ out.push(lines.join(' ')); }
-                    var cst = [city, st].filter(Boolean).join(', ');
-                    if(cst){ out.push(cst); }
-                    return out.join(' — ');
-                }catch(e){
-                    return '';
-                }
-            }
-
-            function loadLocationsForBusiness(businessId, selectedLocationName){
-                var $sel = $('#gmb_location_name');
-                $sel.prop('disabled', true).html('<option value=""><?php echo esc_js( __( 'Cargando ubicaciones...', 'lealez' ) ); ?></option>');
-                $('#oy-gmb-refresh-location-list').prop('disabled', true);
-                $('#oy-gmb-import-location-now').prop('disabled', true);
-                setHint('', 'info');
-
-                if(!businessId){
-                    $sel.html('<option value=""><?php echo esc_js( __( 'Selecciona una empresa primero...', 'lealez' ) ); ?></option>');
-                    return;
-                }
-
-                $.post(ajaxUrl, {
-                    action: 'oy_get_gmb_locations_for_business',
-                    nonce: nonce,
-                    business_id: businessId
-                }).done(function(resp){
-                    if(!resp || !resp.success){
-                        var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo cargar la lista de ubicaciones.', 'lealez' ) ); ?>';
-                        setHint(msg, 'error');
-                        $sel.prop('disabled', true);
-                        $('#oy-gmb-refresh-location-list').prop('disabled', false);
-                        return;
-                    }
-
-                    var list = resp.data.locations || [];
-                    var total = resp.data.total || list.length;
-
-                    var html = '<option value=""><?php echo esc_js( __( 'Seleccionar ubicación de Google...', 'lealez' ) ); ?></option>';
-                    for(var i=0;i<list.length;i++){
-                        var it = list[i];
-                        var addr = (it.address_short) ? it.address_short : '';
-                        var ver = (it.verification_state) ? (' ['+it.verification_state+']') : '';
-                        var label = (it.title ? it.title : it.name) + (addr ? ' — '+addr : '') + ver;
-                        html += '<option data-account="'+ (it.account_name || '') +'" value="'+ (it.name || '') +'">' + $('<div>').text(label).html() + '</option>';
-                    }
-
-                    $sel.html(html).prop('disabled', false);
-                    $('#oy-gmb-refresh-location-list').prop('disabled', false);
-
-                    if(selectedLocationName){
-                        $sel.val(selectedLocationName);
-                        if($sel.val()){
-                            $('#oy-gmb-import-location-now').prop('disabled', false);
-                            var acc = $sel.find('option:selected').data('account') || '';
-                            $('#gmb_location_account_name').val(acc);
-                            setHint('<?php echo esc_js( __( 'Ubicación seleccionada: lista cargada correctamente.', 'lealez' ) ); ?>', 'success');
-                        }
-                    }else{
-                        setHint(total + ' <?php echo esc_js( __( 'ubicaciones encontradas para esta empresa.', 'lealez' ) ); ?>', 'info');
-                    }
-                }).fail(function(){
-                    setHint('<?php echo esc_js( __( 'Error de red al cargar ubicaciones.', 'lealez' ) ); ?>', 'error');
+            $.post(ajaxUrl, {
+                action: 'oy_get_gmb_locations_for_business',
+                nonce: nonce,
+                business_id: businessId
+            }).done(function(resp){
+                if(!resp || !resp.success){
+                    var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo cargar la lista de ubicaciones.', 'lealez' ) ); ?>';
+                    setHint(msg, 'error');
                     $sel.prop('disabled', true);
                     $('#oy-gmb-refresh-location-list').prop('disabled', false);
-                });
-            }
-
-            function applyLocationToForm(loc){
-                // Map a subset to existing fields
-                try{
-                    // Title
-                    if(loc.title){
-                        // WP title field
-                        $('#title').val(loc.title);
-                    }
-
-                    // Store code -> location_code (si está vacío)
-                    if(loc.storeCode){
-                        var $code = $('#location_code');
-                        if($code.length && !$code.val()){
-                            $code.val(loc.storeCode);
-                        }
-                    }
-
-                    // Website
-                    if(loc.websiteUri){
-                        $('#location_website').val(loc.websiteUri);
-                    }
-
-                    // Phones
-                    if(loc.phoneNumbers){
-                        if(loc.phoneNumbers.primaryPhone){
-                            $('#location_phone').val(loc.phoneNumbers.primaryPhone);
-                        }
-                        if(loc.phoneNumbers.additionalPhones && loc.phoneNumbers.additionalPhones.length){
-                            $('#location_phone_additional').val(loc.phoneNumbers.additionalPhones[0]);
-                        }
-                    }
-
-                    // Address
-                    if(loc.storefrontAddress){
-                        var a = loc.storefrontAddress;
-                        if(a.addressLines && a.addressLines.length){
-                            $('#location_address_line1').val(a.addressLines[0] || '');
-                            $('#location_address_line2').val(a.addressLines[1] || '');
-                        }
-                        if(a.locality){ $('#location_city').val(a.locality); }
-                        if(a.administrativeArea){ $('#location_state').val(a.administrativeArea); }
-                        if(a.postalCode){ $('#location_postal_code').val(a.postalCode); }
-                        if(a.regionCode){ $('#location_country').val(a.regionCode); }
-                    }
-
-                    // LatLng
-                    if(loc.latlng){
-                        if(typeof loc.latlng.latitude !== 'undefined'){
-                            $('#location_latitude').val(loc.latlng.latitude);
-                        }
-                        if(typeof loc.latlng.longitude !== 'undefined'){
-                            $('#location_longitude').val(loc.latlng.longitude);
-                        }
-                    }
-
-                    // Category
-                    if(loc.categories && loc.categories.primaryCategory){
-                        var pc = loc.categories.primaryCategory;
-                        var cat = pc.displayName || pc.name || '';
-                        if(cat){
-                            $('#google_primary_category').val(cat);
-                        }
-                    }
-
-                    // Hours mapping (simple) -> location_hours_* meta UI
-                    // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
-                }catch(e){}
-            }
-
-            function importNow(businessId, locationName, accountName){
-                if(!businessId || !locationName){
-                    setHint('<?php echo esc_js( __( 'Selecciona una empresa y una ubicación.', 'lealez' ) ); ?>', 'error');
                     return;
                 }
 
-                $('#oy-gmb-import-location-now').prop('disabled', true);
-                setHint('<?php echo esc_js( __( 'Importando desde Google...', 'lealez' ) ); ?>', 'info');
+                var list = resp.data.locations || [];
+                var total = resp.data.total || list.length;
 
-                $.post(ajaxUrl, {
-                    action: 'oy_get_gmb_location_details',
-                    nonce: nonce,
-                    business_id: businessId,
-                    location_name: locationName,
-                    account_name: accountName || ''
-                }).done(function(resp){
-                    if(!resp || !resp.success){
-                        var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo importar la ubicación.', 'lealez' ) ); ?>';
-                        setHint(msg, 'error');
-                        $('#oy-gmb-import-location-now').prop('disabled', false);
-                        return;
-                    }
-
-                    var loc = resp.data.location || null;
-                    if(!loc){
-                        setHint('<?php echo esc_js( __( 'No se recibió data de la ubicación.', 'lealez' ) ); ?>', 'error');
-                        $('#oy-gmb-import-location-now').prop('disabled', false);
-                        return;
-                    }
-
-                    // Apply to form fields visually (pre-save)
-                    applyLocationToForm(loc);
-
-                    // Fill read-only fields
-                    if(resp.data.location_id){
-                        $('#gmb_location_id').val(resp.data.location_id);
-                    }
-                    if(resp.data.account_id){
-                        $('#gmb_account_id').val(resp.data.account_id);
-                    }
-
-                    setHint('<?php echo esc_js( __( 'Importación aplicada al formulario. Ahora guarda el post para persistir.', 'lealez' ) ); ?>', 'success');
-                    $('#oy-gmb-import-location-now').prop('disabled', false);
-                }).fail(function(){
-                    setHint('<?php echo esc_js( __( 'Error de red durante importación.', 'lealez' ) ); ?>', 'error');
-                    $('#oy-gmb-import-location-now').prop('disabled', false);
-                });
-            }
-
-            // On business change: reload locations list
-            $(document).on('change', '#parent_business_id', function(){
-                var businessId = $(this).val();
-                loadLocationsForBusiness(businessId, '');
-            });
-
-            // On load: if business already selected, load list and select saved location
-            var initialBusiness = $('#parent_business_id').val();
-            var savedLocation   = '<?php echo esc_js( (string) $gmb_location_name ); ?>';
-            if(initialBusiness){
-                loadLocationsForBusiness(initialBusiness, savedLocation);
-            }else{
-                $('#gmb_location_name').prop('disabled', true);
-                $('#oy-gmb-refresh-location-list').prop('disabled', true);
-                $('#oy-gmb-import-location-now').prop('disabled', true);
-            }
-
-            // On reload list button
-            $(document).on('click', '#oy-gmb-refresh-location-list', function(e){
-                e.preventDefault();
-                var businessId = $('#parent_business_id').val();
-                loadLocationsForBusiness(businessId, $('#gmb_location_name').val() || '');
-            });
-
-            // On select location: enable import now
-            $(document).on('change', '#gmb_location_name', function(){
-                var val = $(this).val();
-                var acc = $(this).find('option:selected').data('account') || '';
-                $('#gmb_location_account_name').val(acc);
-
-                if(val){
-                    $('#oy-gmb-import-location-now').prop('disabled', false);
-                    setHint('<?php echo esc_js( __( 'Ubicación seleccionada. Puedes importar ahora o guardar con auto-import.', 'lealez' ) ); ?>', 'info');
-                }else{
-                    $('#oy-gmb-import-location-now').prop('disabled', true);
+                var html = '<option value=""><?php echo esc_js( __( 'Seleccionar ubicación de Google...', 'lealez' ) ); ?></option>';
+                for(var i=0;i<list.length;i++){
+                    var it = list[i];
+                    var addr = (it.address_short) ? it.address_short : '';
+                    var ver = (it.verification_state) ? (' ['+it.verification_state+']') : '';
+                    var label = (it.title ? it.title : it.name) + (addr ? ' — '+addr : '') + ver;
+                    html += '<option data-account="'+ (it.account_name || '') +'" value="'+ (it.name || '') +'">' + $('<div>').text(label).html() + '</option>';
                 }
-            });
 
-            // Import now button
-            $(document).on('click', '#oy-gmb-import-location-now', function(e){
-                e.preventDefault();
-                var businessId = $('#parent_business_id').val();
-                var locName    = $('#gmb_location_name').val();
-                var accName    = $('#gmb_location_account_name').val();
-                importNow(businessId, locName, accName);
+                $sel.html(html).prop('disabled', false);
+                $('#oy-gmb-refresh-location-list').prop('disabled', false);
+
+                if(selectedLocationName){
+                    $sel.val(selectedLocationName);
+                    if($sel.val()){
+                        $('#oy-gmb-import-location-now').prop('disabled', false);
+                        var acc = $sel.find('option:selected').data('account') || '';
+                        $('#gmb_location_account_name').val(acc);
+                        setHint('<?php echo esc_js( __( 'Ubicación seleccionada: lista cargada correctamente.', 'lealez' ) ); ?>', 'success');
+                    }
+                }else{
+                    setHint(total + ' <?php echo esc_js( __( 'ubicaciones encontradas para esta empresa.', 'lealez' ) ); ?>', 'info');
+                }
+            }).fail(function(){
+                setHint('<?php echo esc_js( __( 'Error de red al cargar ubicaciones.', 'lealez' ) ); ?>', 'error');
+                $sel.prop('disabled', true);
+                $('#oy-gmb-refresh-location-list').prop('disabled', false);
             });
+        }
+
+        function applyLocationToForm(loc){
+            // Map a subset to existing fields
+            try{
+                // Title
+                if(loc.title){
+                    // WP title field
+                    $('#title').val(loc.title);
+                }
+
+                // Store code -> location_code (si está vacío)
+                if(loc.storeCode){
+                    var $code = $('#location_code');
+                    if($code.length && !$code.val()){
+                        $code.val(loc.storeCode);
+                    }
+                }
+
+                // Website
+                if(loc.websiteUri){
+                    $('#location_website').val(loc.websiteUri);
+                }
+
+                // Phones
+                if(loc.phoneNumbers){
+                    if(loc.phoneNumbers.primaryPhone){
+                        $('#location_phone').val(loc.phoneNumbers.primaryPhone);
+                    }
+                    if(loc.phoneNumbers.additionalPhones && loc.phoneNumbers.additionalPhones.length){
+                        $('#location_phone_additional').val(loc.phoneNumbers.additionalPhones[0]);
+                    }
+                }
+
+                // Address
+                if(loc.storefrontAddress){
+                    var a = loc.storefrontAddress;
+                    if(a.addressLines && a.addressLines.length){
+                        $('#location_address_line1').val(a.addressLines[0] || '');
+                        $('#location_address_line2').val(a.addressLines[1] || '');
+                    }
+                    if(a.locality){ $('#location_city').val(a.locality); }
+                    if(a.administrativeArea){ $('#location_state').val(a.administrativeArea); }
+                    if(a.postalCode){ $('#location_postal_code').val(a.postalCode); }
+                    if(a.regionCode){ $('#location_country').val(a.regionCode); }
+                }
+
+                // LatLng
+                if(loc.latlng){
+                    if(typeof loc.latlng.latitude !== 'undefined'){
+                        $('#location_latitude').val(loc.latlng.latitude);
+                    }
+                    if(typeof loc.latlng.longitude !== 'undefined'){
+                        $('#location_longitude').val(loc.latlng.longitude);
+                    }
+                }
+
+                // Category
+                if(loc.categories && loc.categories.primaryCategory){
+                    var pc = loc.categories.primaryCategory;
+                    var cat = pc.displayName || pc.name || '';
+                    if(cat){
+                        $('#google_primary_category').val(cat);
+                    }
+                }
+
+                // Hours mapping (simple) -> location_hours_* meta UI
+                // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
+            }catch(e){}
+        }
+
+        function importNow(businessId, locationName, accountName){
+            if(!businessId || !locationName){
+                setHint('<?php echo esc_js( __( 'Selecciona una empresa y una ubicación.', 'lealez' ) ); ?>', 'error');
+                return;
+            }
+
+            $('#oy-gmb-import-location-now').prop('disabled', true);
+            setHint('<?php echo esc_js( __( 'Importando desde Google...', 'lealez' ) ); ?>', 'info');
+
+            $.post(ajaxUrl, {
+                action: 'oy_get_gmb_location_details',
+                nonce: nonce,
+                business_id: businessId,
+                location_name: locationName,
+                account_name: accountName || ''
+            }).done(function(resp){
+                if(!resp || !resp.success){
+                    var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo importar la ubicación.', 'lealez' ) ); ?>';
+                    setHint(msg, 'error');
+                    $('#oy-gmb-import-location-now').prop('disabled', false);
+                    return;
+                }
+
+                var loc = resp.data.location || null;
+                if(!loc){
+                    setHint('<?php echo esc_js( __( 'No se recibió data de la ubicación.', 'lealez' ) ); ?>', 'error');
+                    $('#oy-gmb-import-location-now').prop('disabled', false);
+                    return;
+                }
+
+                // Apply to form fields visually (pre-save)
+                applyLocationToForm(loc);
+
+                // Fill read-only fields
+                if(resp.data.location_id){
+                    $('#gmb_location_id').val(resp.data.location_id);
+                }
+                if(resp.data.account_id){
+                    $('#gmb_account_id').val(resp.data.account_id);
+                }
+
+                setHint('<?php echo esc_js( __( 'Importación aplicada al formulario. Ahora guarda el post para persistir.', 'lealez' ) ); ?>', 'success');
+                $('#oy-gmb-import-location-now').prop('disabled', false);
+            }).fail(function(){
+                setHint('<?php echo esc_js( __( 'Error de red durante importación.', 'lealez' ) ); ?>', 'error');
+                $('#oy-gmb-import-location-now').prop('disabled', false);
+            });
+        }
+
+        // On business change: reload locations list
+        $(document).on('change', '#parent_business_id', function(){
+            var businessId = $(this).val();
+            loadLocationsForBusiness(businessId, '');
         });
-        </script>
-        <?php
-    }
+
+        // On load: if business already selected, load list and select saved location
+        var initialBusiness = $('#parent_business_id').val();
+        var savedLocation   = '<?php echo esc_js( (string) $gmb_location_name ); ?>';
+        if(initialBusiness){
+            loadLocationsForBusiness(initialBusiness, savedLocation);
+        }else{
+            $('#gmb_location_name').prop('disabled', true);
+            $('#oy-gmb-refresh-location-list').prop('disabled', true);
+            $('#oy-gmb-import-location-now').prop('disabled', true);
+        }
+
+        // On reload list button
+        $(document).on('click', '#oy-gmb-refresh-location-list', function(e){
+            e.preventDefault();
+            var businessId = $('#parent_business_id').val();
+            loadLocationsForBusiness(businessId, $('#gmb_location_name').val() || '');
+        });
+
+        // On select location: enable import now
+        $(document).on('change', '#gmb_location_name', function(){
+            var val = $(this).val();
+            var acc = $(this).find('option:selected').data('account') || '';
+            $('#gmb_location_account_name').val(acc);
+
+            if(val){
+                $('#oy-gmb-import-location-now').prop('disabled', false);
+                setHint('<?php echo esc_js( __( 'Ubicación seleccionada. Puedes importar ahora o guardar con auto-import.', 'lealez' ) ); ?>', 'info');
+            }else{
+                $('#oy-gmb-import-location-now').prop('disabled', true);
+            }
+        });
+
+        // Import now button
+        $(document).on('click', '#oy-gmb-import-location-now', function(e){
+            e.preventDefault();
+            var businessId = $('#parent_business_id').val();
+            var locName    = $('#gmb_location_name').val();
+            var accName    = $('#gmb_location_account_name').val();
+            importNow(businessId, locName, accName);
+        });
+    });
+    </script>
+    <?php
+}
+
 
     /**
      * Render Attributes meta box
@@ -2215,8 +2213,10 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         update_post_meta( $post_id, 'gmb_verification_state', sanitize_text_field( $state ) );
 
         // ✅ Backward compatibility boolean
-        // Consideramos VERIFIED como verificado real
-        update_post_meta( $post_id, 'gmb_verified', ( $state === 'VERIFIED' ) ? 1 : 0 );
+        // Verifications API usa COMPLETED para indicar verificación completada.
+        // Para compatibilidad: VERIFIED o COMPLETED => verificado real.
+        $is_verified = in_array( $state, array( 'VERIFIED', 'COMPLETED' ), true );
+        update_post_meta( $post_id, 'gmb_verified', $is_verified ? 1 : 0 );
     }
 
     if ( ! empty( $verification_payload['name'] ) ) {
@@ -2234,6 +2234,7 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         error_log( '[OY Location Import] No verification payload available after refresh attempt. post_id=' . $post_id );
     }
 }
+
 
 
         // Mark last sync timestamp
@@ -2533,99 +2534,99 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         return $new_columns;
     }
 
-    /**
-     * Display custom column content
-     */
-    public function custom_column_content( $column, $post_id ) {
-        switch ( $column ) {
-            case 'parent_business':
-                $parent_id = get_post_meta( $post_id, 'parent_business_id', true );
-                if ( $parent_id ) {
-                    $parent_title = get_the_title( $parent_id );
-                    echo '<a href="' . esc_url( get_edit_post_link( $parent_id ) ) . '">' . esc_html( $parent_title ) . '</a>';
-                } else {
-                    echo '<span style="color:#dc3232;">—</span>';
-                }
-                break;
+/**
+ * Display custom column content
+ */
+public function custom_column_content( $column, $post_id ) {
+    switch ( $column ) {
+        case 'parent_business':
+            $parent_id = get_post_meta( $post_id, 'parent_business_id', true );
+            if ( $parent_id ) {
+                $parent_title = get_the_title( $parent_id );
+                echo '<a href="' . esc_url( get_edit_post_link( $parent_id ) ) . '">' . esc_html( $parent_title ) . '</a>';
+            } else {
+                echo '<span style="color:#dc3232;">—</span>';
+            }
+            break;
 
-            case 'location_code':
-                $code = get_post_meta( $post_id, 'location_code', true );
-                echo $code ? '<code>' . esc_html( $code ) . '</code>' : '—';
-                break;
+        case 'location_code':
+            $code = get_post_meta( $post_id, 'location_code', true );
+            echo $code ? '<code>' . esc_html( $code ) . '</code>' : '—';
+            break;
 
-            case 'city':
-                $city  = get_post_meta( $post_id, 'location_city', true );
-                $state = get_post_meta( $post_id, 'location_state', true );
-                $parts = array_filter( array( $city, $state ) );
-                echo $parts ? esc_html( implode( ', ', $parts ) ) : '—';
-                break;
+        case 'city':
+            $city  = get_post_meta( $post_id, 'location_city', true );
+            $state = get_post_meta( $post_id, 'location_state', true );
+            $parts = array_filter( array( $city, $state ) );
+            echo $parts ? esc_html( implode( ', ', $parts ) ) : '—';
+            break;
 
-            case 'status':
-                $status = get_post_meta( $post_id, 'location_status', true );
-                $status_labels = array(
-                    'active'              => array( 'label' => __( 'Activa', 'lealez' ), 'color' => '#46b450' ),
-                    'inactive'            => array( 'label' => __( 'Inactiva', 'lealez' ), 'color' => '#999' ),
-                    'temporarily_closed'  => array( 'label' => __( 'Cerrada Temp.', 'lealez' ), 'color' => '#f0b322' ),
-                    'permanently_closed'  => array( 'label' => __( 'Cerrada Perm.', 'lealez' ), 'color' => '#dc3232' ),
+        case 'status':
+            $status = get_post_meta( $post_id, 'location_status', true );
+            $status_labels = array(
+                'active'              => array( 'label' => __( 'Activa', 'lealez' ), 'color' => '#46b450' ),
+                'inactive'            => array( 'label' => __( 'Inactiva', 'lealez' ), 'color' => '#999' ),
+                'temporarily_closed'  => array( 'label' => __( 'Cerrada Temp.', 'lealez' ), 'color' => '#f0b322' ),
+                'permanently_closed'  => array( 'label' => __( 'Cerrada Perm.', 'lealez' ), 'color' => '#dc3232' ),
+            );
+            if ( isset( $status_labels[ $status ] ) ) {
+                printf(
+                    '<span style="color:%s; font-weight:600;">%s</span>',
+                    esc_attr( $status_labels[ $status ]['color'] ),
+                    esc_html( $status_labels[ $status ]['label'] )
                 );
-                if ( isset( $status_labels[ $status ] ) ) {
-                    printf(
-                        '<span style="color:%s; font-weight:600;">%s</span>',
-                        esc_attr( $status_labels[ $status ]['color'] ),
-                        esc_html( $status_labels[ $status ]['label'] )
-                    );
-                } else {
-                    echo '—';
-                }
+            } else {
+                echo '—';
+            }
+            break;
+
+        case 'gmb_status':
+            $gmb_location_id        = get_post_meta( $post_id, 'gmb_location_id', true );
+            $gmb_verification_state = strtoupper( (string) get_post_meta( $post_id, 'gmb_verification_state', true ) );
+
+            if ( ! $gmb_location_id ) {
+                echo '<span style="color:#999;" title="' . esc_attr__( 'No conectada', 'lealez' ) . '">—</span>';
                 break;
+            }
 
-case 'gmb_status':
-    $gmb_location_id        = get_post_meta( $post_id, 'gmb_location_id', true );
-    $gmb_verification_state = strtoupper( (string) get_post_meta( $post_id, 'gmb_verification_state', true ) );
+            // ✅ CORRECCIÓN: COMPLETED también significa verificado (Verifications API)
+            $icon  = '⚠';
+            $color = '#f0b322';
+            $title = __( 'Conectada pero no verificada', 'lealez' );
 
-    if ( ! $gmb_location_id ) {
-        echo '<span style="color:#999;" title="' . esc_attr__( 'No conectada', 'lealez' ) . '">—</span>';
-        break;
+            if ( in_array( $gmb_verification_state, array( 'VERIFIED', 'COMPLETED' ), true ) ) {
+                $icon  = '✓';
+                $color = '#46b450';
+                $title = __( 'Verificada', 'lealez' );
+            } elseif ( in_array( $gmb_verification_state, array( 'VERIFICATION_REQUESTED', 'VERIFICATION_IN_PROGRESS', 'PENDING' ), true ) ) {
+                $icon  = '⏳';
+                $color = '#00a0d2';
+                $title = __( 'Verificación en proceso', 'lealez' );
+            } elseif ( in_array( $gmb_verification_state, array( 'FAILED', 'SUSPENDED' ), true ) ) {
+                $icon  = '✖';
+                $color = '#dc3232';
+                $title = __( 'Verificación fallida / suspendida', 'lealez' );
+            }
+
+            echo '<span style="color:' . esc_attr( $color ) . ';" title="' . esc_attr( $title . ( $gmb_verification_state ? ' [' . $gmb_verification_state . ']' : '' ) ) . '">' . esc_html( $icon ) . '</span>';
+            break;
+
+        case 'metrics':
+            $views = get_post_meta( $post_id, 'gmb_profile_views_30d', true );
+            $calls = get_post_meta( $post_id, 'gmb_calls_30d', true );
+            if ( $views || $calls ) {
+                printf(
+                    '<small>👁 %s | 📞 %s</small>',
+                    $views ? number_format_i18n( $views ) : '0',
+                    $calls ? number_format_i18n( $calls ) : '0'
+                );
+            } else {
+                echo '<span style="color:#999;">—</span>';
+            }
+            break;
     }
+}
 
-    // Icono + color según estado real de Verifications API
-    $icon  = '⚠';
-    $color = '#f0b322';
-    $title = __( 'Conectada pero no verificada', 'lealez' );
-
-    if ( $gmb_verification_state === 'VERIFIED' ) {
-        $icon  = '✓';
-        $color = '#46b450';
-        $title = __( 'Verificada', 'lealez' );
-    } elseif ( in_array( $gmb_verification_state, array( 'VERIFICATION_REQUESTED', 'VERIFICATION_IN_PROGRESS', 'PENDING' ), true ) ) {
-        $icon  = '⏳';
-        $color = '#00a0d2';
-        $title = __( 'Verificación en proceso', 'lealez' );
-    } elseif ( in_array( $gmb_verification_state, array( 'FAILED', 'SUSPENDED' ), true ) ) {
-        $icon  = '✖';
-        $color = '#dc3232';
-        $title = __( 'Verificación fallida / suspendida', 'lealez' );
-    }
-
-    echo '<span style="color:' . esc_attr( $color ) . ';" title="' . esc_attr( $title . ( $gmb_verification_state ? ' [' . $gmb_verification_state . ']' : '' ) ) . '">' . esc_html( $icon ) . '</span>';
-    break;
-
-
-            case 'metrics':
-                $views = get_post_meta( $post_id, 'gmb_profile_views_30d', true );
-                $calls = get_post_meta( $post_id, 'gmb_calls_30d', true );
-                if ( $views || $calls ) {
-                    printf(
-                        '<small>👁 %s | 📞 %s</small>',
-                        $views ? number_format_i18n( $views ) : '0',
-                        $calls ? number_format_i18n( $calls ) : '0'
-                    );
-                } else {
-                    echo '<span style="color:#999;">—</span>';
-                }
-                break;
-        }
-    }
 
     /**
      * Make columns sortable
