@@ -163,47 +163,34 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                 <?php if ( empty( $accounts ) ) : ?>
                     <div class="notice notice-warning inline" style="margin: 0 0 10px 0;">
                         <p><strong><?php esc_html_e( 'No hay cuentas guardadas en cache.', 'lealez' ); ?></strong></p>
-                        <p><?php esc_html_e( 'Presiona "Actualizar Ubicaciones" para traer cuentas y ubicaciones.', 'lealez' ); ?></p>
+                        <p><?php esc_html_e( 'Conéctate y presiona "Actualizar Ubicaciones" para cargar las cuentas y ubicaciones desde Google.', 'lealez' ); ?></p>
                     </div>
                 <?php else : ?>
-                    <table class="widefat striped" style="margin-bottom: 15px;">
+                    <table class="wp-list-table widefat fixed striped" style="margin-bottom: 20px;">
                         <thead>
                             <tr>
-                                <th><?php esc_html_e( 'Account Name (label)', 'lealez' ); ?></th>
-                                <th><?php esc_html_e( 'Resource Name (ID)', 'lealez' ); ?></th>
-                                <th><?php esc_html_e( 'Type', 'lealez' ); ?></th>
-                                <th><?php esc_html_e( 'Role / State', 'lealez' ); ?></th>
+                                <th style="width: 25%;"><?php esc_html_e( 'Nombre de la Cuenta', 'lealez' ); ?></th>
+                                <th style="width: 20%;"><?php esc_html_e( 'Tipo', 'lealez' ); ?></th>
+                                <th style="width: 20%;"><?php esc_html_e( 'Rol', 'lealez' ); ?></th>
+                                <th style="width: 35%;"><?php esc_html_e( 'Account ID (name)', 'lealez' ); ?></th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ( $accounts as $acc ) : ?>
-                                <?php if ( ! is_array( $acc ) ) { continue; } ?>
+                            <?php foreach ( $accounts as $account ) : ?>
+                                <?php
+                                if ( ! is_array( $account ) ) {
+                                    continue;
+                                }
+                                $acc_name = $account['account_name'] ?? '-';
+                                $acc_type = $account['type'] ?? '-';
+                                $acc_role = $account['role'] ?? '-';
+                                $acc_id   = $account['account_id'] ?? '-';
+                                ?>
                                 <tr>
-                                    <td>
-                                        <strong><?php echo esc_html( $acc['accountName'] ?? '-' ); ?></strong>
-                                    </td>
-                                    <td style="font-family: monospace;">
-                                        <?php echo esc_html( $acc['name'] ?? '-' ); ?>
-                                    </td>
-                                    <td>
-                                        <?php echo esc_html( $acc['type'] ?? '-' ); ?>
-                                    </td>
-                                    <td>
-                                        <?php
-                                        $role  = $acc['role'] ?? '';
-                                        $state = $acc['state'] ?? '';
-                                        $out   = array();
-
-                                        if ( $role ) {
-                                            $out[] = 'role=' . $role;
-                                        }
-                                        if ( $state ) {
-                                            $out[] = 'state=' . $state;
-                                        }
-
-                                        echo esc_html( ! empty( $out ) ? implode( ' | ', $out ) : '-' );
-                                        ?>
-                                    </td>
+                                    <td><strong><?php echo esc_html( $acc_name ); ?></strong></td>
+                                    <td><?php echo esc_html( $acc_type ); ?></td>
+                                    <td><?php echo esc_html( $acc_role ); ?></td>
+                                    <td style="font-family: monospace; font-size: 11px; color: #666;"><?php echo esc_html( $acc_id ); ?></td>
                                 </tr>
                             <?php endforeach; ?>
                         </tbody>
@@ -214,36 +201,12 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                 <h4 style="margin: 15px 0 8px;"><?php esc_html_e( 'Ubicaciones sincronizadas', 'lealez' ); ?></h4>
 
                 <?php if ( empty( $locations ) ) : ?>
-                    <div class="notice notice-warning inline" style="margin: 0;">
+                    <div class="notice notice-warning inline" style="margin: 0 0 10px 0;">
                         <p><strong><?php esc_html_e( 'No hay ubicaciones guardadas en cache.', 'lealez' ); ?></strong></p>
-                        <p><?php esc_html_e( 'Presiona "Actualizar Ubicaciones" para traer la data.', 'lealez' ); ?></p>
+                        <p><?php esc_html_e( 'Presiona "Actualizar Ubicaciones" para cargar las ubicaciones desde Google.', 'lealez' ); ?></p>
                     </div>
                 <?php else : ?>
-
-                    <?php
-                    // Si no hay account_name en las locations (cache viejo), mostramos “sin agrupar”.
-                    $has_account_grouping = ( count( $locations_by_account ) > 1 || isset( $locations_by_account['unknown'] ) === false );
-                    ?>
-
-                    <?php if ( $has_account_grouping ) : ?>
-                        <?php foreach ( $locations_by_account as $acc_name => $acc_locations ) : ?>
-                            <div style="margin: 12px 0 6px;">
-                                <strong><?php esc_html_e( 'Cuenta:', 'lealez' ); ?></strong>
-                                <span style="font-family: monospace;"><?php echo esc_html( $acc_name ); ?></span>
-                                <span style="color:#666;">(<?php echo esc_html( count( $acc_locations ) ); ?>)</span>
-                            </div>
-
-                            <?php $this->render_locations_table( $acc_locations ); ?>
-
-                        <?php endforeach; ?>
-                    <?php else : ?>
-                        <?php $this->render_locations_table( $locations ); ?>
-                    <?php endif; ?>
-
-                    <p class="description" style="margin-top:10px;">
-                        <?php esc_html_e( 'Nota: si acabas de aplicar el cambio de readMask, debes refrescar ubicaciones para que aparezcan campos como verificación (locationState) y metadata (placeId/mapsUri).', 'lealez' ); ?>
-                    </p>
-
+                    <?php $this->render_locations_table( $business_id, $locations ); ?>
                 <?php endif; ?>
 
             </div>
@@ -251,190 +214,245 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
         }
 
         /**
-         * Render locations table
+         * Render locations table with "Ficha" column
          *
-         * @param array $locations
+         * @param int   $business_id Business post ID
+         * @param array $locations   Array of location data
          * @return void
          */
-private function render_locations_table( $locations ) {
-    ?>
-    <table class="widefat striped" style="margin-bottom: 15px;">
-        <thead>
-            <tr>
-                <th><?php esc_html_e( 'Título / Nombre', 'lealez' ); ?></th>
-                <th><?php esc_html_e( 'IDs', 'lealez' ); ?></th>
-                <th><?php esc_html_e( 'Verificación / Estado', 'lealez' ); ?></th>
-                <th><?php esc_html_e( 'Ciudad / País', 'lealez' ); ?></th>
-                <th><?php esc_html_e( 'Contacto', 'lealez' ); ?></th>
-                <th><?php esc_html_e( 'Categoría', 'lealez' ); ?></th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ( $locations as $loc ) : ?>
-                <?php
-                if ( ! is_array( $loc ) ) {
-                    continue;
-                }
+        private function render_locations_table( $business_id, $locations ) {
+            ?>
+            <table class="wp-list-table widefat fixed striped lealez-gmb-locations-table" style="margin-bottom: 20px;">
+                <thead>
+                    <tr>
+                        <th style="width: 15%;"><?php esc_html_e( 'Título', 'lealez' ); ?></th>
+                        <th style="width: 18%;"><?php esc_html_e( 'IDs (name, placeId)', 'lealez' ); ?></th>
+                        <th style="width: 12%;"><?php esc_html_e( 'Verificación', 'lealez' ); ?></th>
+                        <th style="width: 15%;"><?php esc_html_e( 'Ciudad/País', 'lealez' ); ?></th>
+                        <th style="width: 15%;"><?php esc_html_e( 'Contacto', 'lealez' ); ?></th>
+                        <th style="width: 12%;"><?php esc_html_e( 'Categoría', 'lealez' ); ?></th>
+                        <th style="width: 13%;"><?php esc_html_e( 'Ficha', 'lealez' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $locations as $loc ) :
+                        if ( ! is_array( $loc ) ) {
+                            continue;
+                        }
 
-                $title      = $loc['title'] ?? '';
-                $name       = $loc['name'] ?? ''; // resource name
-                $store_code = $loc['storeCode'] ?? '';
+                        // Extract location data
+                        $title      = $loc['title'] ?? '';
+                        $name       = $loc['name'] ?? '';
+                        $store_code = $loc['storeCode'] ?? '';
 
-                $address = isset( $loc['storefrontAddress'] ) && is_array( $loc['storefrontAddress'] ) ? $loc['storefrontAddress'] : array();
-                $city    = $address['locality'] ?? '';
-                $country = $address['regionCode'] ?? '';
+                        // Address
+                        $address = isset( $loc['storefrontAddress'] ) && is_array( $loc['storefrontAddress'] )
+                            ? $loc['storefrontAddress']
+                            : ( isset( $loc['address'] ) && is_array( $loc['address'] ) ? $loc['address'] : array() );
 
-                /**
-                 * ✅ Verificación (GBP Verifications API)
-                 *
-                 * IMPORTANTE:
-                 * - En Verifications API, verification.state NO es "VERIFIED".
-                 * - Los valores típicos son: PENDING | COMPLETED | FAILED
-                 * - COMPLETED significa verificación completada (para tu uso: verificado ✓)
-                 *
-                 * Fallback:
-                 * - locationState.isVerified (cuando venga en cache por readMask)
-                 */
-                $verification       = isset( $loc['verification'] ) && is_array( $loc['verification'] ) ? $loc['verification'] : array();
-                $verification_state = isset( $verification['state'] ) ? (string) $verification['state'] : '';
+                        $city    = $address['locality'] ?? '';
+                        $country = $address['regionCode'] ?? '';
 
-                // Etiqueta legible del estado del intento
-                $verification_state_label = '';
-                if ( $verification_state ) {
-                    $map = array(
-                        'COMPLETED'         => __( 'Completada', 'lealez' ),
-                        'PENDING'           => __( 'Pendiente', 'lealez' ),
-                        'FAILED'            => __( 'Fallida', 'lealez' ),
-                        'STATE_UNSPECIFIED' => __( 'No especificado', 'lealez' ),
-                    );
-                    $verification_state_label = isset( $map[ $verification_state ] ) ? $map[ $verification_state ] : $verification_state;
-                }
+                        // Verification
+                        $verification_state       = '';
+                        $verification_state_label = '';
+                        $is_verified              = null;
 
-                /**
-                 * ✅ Badge final "Verified"
-                 *
-                 * Reglas:
-                 * - COMPLETED => true  (✓)
-                 * - FAILED    => false (✗)
-                 * - PENDING   => null  (-)   (aún en proceso)
-                 * - Si no hay verification_state => fallback a locationState.isVerified si existe
-                 */
-                $is_verified = null;
+                        if ( isset( $loc['verificationState'] ) ) {
+                            $verification_state = (string) $loc['verificationState'];
+                            switch ( $verification_state ) {
+                                case 'VERIFIED':
+                                    $is_verified              = true;
+                                    $verification_state_label = __( 'Verificada', 'lealez' );
+                                    break;
+                                case 'UNVERIFIED':
+                                    $is_verified              = false;
+                                    $verification_state_label = __( 'No verificada', 'lealez' );
+                                    break;
+                                case 'PENDING':
+                                    $is_verified              = null;
+                                    $verification_state_label = __( 'Pendiente', 'lealez' );
+                                    break;
+                            }
+                        } elseif ( isset( $loc['locationState'] ) && is_array( $loc['locationState'] ) ) {
+                            $verification_state = $loc['locationState']['verificationState'] ?? '';
+                            if ( 'VERIFIED' === $verification_state ) {
+                                $is_verified              = true;
+                                $verification_state_label = __( 'Verificada', 'lealez' );
+                            } elseif ( 'UNVERIFIED' === $verification_state ) {
+                                $is_verified              = false;
+                                $verification_state_label = __( 'No verificada', 'lealez' );
+                            } elseif ( 'PENDING' === $verification_state ) {
+                                $is_verified = null;
+                            } else {
+                                $is_verified = null;
+                            }
+                        } else {
+                            $location_state = isset( $loc['locationState'] ) && is_array( $loc['locationState'] ) ? $loc['locationState'] : array();
+                            if ( array_key_exists( 'isVerified', $location_state ) ) {
+                                $is_verified = (bool) $location_state['isVerified'];
+                            }
+                        }
 
-                if ( $verification_state ) {
-                    if ( 'COMPLETED' === $verification_state ) {
-                        $is_verified = true;
-                    } elseif ( 'FAILED' === $verification_state ) {
-                        $is_verified = false;
-                    } elseif ( 'PENDING' === $verification_state ) {
-                        $is_verified = null;
-                    } else {
-                        $is_verified = null;
-                    }
-                } else {
-                    $location_state = isset( $loc['locationState'] ) && is_array( $loc['locationState'] ) ? $loc['locationState'] : array();
-                    if ( array_key_exists( 'isVerified', $location_state ) ) {
-                        $is_verified = (bool) $location_state['isVerified'];
-                    }
-                }
+                        $metadata   = isset( $loc['metadata'] ) && is_array( $loc['metadata'] ) ? $loc['metadata'] : array();
+                        $place_id   = $metadata['placeId'] ?? '';
+                        $maps_uri   = $metadata['mapsUri'] ?? '';
+                        $review_uri = $metadata['newReviewUri'] ?? '';
 
-                $metadata   = isset( $loc['metadata'] ) && is_array( $loc['metadata'] ) ? $loc['metadata'] : array();
-                $place_id   = $metadata['placeId'] ?? '';
-                $maps_uri   = $metadata['mapsUri'] ?? '';
-                $review_uri = $metadata['newReviewUri'] ?? '';
+                        // Contacto
+                        $phone_numbers = isset( $loc['phoneNumbers'] ) && is_array( $loc['phoneNumbers'] ) ? $loc['phoneNumbers'] : array();
+                        $primary_phone = $phone_numbers['primaryPhone'] ?? '';
+                        $website       = $loc['websiteUri'] ?? '';
 
-                // Contacto
-                $phone_numbers = isset( $loc['phoneNumbers'] ) && is_array( $loc['phoneNumbers'] ) ? $loc['phoneNumbers'] : array();
-                $primary_phone = $phone_numbers['primaryPhone'] ?? '';
-                $website       = $loc['websiteUri'] ?? '';
+                        // Categoría
+                        $primary_cat = '';
+                        if ( isset( $loc['primaryCategory'] ) && is_array( $loc['primaryCategory'] ) ) {
+                            $primary_cat = $loc['primaryCategory']['displayName'] ?? ( $loc['primaryCategory']['name'] ?? '' );
+                        } elseif ( isset( $loc['categories']['primaryCategory'] ) && is_array( $loc['categories']['primaryCategory'] ) ) {
+                            $primary_cat = $loc['categories']['primaryCategory']['displayName'] ?? ( $loc['categories']['primaryCategory']['name'] ?? '' );
+                        }
 
-                // Categoría
-                $primary_cat = '';
-                if ( isset( $loc['primaryCategory'] ) && is_array( $loc['primaryCategory'] ) ) {
-                    $primary_cat = $loc['primaryCategory']['displayName'] ?? ( $loc['primaryCategory']['name'] ?? '' );
-                } elseif ( isset( $loc['categories']['primaryCategory'] ) && is_array( $loc['categories']['primaryCategory'] ) ) {
-                    $primary_cat = $loc['categories']['primaryCategory']['displayName'] ?? ( $loc['categories']['primaryCategory']['name'] ?? '' );
-                }
-                ?>
-                <tr>
-                    <td>
-                        <strong><?php echo esc_html( $title ? $title : '-' ); ?></strong>
-                        <?php if ( $store_code ) : ?>
-                            <div style="color:#666; font-size: 12px;">
-                                <?php esc_html_e( 'StoreCode:', 'lealez' ); ?>
-                                <span style="font-family: monospace;"><?php echo esc_html( $store_code ); ?></span>
-                            </div>
-                        <?php endif; ?>
-                    </td>
-
-                    <td style="font-size: 12px;">
-                        <?php if ( $name ) : ?>
-                            <div><strong>name:</strong> <span style="font-family: monospace;"><?php echo esc_html( $name ); ?></span></div>
-                        <?php endif; ?>
-                        <?php if ( $place_id ) : ?>
-                            <div><strong>placeId:</strong> <span style="font-family: monospace;"><?php echo esc_html( $place_id ); ?></span></div>
-                        <?php endif; ?>
-                        <?php if ( ! $name && ! $place_id ) : ?>
-                            <span style="color:#999;">-</span>
-                        <?php endif; ?>
-                        <?php if ( $maps_uri ) : ?>
-                            <div><a href="<?php echo esc_url( $maps_uri ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Maps', 'lealez' ); ?></a></div>
-                        <?php endif; ?>
-                        <?php if ( $review_uri ) : ?>
-                            <div><a href="<?php echo esc_url( $review_uri ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Review Link', 'lealez' ); ?></a></div>
-                        <?php endif; ?>
-                    </td>
-
-                    <td style="font-size: 12px;">
-                        <div>
-                            <strong><?php esc_html_e( 'Verified:', 'lealez' ); ?></strong>
-                            <?php echo $this->format_bool_badge( $is_verified ); ?>
-
-                            <?php if ( $verification_state_label ) : ?>
-                                <span style="margin-left:6px; color:#666;">
-                                    (<?php echo esc_html( $verification_state_label ); ?>)
-                                    <span style="font-family: monospace; color:#999;"><?php echo esc_html( $verification_state ); ?></span>
-                                </span>
-                            <?php endif; ?>
-                        </div>
-                    </td>
-
-                    <td style="font-size: 12px;">
-                        <div><strong><?php esc_html_e( 'Ciudad:', 'lealez' ); ?></strong> <?php echo esc_html( $city ? $city : '-' ); ?></div>
-                        <div><strong><?php esc_html_e( 'País:', 'lealez' ); ?></strong> <?php echo esc_html( $country ? $country : '-' ); ?></div>
-                        <?php
-                        $addr_line = $this->format_address_compact( $address );
-                        if ( $addr_line ) :
+                        // ✅ Check if oy_location CPT exists for this GMB location
+                        $location_cpt = $this->get_location_cpt_by_gmb_name( $name );
                         ?>
-                            <div style="color:#666; margin-top: 4px;">
-                                <?php echo esc_html( $addr_line ); ?>
-                            </div>
-                        <?php endif; ?>
-                    </td>
+                        <tr>
+                            <td>
+                                <strong><?php echo esc_html( $title ? $title : '-' ); ?></strong>
+                                <?php if ( $store_code ) : ?>
+                                    <div style="color:#666; font-size: 12px;">
+                                        <?php esc_html_e( 'StoreCode:', 'lealez' ); ?>
+                                        <span style="font-family: monospace;"><?php echo esc_html( $store_code ); ?></span>
+                                    </div>
+                                <?php endif; ?>
+                            </td>
 
-                    <td style="font-size: 12px;">
-                        <div><strong><?php esc_html_e( 'Tel:', 'lealez' ); ?></strong> <?php echo esc_html( $primary_phone ? $primary_phone : '-' ); ?></div>
-                        <div><strong><?php esc_html_e( 'Web:', 'lealez' ); ?></strong>
-                            <?php if ( $website ) : ?>
-                                <a href="<?php echo esc_url( $website ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $website ); ?></a>
-                            <?php else : ?>
-                                <span style="color:#999;">-</span>
-                            <?php endif; ?>
-                        </div>
-                    </td>
+                            <td style="font-size: 12px;">
+                                <?php if ( $name ) : ?>
+                                    <div><strong>name:</strong> <span style="font-family: monospace;"><?php echo esc_html( $name ); ?></span></div>
+                                <?php endif; ?>
+                                <?php if ( $place_id ) : ?>
+                                    <div><strong>placeId:</strong> <span style="font-family: monospace;"><?php echo esc_html( $place_id ); ?></span></div>
+                                <?php endif; ?>
+                                <?php if ( ! $name && ! $place_id ) : ?>
+                                    <span style="color:#999;">-</span>
+                                <?php endif; ?>
+                                <?php if ( $maps_uri ) : ?>
+                                    <div><a href="<?php echo esc_url( $maps_uri ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Maps', 'lealez' ); ?></a></div>
+                                <?php endif; ?>
+                                <?php if ( $review_uri ) : ?>
+                                    <div><a href="<?php echo esc_url( $review_uri ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Review Link', 'lealez' ); ?></a></div>
+                                <?php endif; ?>
+                            </td>
 
-                    <td style="font-size: 12px;">
-                        <?php echo esc_html( $primary_cat ? $primary_cat : '-' ); ?>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-        </tbody>
-    </table>
-    <?php
-}
+                            <td style="font-size: 12px;">
+                                <div>
+                                    <strong><?php esc_html_e( 'Verified:', 'lealez' ); ?></strong>
+                                    <?php echo $this->format_bool_badge( $is_verified ); ?>
 
+                                    <?php if ( $verification_state_label ) : ?>
+                                        <span style="margin-left:6px; color:#666;">
+                                            (<?php echo esc_html( $verification_state_label ); ?>)
+                                            <span style="font-family: monospace; color:#999;"><?php echo esc_html( $verification_state ); ?></span>
+                                        </span>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
 
+                            <td style="font-size: 12px;">
+                                <div><strong><?php esc_html_e( 'Ciudad:', 'lealez' ); ?></strong> <?php echo esc_html( $city ? $city : '-' ); ?></div>
+                                <div><strong><?php esc_html_e( 'País:', 'lealez' ); ?></strong> <?php echo esc_html( $country ? $country : '-' ); ?></div>
+                                <?php
+                                $addr_line = $this->format_address_compact( $address );
+                                if ( $addr_line ) :
+                                ?>
+                                    <div style="color:#666; margin-top: 4px;">
+                                        <?php echo esc_html( $addr_line ); ?>
+                                    </div>
+                                <?php endif; ?>
+                            </td>
 
+                            <td style="font-size: 12px;">
+                                <div><strong><?php esc_html_e( 'Tel:', 'lealez' ); ?></strong> <?php echo esc_html( $primary_phone ? $primary_phone : '-' ); ?></div>
+                                <div><strong><?php esc_html_e( 'Web:', 'lealez' ); ?></strong>
+                                    <?php if ( $website ) : ?>
+                                        <a href="<?php echo esc_url( $website ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $website ); ?></a>
+                                    <?php else : ?>
+                                        <span style="color:#999;">-</span>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+
+                            <td style="font-size: 12px;">
+                                <?php echo esc_html( $primary_cat ? $primary_cat : '-' ); ?>
+                            </td>
+
+                            <td style="text-align: center; padding: 8px;">
+                                <?php if ( $location_cpt ) : ?>
+                                    <!-- ✅ Ficha exists -->
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <span style="display: inline-block; width: 12px; height: 12px; background-color: #46b450; border-radius: 50%;"></span>
+                                            <span style="font-size: 12px; color: #46b450; font-weight: 600;"><?php esc_html_e( 'Creado', 'lealez' ); ?></span>
+                                        </div>
+                                        <a href="<?php echo esc_url( get_edit_post_link( $location_cpt->ID ) ); ?>" class="button button-small button-secondary">
+                                            <?php esc_html_e( 'Ver', 'lealez' ); ?>
+                                        </a>
+                                    </div>
+                                <?php else : ?>
+                                    <!-- ✅ Ficha does NOT exist -->
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                                        <div style="display: flex; align-items: center; gap: 6px;">
+                                            <span style="display: inline-block; width: 12px; height: 12px; background-color: #dc3232; border-radius: 50%;"></span>
+                                            <span style="font-size: 12px; color: #dc3232; font-weight: 600;"><?php esc_html_e( 'No creado', 'lealez' ); ?></span>
+                                        </div>
+                                        <button type="button" class="button button-small button-primary lealez-create-location-from-gmb" 
+                                                data-business-id="<?php echo esc_attr( $business_id ); ?>"
+                                                data-gmb-name="<?php echo esc_attr( $name ); ?>"
+                                                data-gmb-title="<?php echo esc_attr( $title ); ?>">
+                                            <?php esc_html_e( 'Crear', 'lealez' ); ?>
+                                        </button>
+                                    </div>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php
+        }
+
+        /**
+         * Get oy_location CPT by GMB name
+         *
+         * @param string $gmb_name GMB location name (e.g., "accounts/123/locations/456")
+         * @return WP_Post|null
+         */
+        private function get_location_cpt_by_gmb_name( $gmb_name ) {
+            if ( empty( $gmb_name ) ) {
+                return null;
+            }
+
+            $args = array(
+                'post_type'      => 'oy_location',
+                'post_status'    => array( 'publish', 'draft', 'pending', 'private' ),
+                'posts_per_page' => 1,
+                'meta_query'     => array(
+                    array(
+                        'key'     => '_gmb_location_id',
+                        'value'   => $gmb_name,
+                        'compare' => '='
+                    )
+                )
+            );
+
+            $query = new WP_Query( $args );
+
+            if ( $query->have_posts() ) {
+                return $query->posts[0];
+            }
+
+            return null;
+        }
 
         /**
          * Format compact address line
