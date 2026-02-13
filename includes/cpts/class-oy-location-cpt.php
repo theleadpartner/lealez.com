@@ -99,65 +99,65 @@ public function __construct() {
 }
 
 
-    /**
-     * Register the custom post type
-     */
-    public function register_post_type() {
-        $labels = array(
-            'name'                  => _x( 'Ubicaciones', 'Post Type General Name', 'lealez' ),
-            'singular_name'         => _x( 'Ubicación', 'Post Type Singular Name', 'lealez' ),
-            'menu_name'             => __( 'Ubicaciones', 'lealez' ),
-            'name_admin_bar'        => __( 'Ubicación', 'lealez' ),
-            'archives'              => __( 'Archivo de Ubicaciones', 'lealez' ),
-            'attributes'            => __( 'Atributos de Ubicación', 'lealez' ),
-            'parent_item_colon'     => __( 'Ubicación Padre:', 'lealez' ),
-            'all_items'             => __( 'Todas las Ubicaciones', 'lealez' ),
-            'add_new_item'          => __( 'Agregar Nueva Ubicación', 'lealez' ),
-            'add_new'               => __( 'Agregar Nueva', 'lealez' ),
-            'new_item'              => __( 'Nueva Ubicación', 'lealez' ),
-            'edit_item'             => __( 'Editar Ubicación', 'lealez' ),
-            'update_item'           => __( 'Actualizar Ubicación', 'lealez' ),
-            'view_item'             => __( 'Ver Ubicación', 'lealez' ),
-            'view_items'            => __( 'Ver Ubicaciones', 'lealez' ),
-            'search_items'          => __( 'Buscar Ubicación', 'lealez' ),
-            'not_found'             => __( 'No se encontraron ubicaciones', 'lealez' ),
-            'not_found_in_trash'    => __( 'No se encontraron ubicaciones en la papelera', 'lealez' ),
-            'featured_image'        => __( 'Foto de Portada', 'lealez' ),
-            'set_featured_image'    => __( 'Establecer foto de portada', 'lealez' ),
-            'remove_featured_image' => __( 'Remover foto de portada', 'lealez' ),
-            'use_featured_image'    => __( 'Usar como foto de portada', 'lealez' ),
-            'insert_into_item'      => __( 'Insertar en ubicación', 'lealez' ),
-            'uploaded_to_this_item' => __( 'Subido a esta ubicación', 'lealez' ),
-            'items_list'            => __( 'Lista de ubicaciones', 'lealez' ),
-            'items_list_navigation' => __( 'Navegación de lista de ubicaciones', 'lealez' ),
-            'filter_items_list'     => __( 'Filtrar lista de ubicaciones', 'lealez' ),
-        );
+/**
+ * Register the custom post type
+ */
+public function register_post_type() {
+    $labels = array(
+        'name'                  => _x( 'Ubicaciones', 'Post Type General Name', 'lealez' ),
+        'singular_name'         => _x( 'Ubicación', 'Post Type Singular Name', 'lealez' ),
+        'menu_name'             => __( 'Ubicaciones', 'lealez' ),
+        'name_admin_bar'        => __( 'Ubicación', 'lealez' ),
+        'archives'              => __( 'Archivo de Ubicaciones', 'lealez' ),
+        'attributes'            => __( 'Atributos de Ubicación', 'lealez' ),
+        'parent_item_colon'     => __( 'Ubicación Padre:', 'lealez' ),
+        'all_items'             => __( 'Todas las Ubicaciones', 'lealez' ),
+        'add_new_item'          => __( 'Agregar Nueva Ubicación', 'lealez' ),
+        'add_new'               => __( 'Agregar Nueva', 'lealez' ),
+        'new_item'              => __( 'Nueva Ubicación', 'lealez' ),
+        'edit_item'             => __( 'Editar Ubicación', 'lealez' ),
+        'update_item'           => __( 'Actualizar Ubicación', 'lealez' ),
+        'view_item'             => __( 'Ver Ubicación', 'lealez' ),
+        'view_items'            => __( 'Ver Ubicaciones', 'lealez' ),
+        'search_items'          => __( 'Buscar Ubicación', 'lealez' ),
+        'not_found'             => __( 'No se encontraron ubicaciones', 'lealez' ),
+        'not_found_in_trash'    => __( 'No se encontraron ubicaciones en la papelera', 'lealez' ),
+        'featured_image'        => __( 'Foto de Portada', 'lealez' ),
+        'set_featured_image'    => __( 'Establecer foto de portada', 'lealez' ),
+        'remove_featured_image' => __( 'Remover foto de portada', 'lealez' ),
+        'use_featured_image'    => __( 'Usar como foto de portada', 'lealez' ),
+        'insert_into_item'      => __( 'Insertar en ubicación', 'lealez' ),
+        'uploaded_to_this_item' => __( 'Subido a esta ubicación', 'lealez' ),
+        'items_list'            => __( 'Lista de ubicaciones', 'lealez' ),
+        'items_list_navigation' => __( 'Navegación de lista de ubicaciones', 'lealez' ),
+        'filter_items_list'     => __( 'Filtrar lista de ubicaciones', 'lealez' ),
+    );
 
-        $args = array(
-            'label'                 => __( 'Ubicación', 'lealez' ),
-            'description'           => __( 'Ubicaciones físicas del negocio / sucursales', 'lealez' ),
-            'labels'                => $labels,
-            'supports'              => array( 'title', 'editor', 'thumbnail', 'author' ),
-            'hierarchical'          => false,
-            'public'                => true,
-            'show_ui'               => true,
-            'show_in_menu'          => false,
-            'menu_position'         => 21,
-            'menu_icon'             => 'dashicons-location',
-            'show_in_admin_bar'     => true,
-            'show_in_nav_menus'     => true,
-            'can_export'            => true,
-            'has_archive'           => true,
-            'exclude_from_search'   => false,
-            'publicly_queryable'    => true,
-            'capability_type'       => 'post',
-            'show_in_rest'          => false,
-            'rest_base'             => 'locations',
-            'rest_controller_class' => 'WP_REST_Posts_Controller',
-        );
+    $args = array(
+        'label'                 => __( 'Ubicación', 'lealez' ),
+        'description'           => __( 'Ubicaciones físicas del negocio / sucursales', 'lealez' ),
+        'labels'                => $labels,
+        'supports'              => array( 'title', 'thumbnail', 'author' ),
+        'hierarchical'          => false,
+        'public'                => true,
+        'show_ui'               => true,
+        'show_in_menu'          => false,
+        'menu_position'         => 21,
+        'menu_icon'             => 'dashicons-location',
+        'show_in_admin_bar'     => true,
+        'show_in_nav_menus'     => true,
+        'can_export'            => true,
+        'has_archive'           => true,
+        'exclude_from_search'   => false,
+        'publicly_queryable'    => true,
+        'capability_type'       => 'post',
+        'show_in_rest'          => false,
+        'rest_base'             => 'locations',
+        'rest_controller_class' => 'WP_REST_Posts_Controller',
+    );
 
-        register_post_type( $this->post_type, $args );
-    }
+    register_post_type( $this->post_type, $args );
+}
 
     /**
      * Add meta boxes
