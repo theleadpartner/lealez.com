@@ -38,68 +38,68 @@ class OY_Loyalty_Program_CPT {
         add_filter( 'manage_edit-' . self::POST_TYPE . '_sortable_columns', array( $this, 'set_sortable_columns' ) );
     }
 
-    /**
-     * Register the Loyalty Program custom post type
-     */
-    public function register_post_type() {
-        $labels = array(
-            'name'                  => _x( 'Programas de Lealtad', 'Post Type General Name', 'lealez' ),
-            'singular_name'         => _x( 'Programa de Lealtad', 'Post Type Singular Name', 'lealez' ),
-            'menu_name'             => __( 'Programas de Lealtad', 'lealez' ),
-            'name_admin_bar'        => __( 'Programa de Lealtad', 'lealez' ),
-            'archives'              => __( 'Archivos de Programas', 'lealez' ),
-            'attributes'            => __( 'Atributos del Programa', 'lealez' ),
-            'parent_item_colon'     => __( 'Programa Padre:', 'lealez' ),
-            'all_items'             => __( 'Todos los Programas', 'lealez' ),
-            'add_new_item'          => __( 'Agregar Nuevo Programa', 'lealez' ),
-            'add_new'               => __( 'Agregar Nuevo', 'lealez' ),
-            'new_item'              => __( 'Nuevo Programa', 'lealez' ),
-            'edit_item'             => __( 'Editar Programa', 'lealez' ),
-            'update_item'           => __( 'Actualizar Programa', 'lealez' ),
-            'view_item'             => __( 'Ver Programa', 'lealez' ),
-            'view_items'            => __( 'Ver Programas', 'lealez' ),
-            'search_items'          => __( 'Buscar Programa', 'lealez' ),
-            'not_found'             => __( 'No encontrado', 'lealez' ),
-            'not_found_in_trash'    => __( 'No encontrado en la papelera', 'lealez' ),
-            'featured_image'        => __( 'Imagen destacada', 'lealez' ),
-            'set_featured_image'    => __( 'Establecer imagen destacada', 'lealez' ),
-            'remove_featured_image' => __( 'Remover imagen destacada', 'lealez' ),
-            'use_featured_image'    => __( 'Usar como imagen destacada', 'lealez' ),
-            'insert_into_item'      => __( 'Insertar en programa', 'lealez' ),
-            'uploaded_to_this_item' => __( 'Subido a este programa', 'lealez' ),
-            'items_list'            => __( 'Lista de programas', 'lealez' ),
-            'items_list_navigation' => __( 'Navegación de lista de programas', 'lealez' ),
-            'filter_items_list'     => __( 'Filtrar lista de programas', 'lealez' ),
-        );
+/**
+ * Register the Loyalty Program custom post type
+ */
+public function register_post_type() {
+    $labels = array(
+        'name'                  => _x( 'Programas de Lealtad', 'Post Type General Name', 'lealez' ),
+        'singular_name'         => _x( 'Programa de Lealtad', 'Post Type Singular Name', 'lealez' ),
+        'menu_name'             => __( 'Programas de Lealtad', 'lealez' ),
+        'name_admin_bar'        => __( 'Programa de Lealtad', 'lealez' ),
+        'archives'              => __( 'Archivos de Programas', 'lealez' ),
+        'attributes'            => __( 'Atributos del Programa', 'lealez' ),
+        'parent_item_colon'     => __( 'Programa Padre:', 'lealez' ),
+        'all_items'             => __( 'Todos los Programas', 'lealez' ),
+        'add_new_item'          => __( 'Agregar Nuevo Programa', 'lealez' ),
+        'add_new'               => __( 'Agregar Nuevo', 'lealez' ),
+        'new_item'              => __( 'Nuevo Programa', 'lealez' ),
+        'edit_item'             => __( 'Editar Programa', 'lealez' ),
+        'update_item'           => __( 'Actualizar Programa', 'lealez' ),
+        'view_item'             => __( 'Ver Programa', 'lealez' ),
+        'view_items'            => __( 'Ver Programas', 'lealez' ),
+        'search_items'          => __( 'Buscar Programa', 'lealez' ),
+        'not_found'             => __( 'No encontrado', 'lealez' ),
+        'not_found_in_trash'    => __( 'No encontrado en la papelera', 'lealez' ),
+        'featured_image'        => __( 'Imagen destacada', 'lealez' ),
+        'set_featured_image'    => __( 'Establecer imagen destacada', 'lealez' ),
+        'remove_featured_image' => __( 'Remover imagen destacada', 'lealez' ),
+        'use_featured_image'    => __( 'Usar como imagen destacada', 'lealez' ),
+        'insert_into_item'      => __( 'Insertar en programa', 'lealez' ),
+        'uploaded_to_this_item' => __( 'Subido a este programa', 'lealez' ),
+        'items_list'            => __( 'Lista de programas', 'lealez' ),
+        'items_list_navigation' => __( 'Navegación de lista de programas', 'lealez' ),
+        'filter_items_list'     => __( 'Filtrar lista de programas', 'lealez' ),
+    );
 
-        $args = array(
-            'label'               => __( 'Programa de Lealtad', 'lealez' ),
-            'description'         => __( 'Gestión de Programas de Lealtad', 'lealez' ),
-            'labels'              => $labels,
-            'supports'            => array( 'title', 'editor', 'thumbnail', 'author' ),
-            'hierarchical'        => false,
-            'public'              => true,
-            'show_ui'             => true,
-            'show_in_menu'        => false,
-            'menu_position'       => 25,
-            'menu_icon'           => 'dashicons-awards',
-            'show_in_admin_bar'   => true,
-            'show_in_nav_menus'   => true,
-            'can_export'          => true,
-            'has_archive'         => true,
-            'exclude_from_search' => false,
-            'publicly_queryable'  => true,
-            'capability_type'     => 'post',
-            'show_in_rest'        => false,
-            'rest_base'           => 'loyalty-programs',
-            'rewrite'             => array(
-                'slug'       => 'loyalty-program',
-                'with_front' => false,
-            ),
-        );
+    $args = array(
+        'label'               => __( 'Programa de Lealtad', 'lealez' ),
+        'description'         => __( 'Gestión de Programas de Lealtad', 'lealez' ),
+        'labels'              => $labels,
+        'supports'            => array( 'title', 'thumbnail', 'author' ),
+        'hierarchical'        => false,
+        'public'              => true,
+        'show_ui'             => true,
+        'show_in_menu'        => false,
+        'menu_position'       => 25,
+        'menu_icon'           => 'dashicons-awards',
+        'show_in_admin_bar'   => true,
+        'show_in_nav_menus'   => true,
+        'can_export'          => true,
+        'has_archive'         => true,
+        'exclude_from_search' => false,
+        'publicly_queryable'  => true,
+        'capability_type'     => 'post',
+        'show_in_rest'        => false,
+        'rest_base'           => 'loyalty-programs',
+        'rewrite'             => array(
+            'slug'       => 'loyalty-program',
+            'with_front' => false,
+        ),
+    );
 
-        register_post_type( self::POST_TYPE, $args );
-    }
+    register_post_type( self::POST_TYPE, $args );
+}
 
     /**
      * Add meta boxes
