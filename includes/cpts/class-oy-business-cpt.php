@@ -45,56 +45,56 @@ class Lealez_Business_CPT {
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_scripts' ) );
     }
 
-    /**
-     * Register the Business CPT
-     */
-    public function register_post_type() {
-        $labels = array(
-            'name'                  => _x( 'Empresas', 'Post type general name', 'lealez' ),
-            'singular_name'         => _x( 'Empresa', 'Post type singular name', 'lealez' ),
-            'menu_name'             => _x( 'Empresas', 'Admin Menu text', 'lealez' ),
-            'name_admin_bar'        => _x( 'Empresa', 'Add New on Toolbar', 'lealez' ),
-            'add_new'               => __( 'Agregar Nueva', 'lealez' ),
-            'add_new_item'          => __( 'Agregar Nueva Empresa', 'lealez' ),
-            'new_item'              => __( 'Nueva Empresa', 'lealez' ),
-            'edit_item'             => __( 'Editar Empresa', 'lealez' ),
-            'view_item'             => __( 'Ver Empresa', 'lealez' ),
-            'all_items'             => __( 'Todas las Empresas', 'lealez' ),
-            'search_items'          => __( 'Buscar Empresas', 'lealez' ),
-            'parent_item_colon'     => __( 'Empresa Padre:', 'lealez' ),
-            'not_found'             => __( 'No se encontraron empresas.', 'lealez' ),
-            'not_found_in_trash'    => __( 'No se encontraron empresas en la papelera.', 'lealez' ),
-            'featured_image'        => _x( 'Logo de la Empresa', 'Overrides the "Featured Image" phrase', 'lealez' ),
-            'set_featured_image'    => _x( 'Establecer logo', 'Overrides the "Set featured image" phrase', 'lealez' ),
-            'remove_featured_image' => _x( 'Eliminar logo', 'Overrides the "Remove featured image" phrase', 'lealez' ),
-            'use_featured_image'    => _x( 'Usar como logo', 'Overrides the "Use as featured image" phrase', 'lealez' ),
-            'archives'              => _x( 'Archivo de Empresas', 'The post type archive label', 'lealez' ),
-            'insert_into_item'      => _x( 'Insertar en empresa', 'Overrides the "Insert into post" phrase', 'lealez' ),
-            'uploaded_to_this_item' => _x( 'Subido a esta empresa', 'Overrides the "Uploaded to this post" phrase', 'lealez' ),
-            'filter_items_list'     => _x( 'Filtrar lista de empresas', 'Screen reader text for the filter links', 'lealez' ),
-            'items_list_navigation' => _x( 'Navegación de lista de empresas', 'Screen reader text for the pagination', 'lealez' ),
-            'items_list'            => _x( 'Lista de empresas', 'Screen reader text for the items list', 'lealez' ),
-        );
+/**
+ * Register the Business CPT
+ */
+public function register_post_type() {
+    $labels = array(
+        'name'                  => _x( 'Empresas', 'Post type general name', 'lealez' ),
+        'singular_name'         => _x( 'Empresa', 'Post type singular name', 'lealez' ),
+        'menu_name'             => _x( 'Empresas', 'Admin Menu text', 'lealez' ),
+        'name_admin_bar'        => _x( 'Empresa', 'Add New on Toolbar', 'lealez' ),
+        'add_new'               => __( 'Agregar Nueva', 'lealez' ),
+        'add_new_item'          => __( 'Agregar Nueva Empresa', 'lealez' ),
+        'new_item'              => __( 'Nueva Empresa', 'lealez' ),
+        'edit_item'             => __( 'Editar Empresa', 'lealez' ),
+        'view_item'             => __( 'Ver Empresa', 'lealez' ),
+        'all_items'             => __( 'Todas las Empresas', 'lealez' ),
+        'search_items'          => __( 'Buscar Empresas', 'lealez' ),
+        'parent_item_colon'     => __( 'Empresa Padre:', 'lealez' ),
+        'not_found'             => __( 'No se encontraron empresas.', 'lealez' ),
+        'not_found_in_trash'    => __( 'No se encontraron empresas en la papelera.', 'lealez' ),
+        'featured_image'        => _x( 'Logo de la Empresa', 'Overrides the "Featured Image" phrase', 'lealez' ),
+        'set_featured_image'    => _x( 'Establecer logo', 'Overrides the "Set featured image" phrase', 'lealez' ),
+        'remove_featured_image' => _x( 'Eliminar logo', 'Overrides the "Remove featured image" phrase', 'lealez' ),
+        'use_featured_image'    => _x( 'Usar como logo', 'Overrides the "Use as featured image" phrase', 'lealez' ),
+        'archives'              => _x( 'Archivo de Empresas', 'The post type archive label', 'lealez' ),
+        'insert_into_item'      => _x( 'Insertar en empresa', 'Overrides the "Insert into post" phrase', 'lealez' ),
+        'uploaded_to_this_item' => _x( 'Subido a esta empresa', 'Overrides the "Uploaded to this post" phrase', 'lealez' ),
+        'filter_items_list'     => _x( 'Filtrar lista de empresas', 'Screen reader text for the filter links', 'lealez' ),
+        'items_list_navigation' => _x( 'Navegación de lista de empresas', 'Screen reader text for the pagination', 'lealez' ),
+        'items_list'            => _x( 'Lista de empresas', 'Screen reader text for the items list', 'lealez' ),
+    );
 
-        $args = array(
-            'labels'             => $labels,
-            'public'             => false,
-            'publicly_queryable' => false,
-            'show_ui'            => true,
-            'show_in_menu'       => false,
-            'menu_position'      => 20,
-            'menu_icon'          => 'dashicons-building',
-            'query_var'          => true,
-            'rewrite'            => array( 'slug' => 'business' ),
-            'capability_type'    => 'post',
-            'has_archive'        => false,
-            'hierarchical'       => false,
-            'supports'           => array( 'title', 'editor', 'thumbnail', 'author' ),
-            'show_in_rest'       => false,
-        );
+    $args = array(
+        'labels'             => $labels,
+        'public'             => false,
+        'publicly_queryable' => false,
+        'show_ui'            => true,
+        'show_in_menu'       => false,
+        'menu_position'      => 20,
+        'menu_icon'          => 'dashicons-building',
+        'query_var'          => true,
+        'rewrite'            => array( 'slug' => 'business' ),
+        'capability_type'    => 'post',
+        'has_archive'        => false,
+        'hierarchical'       => false,
+        'supports'           => array( 'title', 'thumbnail', 'author' ),
+        'show_in_rest'       => false,
+    );
 
-        register_post_type( $this->post_type, $args );
-    }
+    register_post_type( $this->post_type, $args );
+}
 
     /**
      * Enqueue admin scripts
