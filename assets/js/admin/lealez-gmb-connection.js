@@ -64,6 +64,7 @@
             $(document).on('click', '.lealez-disconnect-gmb', this.disconnectGMB.bind(this));
             $(document).on('click', '.lealez-refresh-gmb-locations', this.refreshLocations.bind(this));
             $(document).on('click', '.lealez-test-gmb-connection', this.testConnection.bind(this));
+            $(document).on('click', '.lealez-create-location-from-gmb', this.createLocationFromGMB.bind(this));
         },
 
         /**
@@ -304,6 +305,72 @@ refreshLocations: function(e) {
 
                     alert(msg);
                     this.setButtonLoading($button, false, '', this.t('testBtn', 'Probar Conexión'));
+                }
+            });
+        },
+
+        /**
+         * Create oy_location CPT from GMB location
+         */
+        createLocationFromGMB: function(e) {
+            e.preventDefault();
+
+            if (!this.ensureData()) return;
+
+            const $button = $(e.currentTarget);
+            const businessId = $button.data('business-id');
+            const gmbName = $button.data('gmb-name');
+            const gmbTitle = $button.data('gmb-title');
+
+            if (!businessId || !gmbName) {
+                alert(this.t('error', 'Error: Datos incompletos'));
+                return;
+            }
+
+            const confirmMsg = this.t('confirmCreate', '¿Crear ficha de ubicación para "' + gmbTitle + '"?');
+            if (!confirm(confirmMsg)) {
+                return;
+            }
+
+            this.setButtonLoading($button, true, this.t('creating', 'Creando...'), this.t('createBtn', 'Crear'));
+
+            $.ajax({
+                url: lealezGMBData.ajaxUrl,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'lealez_gmb_create_location_from_gmb',
+                    nonce: lealezGMBData.nonce,
+                    business_id: businessId,
+                    gmb_name: gmbName
+                },
+                success: (response) => {
+                    if (response && response.success && response.data && response.data.edit_url) {
+                        const msg = response.data.message || this.t('success', 'Ubicación creada exitosamente');
+                        
+                        // Show success message
+                        alert('✓ ' + msg);
+                        
+                        // Redirect to edit screen
+                        window.location.href = response.data.edit_url;
+                    } else {
+                        const msg = (response && response.data && response.data.message)
+                            ? response.data.message
+                            : this.t('error', 'Error al crear la ubicación');
+
+                        alert('✗ ' + msg);
+                        this.setButtonLoading($button, false, '', this.t('createBtn', 'Crear'));
+                    }
+                },
+                error: (xhr) => {
+                    let msg = this.t('error', 'Error al crear la ubicación');
+                    try {
+                        const r = xhr.responseJSON;
+                        if (r && r.data && r.data.message) msg = r.data.message;
+                    } catch (e) {}
+
+                    alert('✗ ' + msg);
+                    this.setButtonLoading($button, false, '', this.t('createBtn', 'Crear'));
                 }
             });
         }
