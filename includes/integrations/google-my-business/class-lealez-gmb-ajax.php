@@ -29,6 +29,7 @@ class Lealez_GMB_Ajax {
         add_action( 'wp_ajax_lealez_gmb_refresh_locations', array( $this, 'refresh_locations' ) );
         add_action( 'wp_ajax_lealez_gmb_test_connection', array( $this, 'test_connection' ) );
         add_action( 'wp_ajax_lealez_gmb_clear_logs', array( $this, 'clear_logs' ) );
+        add_action( 'wp_ajax_lealez_gmb_create_location_from_gmb', array( $this, 'create_location_from_gmb' ) );
 
         // OAuth callback page
         add_action( 'admin_menu', array( $this, 'register_callback_page' ) );
@@ -505,6 +506,257 @@ public function handle_oauth_callback() {
         </body>
         </html>
         <?php
+    }
+
+    /**
+     * Create oy_location CPT from GMB location data
+     *
+     * AJAX endpoint: creates a draft oy_location post and syncs data from GMB cache
+     */
+    public function create_location_from_gmb() {
+        check_ajax_referer( 'lealez_gmb_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Insufficient permissions', 'lealez' ) ) );
+        }
+
+        $business_id = absint( $_POST['business_id'] ?? 0 );
+        $gmb_name    = sanitize_text_field( $_POST['gmb_name'] ?? '' );
+
+        if ( ! $business_id || ! $gmb_name ) {
+            wp_send_json_error( array( 'message' => __( 'Invalid parameters', 'lealez' ) ) );
+        }
+
+        // ✅ Check if location already exists
+        $existing = $this->get_location_by_gmb_name( $gmb_name );
+        if ( $existing ) {
+            wp_send_json_success( array(
+                'message'     => __( 'Esta ubicación ya tiene una ficha creada. Redirigiendo...', 'lealez' ),
+                'location_id' => $existing->ID,
+                'edit_url'    => get_edit_post_link( $existing->ID, 'raw' )
+            ) );
+        }
+
+        // ✅ Get GMB location data from cache
+        $locations = get_post_meta( $business_id, '_gmb_locations_available', true );
+        if ( ! is_array( $locations ) || empty( $locations ) ) {
+            wp_send_json_error( array( 'message' => __( 'No se encontraron ubicaciones en cache. Actualiza las ubicaciones primero.', 'lealez' ) ) );
+        }
+
+        // Find the specific location
+        $location_data = null;
+        foreach ( $locations as $loc ) {
+            if ( isset( $loc['name'] ) && $loc['name'] === $gmb_name ) {
+                $location_data = $loc;
+                break;
+            }
+        }
+
+        if ( ! $location_data ) {
+            wp_send_json_error( array( 'message' => __( 'No se encontró la ubicación especificada en cache.', 'lealez' ) ) );
+        }
+
+        // ✅ Create oy_location post
+        $title = $location_data['title'] ?? __( 'Ubicación sin título', 'lealez' );
+
+        $location_id = wp_insert_post( array(
+            'post_type'   => 'oy_location',
+            'post_title'  => $title,
+            'post_status' => 'draft', // ✅ Save as draft until user publishes
+            'post_author' => get_current_user_id(),
+        ), true );
+
+        if ( is_wp_error( $location_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Error al crear la ubicación: ', 'lealez' ) . $location_id->get_error_message() ) );
+        }
+
+        // ✅ Sync data from GMB to oy_location meta fields
+        $this->sync_gmb_data_to_location( $location_id, $business_id, $location_data );
+
+        // ✅ Log creation
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'Location CPT created from GMB: %s (ID: %d)', $title, $location_id )
+            );
+        }
+
+        wp_send_json_success( array(
+            'message'     => __( 'Ubicación creada exitosamente. Redirigiendo...', 'lealez' ),
+            'location_id' => $location_id,
+            'edit_url'    => get_edit_post_link( $location_id, 'raw' )
+        ) );
+    }
+
+    /**
+     * Get oy_location by GMB name
+     *
+     * @param string $gmb_name
+     * @return WP_Post|null
+     */
+    private function get_location_by_gmb_name( $gmb_name ) {
+        $args = array(
+            'post_type'      => 'oy_location',
+            'post_status'    => array( 'publish', 'draft', 'pending', 'private' ),
+            'posts_per_page' => 1,
+            'meta_query'     => array(
+                array(
+                    'key'     => '_gmb_location_id',
+                    'value'   => $gmb_name,
+                    'compare' => '='
+                )
+            )
+        );
+
+        $query = new WP_Query( $args );
+        return $query->have_posts() ? $query->posts[0] : null;
+    }
+
+    /**
+     * Sync GMB data to oy_location meta fields
+     *
+     * @param int   $location_id   oy_location post ID
+     * @param int   $business_id   oy_business post ID
+     * @param array $location_data GMB location data array
+     */
+    private function sync_gmb_data_to_location( $location_id, $business_id, $location_data ) {
+        // ===== RELACIÓN =====
+        update_post_meta( $location_id, 'parent_business_id', $business_id );
+
+        // ===== BÁSICOS =====
+        update_post_meta( $location_id, 'location_name', $location_data['title'] ?? '' );
+        update_post_meta( $location_id, 'location_code', $location_data['storeCode'] ?? '' );
+        update_post_meta( $location_id, 'location_description', $location_data['profile']['description'] ?? '' );
+
+        // ===== GMB INTEGRATION =====
+        update_post_meta( $location_id, '_gmb_location_id', $location_data['name'] ?? '' );
+        update_post_meta( $location_id, '_gmb_account_id', $location_data['account_id'] ?? '' );
+
+        // ===== VERIFICATION =====
+        $verification_state = $location_data['verificationState'] ?? '';
+        if ( $verification_state ) {
+            update_post_meta( $location_id, '_gmb_verified', ( $verification_state === 'VERIFIED' ) );
+            update_post_meta( $location_id, '_gmb_verification_method', $verification_state );
+        }
+
+        // ===== ADDRESS =====
+        $address = $location_data['storefrontAddress'] ?? ( $location_data['address'] ?? array() );
+        if ( is_array( $address ) && ! empty( $address ) ) {
+            // Address lines
+            if ( isset( $address['addressLines'] ) && is_array( $address['addressLines'] ) ) {
+                update_post_meta( $location_id, 'location_address_line1', $address['addressLines'][0] ?? '' );
+                update_post_meta( $location_id, 'location_address_line2', $address['addressLines'][1] ?? '' );
+            }
+
+            // City, state, country, postal
+            update_post_meta( $location_id, 'location_city', $address['locality'] ?? '' );
+            update_post_meta( $location_id, 'location_state', $address['administrativeArea'] ?? '' );
+            update_post_meta( $location_id, 'location_country', $address['regionCode'] ?? '' );
+            update_post_meta( $location_id, 'location_postal_code', $address['postalCode'] ?? '' );
+            update_post_meta( $location_id, 'location_neighborhood', $address['sublocality'] ?? '' );
+
+            // Formatted address
+            $formatted_parts = array();
+            if ( ! empty( $address['addressLines'] ) ) {
+                $formatted_parts[] = implode( ', ', $address['addressLines'] );
+            }
+            if ( ! empty( $address['locality'] ) ) {
+                $formatted_parts[] = $address['locality'];
+            }
+            if ( ! empty( $address['administrativeArea'] ) ) {
+                $formatted_parts[] = $address['administrativeArea'];
+            }
+            if ( ! empty( $address['postalCode'] ) ) {
+                $formatted_parts[] = $address['postalCode'];
+            }
+            if ( ! empty( $address['regionCode'] ) ) {
+                $formatted_parts[] = $address['regionCode'];
+            }
+            update_post_meta( $location_id, 'location_formatted_address', implode( ', ', $formatted_parts ) );
+        }
+
+        // ===== COORDINATES =====
+        if ( isset( $location_data['latlng'] ) && is_array( $location_data['latlng'] ) ) {
+            $lat = $location_data['latlng']['latitude'] ?? null;
+            $lng = $location_data['latlng']['longitude'] ?? null;
+
+            if ( $lat && $lng ) {
+                update_post_meta( $location_id, 'location_latitude', $lat );
+                update_post_meta( $location_id, 'location_longitude', $lng );
+                update_post_meta( $location_id, 'location_coordinates', json_encode( array( 'lat' => $lat, 'lng' => $lng ) ) );
+            }
+        }
+
+        // ===== METADATA =====
+        $metadata = $location_data['metadata'] ?? array();
+        if ( is_array( $metadata ) ) {
+            update_post_meta( $location_id, 'location_place_id', $metadata['placeId'] ?? '' );
+            update_post_meta( $location_id, 'location_map_url', $metadata['mapsUri'] ?? '' );
+            update_post_meta( $location_id, 'google_reviews_url', $metadata['newReviewUri'] ?? '' );
+        }
+
+        // ===== CONTACT =====
+        $phone_numbers = $location_data['phoneNumbers'] ?? array();
+        if ( is_array( $phone_numbers ) ) {
+            update_post_meta( $location_id, 'location_phone', $phone_numbers['primaryPhone'] ?? '' );
+            update_post_meta( $location_id, 'location_phone_additional', $phone_numbers['additionalPhones'][0] ?? '' );
+        }
+        update_post_meta( $location_id, 'location_website', $location_data['websiteUri'] ?? '' );
+
+        // ===== CATEGORY =====
+        if ( isset( $location_data['primaryCategory'] ) && is_array( $location_data['primaryCategory'] ) ) {
+            $primary_cat = $location_data['primaryCategory']['displayName'] ?? ( $location_data['primaryCategory']['name'] ?? '' );
+            update_post_meta( $location_id, 'google_primary_category', $primary_cat );
+        }
+
+        // ===== HOURS (if available) =====
+        if ( isset( $location_data['regularHours'] ) && is_array( $location_data['regularHours'] ) ) {
+            $this->sync_hours_from_gmb( $location_id, $location_data['regularHours'] );
+        }
+
+        // ===== STATUS =====
+        update_post_meta( $location_id, 'location_status', 'active' );
+        update_post_meta( $location_id, 'date_created', current_time( 'mysql' ) );
+    }
+
+    /**
+     * Sync hours from GMB to location meta
+     *
+     * @param int   $location_id
+     * @param array $regular_hours GMB regularHours data
+     */
+    private function sync_hours_from_gmb( $location_id, $regular_hours ) {
+        if ( ! isset( $regular_hours['periods'] ) || ! is_array( $regular_hours['periods'] ) ) {
+            return;
+        }
+
+        $days_map = array(
+            'MONDAY'    => 'monday',
+            'TUESDAY'   => 'tuesday',
+            'WEDNESDAY' => 'wednesday',
+            'THURSDAY'  => 'thursday',
+            'FRIDAY'    => 'friday',
+            'SATURDAY'  => 'saturday',
+            'SUNDAY'    => 'sunday',
+        );
+
+        foreach ( $regular_hours['periods'] as $period ) {
+            $open_day = $period['openDay'] ?? '';
+            $open_time = $period['openTime'] ?? '';
+            $close_day = $period['closeDay'] ?? '';
+            $close_time = $period['closeTime'] ?? '';
+
+            if ( isset( $days_map[ $open_day ] ) ) {
+                $day_key = $days_map[ $open_day ];
+                $hours_data = array(
+                    'open'   => $open_time,
+                    'close'  => $close_time,
+                    'closed' => false
+                );
+                update_post_meta( $location_id, 'location_hours_' . $day_key, json_encode( $hours_data ) );
+            }
+        }
     }
 }
 
