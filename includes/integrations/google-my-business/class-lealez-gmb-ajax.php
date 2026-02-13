@@ -602,7 +602,7 @@ public function handle_oauth_callback() {
             'posts_per_page' => 1,
             'meta_query'     => array(
                 array(
-                    'key'     => '_gmb_location_id',
+                    'key'     => 'gmb_location_name',
                     'value'   => $gmb_name,
                     'compare' => '='
                 )
@@ -630,14 +630,14 @@ public function handle_oauth_callback() {
         update_post_meta( $location_id, 'location_description', $location_data['profile']['description'] ?? '' );
 
         // ===== GMB INTEGRATION =====
-        update_post_meta( $location_id, '_gmb_location_id', $location_data['name'] ?? '' );
-        update_post_meta( $location_id, '_gmb_account_id', $location_data['account_id'] ?? '' );
+        update_post_meta( $location_id, 'gmb_location_name', $location_data['name'] ?? '' );
+        update_post_meta( $location_id, 'gmb_account_id', $location_data['account_id'] ?? '' );
 
         // ===== VERIFICATION =====
         $verification_state = $location_data['verificationState'] ?? '';
         if ( $verification_state ) {
-            update_post_meta( $location_id, '_gmb_verified', ( $verification_state === 'VERIFIED' ) );
-            update_post_meta( $location_id, '_gmb_verification_method', $verification_state );
+            update_post_meta( $location_id, 'gmb_verified', ( $verification_state === 'VERIFIED' ) );
+            update_post_meta( $location_id, 'gmb_verification_method', $verification_state );
         }
 
         // ===== ADDRESS =====
