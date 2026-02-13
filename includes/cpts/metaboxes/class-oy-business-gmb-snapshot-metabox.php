@@ -438,7 +438,7 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                 'posts_per_page' => 1,
                 'meta_query'     => array(
                     array(
-                        'key'     => '_gmb_location_id',
+                        'key'     => 'gmb_location_name',
                         'value'   => $gmb_name,
                         'compare' => '='
                     )
