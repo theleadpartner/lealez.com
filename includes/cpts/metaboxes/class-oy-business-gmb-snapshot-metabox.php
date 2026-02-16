@@ -24,10 +24,7 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
          * Constructor
          */
         public function __construct() {
-            // ✅ CORRECCIÓN 1: Cambiar 'add_metabox' por 'register_metabox'
             add_action('add_meta_boxes', array($this, 'register_metabox'));
-            
-            // ✅ CORRECCIÓN 2: Agregar método enqueue_scripts
             add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
             
             // Registrar manejador AJAX para crear ubicación
@@ -259,6 +256,7 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
 
         /**
          * Manejador AJAX para crear un CPT oy_location desde datos de GMB
+         * ✅ CORRECCIÓN COMPLETA: Todos los meta fields SIN prefijo _ (excepto los de oy_business)
          */
         public function ajax_create_location_from_gmb() {
             // Verificar nonce
@@ -289,7 +287,7 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                 ));
             }
             
-            // ✅ CORRECCIÓN 3: Agregar prefijo _ al meta field
+            // ✅ Meta fields de oy_business SÍ llevan prefijo _
             $gmb_locations = get_post_meta($business_id, '_gmb_locations_available', true);
             if (empty($gmb_locations) || !is_array($gmb_locations)) {
                 wp_send_json_error(array(
@@ -308,27 +306,18 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
             
             if (!$gmb_location) {
                 wp_send_json_error(array(
-                    'message' => 'Ubicación no encontrada.'
+                    'message' => 'Ubicación no encontrada en los datos de GMB.'
                 ));
             }
             
-            // Verificar que no exista ya una ubicación con este gmb_location_name
-            $existing_locations = get_posts(array(
-                'post_type' => 'oy_location',
-                'posts_per_page' => 1,
-                'meta_query' => array(
-                    array(
-                        'key' => '_gmb_location_name',
-                        'value' => $gmb_name,
-                        'compare' => '='
-                    )
-                )
-            ));
+            // ✅ VERIFICACIÓN MEJORADA: Buscar si ya existe usando múltiples criterios
+            $existing_location = $this->find_existing_location_cpt($business_id, $gmb_name, $gmb_location);
             
-            if (!empty($existing_locations)) {
+            if ($existing_location) {
                 wp_send_json_error(array(
-                    'message' => 'Ya existe una ubicación con este ID de GMB.',
-                    'location_id' => $existing_locations[0]->ID
+                    'message' => 'Ya existe una ubicación con estos datos de GMB.',
+                    'location_id' => $existing_location->ID,
+                    'edit_url' => get_edit_post_link($existing_location->ID, 'raw')
                 ));
             }
             
@@ -350,111 +339,232 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                 ));
             }
             
-            // Popular meta fields básicos desde GMB
-            update_post_meta($location_id, '_parent_business_id', $business_id);
-            update_post_meta($location_id, '_location_name', sanitize_text_field($location_title));
-            update_post_meta($location_id, '_gmb_location_name', sanitize_text_field($gmb_name));
+            // ✅ CORRECCIÓN CRÍTICA: Meta fields de oy_location NO llevan prefijo _
+            // (excepto campos de sistema como _date_created que se agregan al final)
+            
+            // Campos básicos
+            update_post_meta($location_id, 'parent_business_id', $business_id);
+            update_post_meta($location_id, 'location_name', sanitize_text_field($location_title));
+            update_post_meta($location_id, 'location_status', 'active');
+            
+            // GMB identification fields
+            update_post_meta($location_id, 'gmb_location_name', sanitize_text_field($gmb_name));
             
             // Extraer y guardar el location_id desde el campo 'name' (formato: accounts/XXX/locations/YYY)
             if (preg_match('/locations\/([^\/]+)$/', $gmb_name, $matches)) {
-                update_post_meta($location_id, '_gmb_location_id', sanitize_text_field($matches[1]));
+                update_post_meta($location_id, 'gmb_location_id', sanitize_text_field($matches[1]));
             }
             
             // Extraer y guardar el account_id
             if (isset($gmb_location['account_id'])) {
-                update_post_meta($location_id, '_gmb_account_id', sanitize_text_field($gmb_location['account_id']));
+                update_post_meta($location_id, 'gmb_account_id', sanitize_text_field($gmb_location['account_id']));
             } elseif (preg_match('/accounts\/([^\/]+)\//', $gmb_name, $matches)) {
-                update_post_meta($location_id, '_gmb_account_id', sanitize_text_field($matches[1]));
+                update_post_meta($location_id, 'gmb_account_id', sanitize_text_field($matches[1]));
             }
             
-            // Popular dirección si está disponible
+            // ✅ Popular dirección si está disponible
             if (!empty($gmb_location['storefrontAddress'])) {
                 $address = $gmb_location['storefrontAddress'];
                 if (is_array($address)) {
+                    // Guardar dirección formateada
                     $formatted_address = $this->format_address_compact($address);
-                    update_post_meta($location_id, '_location_formatted_address', sanitize_text_field($formatted_address));
+                    if ($formatted_address) {
+                        update_post_meta($location_id, 'location_formatted_address', sanitize_text_field($formatted_address));
+                    }
                     
                     // Guardar componentes individuales
                     if (!empty($address['locality'])) {
-                        update_post_meta($location_id, '_location_city', sanitize_text_field($address['locality']));
+                        update_post_meta($location_id, 'location_city', sanitize_text_field($address['locality']));
                     }
                     if (!empty($address['administrativeArea'])) {
-                        update_post_meta($location_id, '_location_state', sanitize_text_field($address['administrativeArea']));
+                        update_post_meta($location_id, 'location_state', sanitize_text_field($address['administrativeArea']));
                     }
                     if (!empty($address['regionCode'])) {
-                        update_post_meta($location_id, '_location_country', sanitize_text_field($address['regionCode']));
+                        update_post_meta($location_id, 'location_country', sanitize_text_field($address['regionCode']));
                     }
                     if (!empty($address['postalCode'])) {
-                        update_post_meta($location_id, '_location_postal_code', sanitize_text_field($address['postalCode']));
+                        update_post_meta($location_id, 'location_postal_code', sanitize_text_field($address['postalCode']));
+                    }
+                    
+                    // Dirección línea 1 (addressLines[0])
+                    if (!empty($address['addressLines'][0])) {
+                        update_post_meta($location_id, 'location_address_line1', sanitize_text_field($address['addressLines'][0]));
+                    }
+                    
+                    // Dirección línea 2 (addressLines[1] si existe)
+                    if (!empty($address['addressLines'][1])) {
+                        update_post_meta($location_id, 'location_address_line2', sanitize_text_field($address['addressLines'][1]));
                     }
                 }
             } elseif (!empty($gmb_location['address'])) {
                 $address = $gmb_location['address'];
                 if (is_array($address)) {
                     $formatted_address = $this->format_address_compact($address);
-                    update_post_meta($location_id, '_location_formatted_address', sanitize_text_field($formatted_address));
+                    if ($formatted_address) {
+                        update_post_meta($location_id, 'location_formatted_address', sanitize_text_field($formatted_address));
+                    }
                 }
             }
             
-            // Popular teléfono si está disponible
+            // ✅ Popular teléfono si está disponible
             if (!empty($gmb_location['phoneNumbers']['primaryPhone'])) {
-                update_post_meta($location_id, '_location_phone', sanitize_text_field($gmb_location['phoneNumbers']['primaryPhone']));
+                update_post_meta($location_id, 'location_phone', sanitize_text_field($gmb_location['phoneNumbers']['primaryPhone']));
             }
             
-            // Popular website si está disponible
+            // ✅ Popular website si está disponible
             if (!empty($gmb_location['websiteUri'])) {
-                update_post_meta($location_id, '_location_website', esc_url_raw($gmb_location['websiteUri']));
+                update_post_meta($location_id, 'location_website', esc_url_raw($gmb_location['websiteUri']));
             }
             
-            // Popular categoría principal si está disponible
+            // ✅ Popular categoría principal si está disponible
             if (!empty($gmb_location['primaryCategory']['displayName'])) {
-                update_post_meta($location_id, '_google_primary_category', sanitize_text_field($gmb_location['primaryCategory']['displayName']));
+                update_post_meta($location_id, 'google_primary_category', sanitize_text_field($gmb_location['primaryCategory']['displayName']));
             } elseif (!empty($gmb_location['categories']['primaryCategory']['displayName'])) {
-                update_post_meta($location_id, '_google_primary_category', sanitize_text_field($gmb_location['categories']['primaryCategory']['displayName']));
+                update_post_meta($location_id, 'google_primary_category', sanitize_text_field($gmb_location['categories']['primaryCategory']['displayName']));
             }
             
-            // Popular estado de verificación
-            $is_verified = false;
+            // ✅ Popular estado de verificación
+            $is_verified = 0;
             if (isset($gmb_location['verificationState'])) {
-                $is_verified = ($gmb_location['verificationState'] === 'VERIFIED');
+                $is_verified = ($gmb_location['verificationState'] === 'VERIFIED') ? 1 : 0;
             } elseif (isset($gmb_location['locationState']['verificationState'])) {
-                $is_verified = ($gmb_location['locationState']['verificationState'] === 'VERIFIED');
+                $is_verified = ($gmb_location['locationState']['verificationState'] === 'VERIFIED') ? 1 : 0;
             } elseif (isset($gmb_location['locationState']['isVerified'])) {
-                $is_verified = (bool) $gmb_location['locationState']['isVerified'];
+                $is_verified = (bool) $gmb_location['locationState']['isVerified'] ? 1 : 0;
             }
-            update_post_meta($location_id, '_gmb_verified', $is_verified ? 1 : 0);
+            update_post_meta($location_id, 'gmb_verified', $is_verified);
             
-            // Guardar metadata (placeId, mapsUri, etc.)
+            // ✅ Guardar metadata (placeId, mapsUri, etc.)
             if (!empty($gmb_location['metadata']['placeId'])) {
-                update_post_meta($location_id, '_location_place_id', sanitize_text_field($gmb_location['metadata']['placeId']));
+                update_post_meta($location_id, 'location_place_id', sanitize_text_field($gmb_location['metadata']['placeId']));
             }
             if (!empty($gmb_location['metadata']['mapsUri'])) {
-                update_post_meta($location_id, '_location_map_url', esc_url_raw($gmb_location['metadata']['mapsUri']));
+                update_post_meta($location_id, 'location_map_url', esc_url_raw($gmb_location['metadata']['mapsUri']));
             }
             if (!empty($gmb_location['metadata']['newReviewUri'])) {
-                update_post_meta($location_id, '_google_reviews_url', esc_url_raw($gmb_location['metadata']['newReviewUri']));
+                update_post_meta($location_id, 'google_reviews_url', esc_url_raw($gmb_location['metadata']['newReviewUri']));
             }
             
-            // Marcar timestamp de sincronización
-            update_post_meta($location_id, '_gmb_last_sync', current_time('timestamp'));
+            // ✅ Marcar timestamp de sincronización
+            update_post_meta($location_id, 'gmb_last_sync', current_time('timestamp'));
             
-            // Fechas del sistema
-            update_post_meta($location_id, '_date_created', current_time('mysql'));
-            update_post_meta($location_id, '_created_by_user_id', get_current_user_id());
-            update_post_meta($location_id, '_location_status', 'active');
+            // ✅ Fechas del sistema (estos SÍ pueden llevar prefijo _ si es convención interna)
+            update_post_meta($location_id, 'date_created', current_time('mysql'));
+            update_post_meta($location_id, 'created_by_user_id', get_current_user_id());
             
-            // Incrementar contador en el business padre
+            // ✅ Incrementar contador en el business padre (meta field de oy_business SÍ lleva prefijo _)
             $total_locations = get_post_meta($business_id, '_total_locations', true);
             $total_locations = $total_locations ? intval($total_locations) + 1 : 1;
             update_post_meta($business_id, '_total_locations', $total_locations);
             
-            // Retornar éxito
+            // Retornar éxito con URL de edición
             wp_send_json_success(array(
                 'message' => 'Ubicación creada exitosamente como borrador.',
                 'location_id' => $location_id,
                 'location_name' => $location_title,
                 'edit_url' => get_edit_post_link($location_id, 'raw')
             ));
+        }
+
+        /**
+         * ✅ NUEVA FUNCIÓN: Buscar CPT oy_location existente usando múltiples criterios
+         * 
+         * Busca por:
+         * 1. gmb_location_name (campo completo "accounts/XXX/locations/YYY")
+         * 2. gmb_location_id + parent_business_id (combinación única)
+         * 3. location_place_id + parent_business_id (si existe place_id)
+         *
+         * @param int    $business_id   ID del business padre
+         * @param string $gmb_name      Nombre GMB completo (accounts/XXX/locations/YYY)
+         * @param array  $gmb_location  Datos completos de la ubicación GMB
+         * @return WP_Post|null
+         */
+        private function find_existing_location_cpt($business_id, $gmb_name, $gmb_location) {
+            // Criterio 1: Buscar por gmb_location_name exacto
+            $args = array(
+                'post_type'      => 'oy_location',
+                'post_status'    => array('publish', 'draft', 'pending', 'private'),
+                'posts_per_page' => 1,
+                'meta_query'     => array(
+                    array(
+                        'key'     => 'gmb_location_name',
+                        'value'   => $gmb_name,
+                        'compare' => '='
+                    )
+                )
+            );
+            
+            $query = new WP_Query($args);
+            if ($query->have_posts()) {
+                return $query->posts[0];
+            }
+            
+            // Criterio 2: Buscar por gmb_location_id + parent_business_id
+            $location_id = null;
+            if (preg_match('/locations\/([^\/]+)$/', $gmb_name, $matches)) {
+                $location_id = $matches[1];
+            }
+            
+            if ($location_id) {
+                $args = array(
+                    'post_type'      => 'oy_location',
+                    'post_status'    => array('publish', 'draft', 'pending', 'private'),
+                    'posts_per_page' => 1,
+                    'meta_query'     => array(
+                        'relation' => 'AND',
+                        array(
+                            'key'     => 'gmb_location_id',
+                            'value'   => $location_id,
+                            'compare' => '='
+                        ),
+                        array(
+                            'key'     => 'parent_business_id',
+                            'value'   => $business_id,
+                            'compare' => '='
+                        )
+                    )
+                );
+                
+                $query = new WP_Query($args);
+                if ($query->have_posts()) {
+                    return $query->posts[0];
+                }
+            }
+            
+            // Criterio 3: Buscar por location_place_id + parent_business_id (si existe)
+            $place_id = null;
+            if (!empty($gmb_location['metadata']['placeId'])) {
+                $place_id = $gmb_location['metadata']['placeId'];
+            }
+            
+            if ($place_id) {
+                $args = array(
+                    'post_type'      => 'oy_location',
+                    'post_status'    => array('publish', 'draft', 'pending', 'private'),
+                    'posts_per_page' => 1,
+                    'meta_query'     => array(
+                        'relation' => 'AND',
+                        array(
+                            'key'     => 'location_place_id',
+                            'value'   => $place_id,
+                            'compare' => '='
+                        ),
+                        array(
+                            'key'     => 'parent_business_id',
+                            'value'   => $business_id,
+                            'compare' => '='
+                        )
+                    )
+                );
+                
+                $query = new WP_Query($args);
+                if ($query->have_posts()) {
+                    return $query->posts[0];
+                }
+            }
+            
+            // No se encontró ninguna ubicación existente
+            return null;
         }
 
         /**
@@ -556,8 +666,8 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                             $primary_cat = $loc['categories']['primaryCategory']['displayName'] ?? ( $loc['categories']['primaryCategory']['name'] ?? '' );
                         }
 
-                        // ✅ Check if oy_location CPT exists for this GMB location
-                        $location_cpt = $this->get_location_cpt_by_gmb_name( $name );
+                        // ✅ CORRECCIÓN: Usar el nuevo método mejorado de búsqueda
+                        $location_cpt = $this->find_existing_location_cpt($business_id, $name, $loc);
                         ?>
                         <tr>
                             <td>
@@ -643,7 +753,7 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                                         </a>
                                     </div>
                                 <?php else : ?>
-                                    <!-- ✅ CORRECCIÓN 4: Cambiar clase del botón para que coincida con el JavaScript -->
+                                    <!-- ✅ Ficha does NOT exist -->
                                     <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
                                         <div style="display: flex; align-items: center; gap: 6px;">
                                             <span style="display: inline-block; width: 12px; height: 12px; background-color: #dc3232; border-radius: 50%;"></span>
@@ -666,7 +776,8 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
         }
 
         /**
-         * Get oy_location CPT by GMB name
+         * Get oy_location CPT by GMB name (DEPRECATED - usar find_existing_location_cpt())
+         * ✅ Mantenido por compatibilidad pero ya no se usa
          *
          * @param string $gmb_name GMB location name (e.g., "accounts/123/locations/456")
          * @return WP_Post|null
@@ -682,8 +793,7 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                 'posts_per_page' => 1,
                 'meta_query'     => array(
                     array(
-                        // ✅ CORRECCIÓN 5: Agregar prefijo _ al meta field
-                        'key'     => '_gmb_location_name',
+                        'key'     => 'gmb_location_name',
                         'value'   => $gmb_name,
                         'compare' => '='
                     )
