@@ -23,13 +23,54 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
         /**
          * Constructor
          */
-public function __construct() {
-    add_action('add_meta_boxes', array($this, 'add_metabox'));
-    add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
-    
-    // Registrar manejador AJAX para crear ubicación
-    add_action('wp_ajax_create_location_from_gmb', array($this, 'ajax_create_location_from_gmb'));
-}
+        public function __construct() {
+            // ✅ CORRECCIÓN 1: Cambiar 'add_metabox' por 'register_metabox'
+            add_action('add_meta_boxes', array($this, 'register_metabox'));
+            
+            // ✅ CORRECCIÓN 2: Agregar método enqueue_scripts
+            add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
+            
+            // Registrar manejador AJAX para crear ubicación
+            add_action('wp_ajax_create_location_from_gmb', array($this, 'ajax_create_location_from_gmb'));
+        }
+
+        /**
+         * Enqueue scripts and styles for the metabox
+         *
+         * @param string $hook Current admin page hook
+         * @return void
+         */
+        public function enqueue_scripts( $hook ) {
+            // Solo cargar en la página de edición de oy_business
+            if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
+                return;
+            }
+
+            global $post;
+            if ( ! $post || 'oy_business' !== $post->post_type ) {
+                return;
+            }
+
+            // Enqueue JavaScript
+            wp_enqueue_script(
+                'lealez-gmb-snapshot-metabox',
+                LEALEZ_PLUGIN_URL . 'assets/js/admin/gmb-snapshot-metabox.js',
+                array( 'jquery' ),
+                LEALEZ_VERSION,
+                true
+            );
+
+            // Localizar script con datos necesarios
+            wp_localize_script(
+                'lealez-gmb-snapshot-metabox',
+                'gmbSnapshotData',
+                array(
+                    'ajaxurl'    => admin_url( 'admin-ajax.php' ),
+                    'businessId' => $post->ID,
+                    'nonce'      => wp_create_nonce( 'gmb_snapshot_nonce' )
+                )
+            );
+        }
 
         /**
          * Register metabox
@@ -217,127 +258,204 @@ public function __construct() {
         }
 
         /**
- * Manejador AJAX para crear un CPT oy_location desde datos de GMB
- */
-public function ajax_create_location_from_gmb() {
-    // Verificar nonce
-    check_ajax_referer('gmb_snapshot_nonce', 'nonce');
-    
-    // Verificar permisos
-    if (!current_user_can('edit_posts')) {
-        wp_send_json_error(array(
-            'message' => 'No tienes permisos para crear ubicaciones.'
-        ));
-    }
-    
-    // Obtener datos del POST
-    $business_id = isset($_POST['business_id']) ? intval($_POST['business_id']) : 0;
-    $location_index = isset($_POST['location_index']) ? intval($_POST['location_index']) : -1;
-    
-    if (!$business_id || $location_index < 0) {
-        wp_send_json_error(array(
-            'message' => 'Datos inválidos.'
-        ));
-    }
-    
-    // Verificar que el business existe
-    if (get_post_type($business_id) !== 'oy_business') {
-        wp_send_json_error(array(
-            'message' => 'El negocio no existe.'
-        ));
-    }
-    
-    // Obtener las ubicaciones disponibles de GMB
-    $gmb_locations = get_post_meta($business_id, 'gmb_locations_available', true);
-    if (empty($gmb_locations) || !is_array($gmb_locations)) {
-        wp_send_json_error(array(
-            'message' => 'No hay ubicaciones de GMB disponibles.'
-        ));
-    }
-    
-    // Verificar que el índice existe
-    if (!isset($gmb_locations[$location_index])) {
-        wp_send_json_error(array(
-            'message' => 'Ubicación no encontrada en el índice especificado.'
-        ));
-    }
-    
-    $gmb_location = $gmb_locations[$location_index];
-    
-    // Verificar que no exista ya una ubicación con este gmb_location_id
-    $existing_locations = get_posts(array(
-        'post_type' => 'oy_location',
-        'posts_per_page' => 1,
-        'meta_query' => array(
-            array(
-                'key' => 'gmb_location_id',
-                'value' => $gmb_location['location_id'],
-                'compare' => '='
-            )
-        )
-    ));
-    
-    if (!empty($existing_locations)) {
-        wp_send_json_error(array(
-            'message' => 'Ya existe una ubicación con este ID de GMB.',
-            'location_id' => $existing_locations[0]->ID
-        ));
-    }
-    
-    // Crear el CPT oy_location como borrador
-    $location_post = array(
-        'post_title'   => sanitize_text_field($gmb_location['name']),
-        'post_type'    => 'oy_location',
-        'post_status'  => 'draft',
-        'post_author'  => get_current_user_id(),
-    );
-    
-    $location_id = wp_insert_post($location_post);
-    
-    if (is_wp_error($location_id)) {
-        wp_send_json_error(array(
-            'message' => 'Error al crear la ubicación: ' . $location_id->get_error_message()
-        ));
-    }
-    
-    // Popular meta fields básicos desde GMB
-    update_post_meta($location_id, 'parent_business_id', $business_id);
-    update_post_meta($location_id, 'location_name', sanitize_text_field($gmb_location['name']));
-    update_post_meta($location_id, 'gmb_location_id', sanitize_text_field($gmb_location['location_id']));
-    update_post_meta($location_id, 'gmb_account_id', sanitize_text_field($gmb_location['account_id']));
-    
-    // Popular dirección si está disponible
-    if (!empty($gmb_location['address'])) {
-        update_post_meta($location_id, 'location_formatted_address', sanitize_text_field($gmb_location['address']));
-    }
-    
-    // Popular teléfono si está disponible
-    if (!empty($gmb_location['phone'])) {
-        update_post_meta($location_id, 'location_phone', sanitize_text_field($gmb_location['phone']));
-    }
-    
-    // Marcar como conectado con GMB
-    update_post_meta($location_id, 'gmb_verified', false);
-    update_post_meta($location_id, 'gmb_last_sync', current_time('timestamp'));
-    
-    // Fechas del sistema
-    update_post_meta($location_id, 'date_created', current_time('mysql'));
-    update_post_meta($location_id, 'created_by_user_id', get_current_user_id());
-    update_post_meta($location_id, 'location_status', 'active');
-    
-    // Incrementar contador en el business padre
-    $total_locations = get_post_meta($business_id, 'total_locations', true);
-    $total_locations = $total_locations ? intval($total_locations) + 1 : 1;
-    update_post_meta($business_id, 'total_locations', $total_locations);
-    
-    // Retornar éxito
-    wp_send_json_success(array(
-        'message' => 'Ubicación creada exitosamente como borrador.',
-        'location_id' => $location_id,
-        'location_name' => $gmb_location['name'],
-        'edit_url' => get_edit_post_link($location_id, 'raw')
-    ));
-}
+         * Manejador AJAX para crear un CPT oy_location desde datos de GMB
+         */
+        public function ajax_create_location_from_gmb() {
+            // Verificar nonce
+            check_ajax_referer('gmb_snapshot_nonce', 'nonce');
+            
+            // Verificar permisos
+            if (!current_user_can('edit_posts')) {
+                wp_send_json_error(array(
+                    'message' => 'No tienes permisos para crear ubicaciones.'
+                ));
+            }
+            
+            // Obtener datos del POST
+            $business_id = isset($_POST['business_id']) ? intval($_POST['business_id']) : 0;
+            $gmb_name = isset($_POST['gmb_name']) ? sanitize_text_field($_POST['gmb_name']) : '';
+            $gmb_title = isset($_POST['gmb_title']) ? sanitize_text_field($_POST['gmb_title']) : '';
+            
+            if (!$business_id || empty($gmb_name)) {
+                wp_send_json_error(array(
+                    'message' => 'Datos inválidos.'
+                ));
+            }
+            
+            // Verificar que el business existe
+            if (get_post_type($business_id) !== 'oy_business') {
+                wp_send_json_error(array(
+                    'message' => 'El negocio no existe.'
+                ));
+            }
+            
+            // ✅ CORRECCIÓN 3: Agregar prefijo _ al meta field
+            $gmb_locations = get_post_meta($business_id, '_gmb_locations_available', true);
+            if (empty($gmb_locations) || !is_array($gmb_locations)) {
+                wp_send_json_error(array(
+                    'message' => 'No hay ubicaciones de GMB disponibles.'
+                ));
+            }
+            
+            // Buscar la ubicación por el campo 'name'
+            $gmb_location = null;
+            foreach ($gmb_locations as $loc) {
+                if (isset($loc['name']) && $loc['name'] === $gmb_name) {
+                    $gmb_location = $loc;
+                    break;
+                }
+            }
+            
+            if (!$gmb_location) {
+                wp_send_json_error(array(
+                    'message' => 'Ubicación no encontrada.'
+                ));
+            }
+            
+            // Verificar que no exista ya una ubicación con este gmb_location_name
+            $existing_locations = get_posts(array(
+                'post_type' => 'oy_location',
+                'posts_per_page' => 1,
+                'meta_query' => array(
+                    array(
+                        'key' => '_gmb_location_name',
+                        'value' => $gmb_name,
+                        'compare' => '='
+                    )
+                )
+            ));
+            
+            if (!empty($existing_locations)) {
+                wp_send_json_error(array(
+                    'message' => 'Ya existe una ubicación con este ID de GMB.',
+                    'location_id' => $existing_locations[0]->ID
+                ));
+            }
+            
+            // Crear el CPT oy_location como borrador
+            $location_title = !empty($gmb_title) ? $gmb_title : (!empty($gmb_location['title']) ? $gmb_location['title'] : 'Ubicación GMB');
+            
+            $location_post = array(
+                'post_title'   => sanitize_text_field($location_title),
+                'post_type'    => 'oy_location',
+                'post_status'  => 'draft',
+                'post_author'  => get_current_user_id(),
+            );
+            
+            $location_id = wp_insert_post($location_post);
+            
+            if (is_wp_error($location_id)) {
+                wp_send_json_error(array(
+                    'message' => 'Error al crear la ubicación: ' . $location_id->get_error_message()
+                ));
+            }
+            
+            // Popular meta fields básicos desde GMB
+            update_post_meta($location_id, '_parent_business_id', $business_id);
+            update_post_meta($location_id, '_location_name', sanitize_text_field($location_title));
+            update_post_meta($location_id, '_gmb_location_name', sanitize_text_field($gmb_name));
+            
+            // Extraer y guardar el location_id desde el campo 'name' (formato: accounts/XXX/locations/YYY)
+            if (preg_match('/locations\/([^\/]+)$/', $gmb_name, $matches)) {
+                update_post_meta($location_id, '_gmb_location_id', sanitize_text_field($matches[1]));
+            }
+            
+            // Extraer y guardar el account_id
+            if (isset($gmb_location['account_id'])) {
+                update_post_meta($location_id, '_gmb_account_id', sanitize_text_field($gmb_location['account_id']));
+            } elseif (preg_match('/accounts\/([^\/]+)\//', $gmb_name, $matches)) {
+                update_post_meta($location_id, '_gmb_account_id', sanitize_text_field($matches[1]));
+            }
+            
+            // Popular dirección si está disponible
+            if (!empty($gmb_location['storefrontAddress'])) {
+                $address = $gmb_location['storefrontAddress'];
+                if (is_array($address)) {
+                    $formatted_address = $this->format_address_compact($address);
+                    update_post_meta($location_id, '_location_formatted_address', sanitize_text_field($formatted_address));
+                    
+                    // Guardar componentes individuales
+                    if (!empty($address['locality'])) {
+                        update_post_meta($location_id, '_location_city', sanitize_text_field($address['locality']));
+                    }
+                    if (!empty($address['administrativeArea'])) {
+                        update_post_meta($location_id, '_location_state', sanitize_text_field($address['administrativeArea']));
+                    }
+                    if (!empty($address['regionCode'])) {
+                        update_post_meta($location_id, '_location_country', sanitize_text_field($address['regionCode']));
+                    }
+                    if (!empty($address['postalCode'])) {
+                        update_post_meta($location_id, '_location_postal_code', sanitize_text_field($address['postalCode']));
+                    }
+                }
+            } elseif (!empty($gmb_location['address'])) {
+                $address = $gmb_location['address'];
+                if (is_array($address)) {
+                    $formatted_address = $this->format_address_compact($address);
+                    update_post_meta($location_id, '_location_formatted_address', sanitize_text_field($formatted_address));
+                }
+            }
+            
+            // Popular teléfono si está disponible
+            if (!empty($gmb_location['phoneNumbers']['primaryPhone'])) {
+                update_post_meta($location_id, '_location_phone', sanitize_text_field($gmb_location['phoneNumbers']['primaryPhone']));
+            }
+            
+            // Popular website si está disponible
+            if (!empty($gmb_location['websiteUri'])) {
+                update_post_meta($location_id, '_location_website', esc_url_raw($gmb_location['websiteUri']));
+            }
+            
+            // Popular categoría principal si está disponible
+            if (!empty($gmb_location['primaryCategory']['displayName'])) {
+                update_post_meta($location_id, '_google_primary_category', sanitize_text_field($gmb_location['primaryCategory']['displayName']));
+            } elseif (!empty($gmb_location['categories']['primaryCategory']['displayName'])) {
+                update_post_meta($location_id, '_google_primary_category', sanitize_text_field($gmb_location['categories']['primaryCategory']['displayName']));
+            }
+            
+            // Popular estado de verificación
+            $is_verified = false;
+            if (isset($gmb_location['verificationState'])) {
+                $is_verified = ($gmb_location['verificationState'] === 'VERIFIED');
+            } elseif (isset($gmb_location['locationState']['verificationState'])) {
+                $is_verified = ($gmb_location['locationState']['verificationState'] === 'VERIFIED');
+            } elseif (isset($gmb_location['locationState']['isVerified'])) {
+                $is_verified = (bool) $gmb_location['locationState']['isVerified'];
+            }
+            update_post_meta($location_id, '_gmb_verified', $is_verified ? 1 : 0);
+            
+            // Guardar metadata (placeId, mapsUri, etc.)
+            if (!empty($gmb_location['metadata']['placeId'])) {
+                update_post_meta($location_id, '_location_place_id', sanitize_text_field($gmb_location['metadata']['placeId']));
+            }
+            if (!empty($gmb_location['metadata']['mapsUri'])) {
+                update_post_meta($location_id, '_location_map_url', esc_url_raw($gmb_location['metadata']['mapsUri']));
+            }
+            if (!empty($gmb_location['metadata']['newReviewUri'])) {
+                update_post_meta($location_id, '_google_reviews_url', esc_url_raw($gmb_location['metadata']['newReviewUri']));
+            }
+            
+            // Marcar timestamp de sincronización
+            update_post_meta($location_id, '_gmb_last_sync', current_time('timestamp'));
+            
+            // Fechas del sistema
+            update_post_meta($location_id, '_date_created', current_time('mysql'));
+            update_post_meta($location_id, '_created_by_user_id', get_current_user_id());
+            update_post_meta($location_id, '_location_status', 'active');
+            
+            // Incrementar contador en el business padre
+            $total_locations = get_post_meta($business_id, '_total_locations', true);
+            $total_locations = $total_locations ? intval($total_locations) + 1 : 1;
+            update_post_meta($business_id, '_total_locations', $total_locations);
+            
+            // Retornar éxito
+            wp_send_json_success(array(
+                'message' => 'Ubicación creada exitosamente como borrador.',
+                'location_id' => $location_id,
+                'location_name' => $location_title,
+                'edit_url' => get_edit_post_link($location_id, 'raw')
+            ));
+        }
 
         /**
          * Render locations table with "Ficha" column
@@ -525,13 +643,13 @@ public function ajax_create_location_from_gmb() {
                                         </a>
                                     </div>
                                 <?php else : ?>
-                                    <!-- ✅ Ficha does NOT exist -->
+                                    <!-- ✅ CORRECCIÓN 4: Cambiar clase del botón para que coincida con el JavaScript -->
                                     <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
                                         <div style="display: flex; align-items: center; gap: 6px;">
                                             <span style="display: inline-block; width: 12px; height: 12px; background-color: #dc3232; border-radius: 50%;"></span>
                                             <span style="font-size: 12px; color: #dc3232; font-weight: 600;"><?php esc_html_e( 'No creado', 'lealez' ); ?></span>
                                         </div>
-                                        <button type="button" class="button button-small button-primary lealez-create-location-from-gmb" 
+                                        <button type="button" class="button button-small button-primary create-location-btn" 
                                                 data-business-id="<?php echo esc_attr( $business_id ); ?>"
                                                 data-gmb-name="<?php echo esc_attr( $name ); ?>"
                                                 data-gmb-title="<?php echo esc_attr( $title ); ?>">
@@ -564,7 +682,8 @@ public function ajax_create_location_from_gmb() {
                 'posts_per_page' => 1,
                 'meta_query'     => array(
                     array(
-                        'key'     => 'gmb_location_name',
+                        // ✅ CORRECCIÓN 5: Agregar prefijo _ al meta field
+                        'key'     => '_gmb_location_name',
                         'value'   => $gmb_name,
                         'compare' => '='
                     )
