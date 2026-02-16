@@ -258,7 +258,7 @@ public function ajax_create_location_from_gmb() {
     // Verificar que el índice existe
     if (!isset($gmb_locations[$location_index])) {
         wp_send_json_error(array(
-            'message' => 'Ubicación no encontrada.'
+            'message' => 'Ubicación no encontrada en el índice especificado.'
         ));
     }
     
@@ -317,7 +317,7 @@ public function ajax_create_location_from_gmb() {
     }
     
     // Marcar como conectado con GMB
-    update_post_meta($location_id, 'gmb_verified', false); // Aún no verificado, solo importado
+    update_post_meta($location_id, 'gmb_verified', false);
     update_post_meta($location_id, 'gmb_last_sync', current_time('timestamp'));
     
     // Fechas del sistema
