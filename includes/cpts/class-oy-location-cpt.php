@@ -1613,6 +1613,20 @@ public function render_gmb_meta_box( $post ) {
                     }
                 }
 
+                // ✅ Profile description → Descripción (GMB)
+                if(loc.profile && loc.profile.description){
+                    var desc = loc.profile.description;
+                    var $desc = $('#location_short_description');
+                    if($desc.length){
+                        $desc.val(desc);
+                        // Actualizar contador de caracteres
+                        var $counter = $desc.closest('td').find('.oy-char-count');
+                        if($counter.length){
+                            $counter.text(desc.length + '/750');
+                        }
+                    }
+                }
+
                 // Hours mapping (simple) -> location_hours_* meta UI
                 // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
             }catch(e){}
@@ -3212,7 +3226,13 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             }
         }
 
-        // 2) If not found, call API get
+        // ✅ Si la entrada cacheada NO tiene 'profile', forzar re-fetch fresco desde API
+        // Esto ocurre cuando la caché fue generada antes de agregar 'profile' al readMask.
+        if ( null !== $found && ! isset( $found['profile'] ) ) {
+            $found = null; // Forzar re-fetch
+        }
+
+        // 2) If not found (or cache missing profile), call API get
         if ( null === $found ) {
             if ( ! class_exists( 'Lealez_GMB_API' ) ) {
                 wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
