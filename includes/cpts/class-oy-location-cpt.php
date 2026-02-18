@@ -593,7 +593,7 @@ public function render_address_meta_box( $post ) {
                 <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
             </td>
         </tr>
-        <?php if ( $formatted_address ) : ?>
+<?php if ( $formatted_address ) : ?>
         <tr>
             <th scope="row">
                 <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
@@ -604,6 +604,11 @@ public function render_address_meta_box( $post ) {
             </td>
         </tr>
         <?php endif; ?>
+    </table>
+    </div><!-- #oy-address-fields-wrap -->
+
+    <?php /* ── Coordenadas y Maps URL: siempre visibles, incluso sin dirección física ── */ ?>
+    <table class="form-table" id="oy-coords-map-wrap">
         <tr>
             <th scope="row">
                 <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
@@ -651,13 +656,13 @@ public function render_address_meta_box( $post ) {
             </td>
         </tr>
     </table>
-    </div><!-- #oy-address-fields-wrap -->
 
     <script type="text/javascript">
     /**
      * oy_toggle_address_fields
      * Controla visibilidad del bloque de dirección y del row "mostrar dirección".
      * Se declara en window para que applyLocationToForm (GMB metabox) pueda llamarla.
+     * NOTA: Coordenadas GPS y URL en Google Maps se muestran SIEMPRE (#oy-coords-map-wrap).
      */
     window.oy_toggle_address_fields = function() {
         var $ = jQuery;
@@ -672,6 +677,7 @@ public function render_address_meta_box( $post ) {
         }
 
         // Ocultar campos de dirección si: solo servicio Y no mostrar dirección
+        // Coordenadas y Maps URL (#oy-coords-map-wrap) quedan siempre visibles
         if ( isServiceAreaOnly && ! showAddressChecked ) {
             $('#oy-address-fields-wrap').hide();
         } else {
