@@ -867,35 +867,53 @@ public function render_address_meta_box( $post ) {
 
         <hr style="margin:16px 0;">
 
+<hr style="margin:16px 0;">
+
         <h4><?php _e( '📱 Perfiles de Redes Sociales', 'lealez' ); ?></h4>
         <p class="description" style="margin-bottom:10px;">
-            <?php _e( 'Importados desde GMB: <code>attributes[url_facebook]</code>, <code>attributes[url_instagram]</code>, etc. Puedes editar o agregar perfiles manualmente.', 'lealez' ); ?>
+            <?php _e( '🔄 Se sincronizan automáticamente desde los atributos de Google My Business (<code>url_facebook</code>, <code>url_instagram</code>, etc.). Puedes editar o agregar perfiles adicionales manualmente.', 'lealez' ); ?>
         </p>
 
         <?php if ( ! empty( $gmb_social_profiles ) ) : ?>
-        <div style="background:#f6f7f7; border:1px solid #e0e0e0; border-radius:4px; padding:10px 14px; margin-bottom:12px;">
-            <strong style="font-size:12px; color:#666; display:block; margin-bottom:8px;">
+        <div style="background:#f0f6fc; border:1px solid #b3d4f5; border-radius:4px; padding:10px 14px; margin-bottom:12px;">
+            <strong style="font-size:12px; color:#2271b1; display:block; margin-bottom:8px;">
                 🔄 <?php _e( 'Sincronizados desde Google My Business:', 'lealez' ); ?>
             </strong>
             <?php foreach ( $gmb_social_profiles as $network => $url ) :
                 $network_label = isset( $social_network_labels[ $network ] ) ? $social_network_labels[ $network ] : ucfirst( $network );
+                // Detectar ícono por red
+                $icons = array(
+                    'facebook'  => '📘',
+                    'instagram' => '📸',
+                    'twitter'   => '🐦',
+                    'linkedin'  => '💼',
+                    'youtube'   => '▶️',
+                    'tiktok'    => '🎵',
+                    'pinterest' => '📌',
+                );
+                $icon = isset( $icons[ $network ] ) ? $icons[ $network ] . ' ' : '';
                 ?>
                 <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                    <span style="min-width:90px; font-weight:600; font-size:12px;"><?php echo esc_html( $network_label ); ?></span>
-                    <a href="<?php echo esc_url( $url ); ?>" target="_blank" style="font-size:12px; color:#2271b1; word-break:break-all;"><?php echo esc_html( $url ); ?></a>
+                    <span style="min-width:100px; font-weight:600; font-size:12px;"><?php echo esc_html( $icon . $network_label ); ?></span>
+                    <a href="<?php echo esc_url( $url ); ?>" target="_blank" rel="noopener" style="font-size:12px; color:#2271b1; word-break:break-all;"><?php echo esc_html( $url ); ?></a>
                 </div>
             <?php endforeach; ?>
+        </div>
+        <?php else : ?>
+        <div style="background:#fffbe5; border:1px solid #f0c000; border-radius:4px; padding:8px 14px; margin-bottom:12px; font-size:12px; color:#7a5c00;">
+            <?php _e( '⚠️ No se han sincronizado redes sociales desde GMB. Asegúrate de que la ubicación esté sincronizada y que hayas configurado las redes sociales en tu Perfil de Negocio de Google.', 'lealez' ); ?>
         </div>
         <?php endif; ?>
 
         <div id="oy-social-profiles-list">
             <?php
-            // Merge GMB profiles (as base) with manual overrides
-            // Manual entries are for social profiles NOT in GMB or custom edits
+            // Construir lista editable: GMB como base, sobreescrita por entradas manuales
+            // Las entradas manuales permiten añadir redes que no vienen de GMB o corregir URLs
             $all_social = array_merge( $gmb_social_profiles, $social_profiles_manual );
             if ( ! empty( $all_social ) ) :
                 foreach ( $all_social as $network => $url ) :
-                    $network_label = isset( $social_network_labels[ $network ] ) ? $social_network_labels[ $network ] : ucfirst( $network );
+                    if ( empty( $url ) ) continue; // Saltar entradas vacías
+                    $is_from_gmb = isset( $gmb_social_profiles[ $network ] ) && ! isset( $social_profiles_manual[ $network ] );
                     ?>
                     <div class="oy-social-row" style="display:flex; gap:6px; margin-bottom:8px; align-items:center; flex-wrap:wrap;">
                         <select name="social_profiles_manual_network[]" class="oy-social-network-select" style="min-width:130px;">
@@ -908,7 +926,11 @@ public function render_address_meta_box( $post ) {
                                name="social_profiles_manual_url[]"
                                value="<?php echo esc_attr( $url ); ?>"
                                class="large-text"
-                               placeholder="https://...">
+                               placeholder="https://..."
+                               <?php echo $is_from_gmb ? 'data-from-gmb="1"' : ''; ?>>
+                        <?php if ( $is_from_gmb ) : ?>
+                            <span style="font-size:11px; color:#2271b1; white-space:nowrap;">🔄 GMB</span>
+                        <?php endif; ?>
                         <button type="button" class="button button-small oy-remove-social" style="color:#dc3232;">✕</button>
                     </div>
                 <?php endforeach;
@@ -3278,7 +3300,13 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
         if ( ! empty( $data['attributes'] ) && is_array( $data['attributes'] ) ) {
             update_post_meta( $post_id, 'gmb_attributes_raw', $data['attributes'] );
 
-            // ✅ Extract social media profiles from uriValues attributes
+// ✅ Extract social media profiles from uriValues attributes
+            // ─────────────────────────────────────────────────────────────────────
+            // Business Information API v1 devuelve atributos con el campo 'name'
+            // en formato 'locations/{id}/attributes/url_facebook'. NO hay campo
+            // 'attributeId' en este endpoint. Se normaliza igual que en el bloque
+            // de WhatsApp más abajo.
+            // ─────────────────────────────────────────────────────────────────────
             $social_uri_map = array(
                 'url_facebook'  => 'facebook',
                 'url_instagram' => 'instagram',
@@ -3289,31 +3317,65 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 'url_pinterest' => 'pinterest',
             );
             $gmb_social_profiles = array();
+
             foreach ( $data['attributes'] as $attr ) {
-                if ( ! is_array( $attr ) || empty( $attr['attributeId'] ) ) {
+                if ( ! is_array( $attr ) ) {
                     continue;
                 }
-                $attr_id_lower = strtolower( (string) $attr['attributeId'] );
+
+                // ── Normalizar el ID del atributo (mismo patrón que WhatsApp) ──
+                $attr_id_raw = '';
+                if ( ! empty( $attr['attributeId'] ) ) {
+                    // Formato legacy / algunos wrappers
+                    $attr_id_raw = (string) $attr['attributeId'];
+                } elseif ( ! empty( $attr['name'] ) ) {
+                    // Formato real de Business Information API v1:
+                    // "locations/{id}/attributes/url_facebook"
+                    $name_str    = (string) $attr['name'];
+                    $parts       = explode( '/attributes/', $name_str );
+                    $attr_id_raw = trim( end( $parts ), '/' );
+                }
+
+                if ( '' === $attr_id_raw ) {
+                    continue;
+                }
+
+                $attr_id_lower = strtolower( $attr_id_raw );
+
                 foreach ( $social_uri_map as $gmb_key => $network_key ) {
+                    // Coincidencia exacta o que el ID contenga la clave (p.ej. "url_facebook" dentro de un nombre compuesto)
                     if ( $attr_id_lower === $gmb_key || strpos( $attr_id_lower, $gmb_key ) !== false ) {
                         if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
                             $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
                             if ( $uri ) {
                                 $gmb_social_profiles[ $network_key ] = $uri;
+                                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                    error_log( '[OY Location] Social profile found: ' . $network_key . ' = ' . $uri . ' (attr id: ' . $attr_id_raw . ')' );
+                                }
                             }
                         }
                         break;
                     }
                 }
             }
-if ( ! empty( $gmb_social_profiles ) ) {
+
+            if ( ! empty( $gmb_social_profiles ) ) {
                 update_post_meta( $post_id, 'gmb_social_profiles_raw', $gmb_social_profiles );
-                // Backward compat
+                // Backward compat: mantener campos individuales
                 if ( isset( $gmb_social_profiles['facebook'] ) ) {
                     update_post_meta( $post_id, 'social_facebook_local', $gmb_social_profiles['facebook'] );
                 }
                 if ( isset( $gmb_social_profiles['instagram'] ) ) {
                     update_post_meta( $post_id, 'social_instagram_local', $gmb_social_profiles['instagram'] );
+                }
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] gmb_social_profiles_raw saved: ' . wp_json_encode( $gmb_social_profiles ) );
+                }
+            } else {
+                // Limpiar meta si GMB ya no tiene redes sociales configuradas
+                delete_post_meta( $post_id, 'gmb_social_profiles_raw' );
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] No social profiles found in GMB attributes.' );
                 }
             }
 
