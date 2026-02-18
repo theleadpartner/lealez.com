@@ -350,11 +350,12 @@ public function register_post_type() {
         $location_short_description = get_post_meta( $post->ID, 'location_short_description', true );
         $location_status            = get_post_meta( $post->ID, 'location_status', true );
         $opening_date               = get_post_meta( $post->ID, 'opening_date', true );
-        $closing_date               = get_post_meta( $post->ID, 'closing_date', true );
 
         if ( empty( $location_status ) ) {
             $location_status = 'active';
         }
+
+        $desc_len = mb_strlen( $location_short_description );
         ?>
         <table class="form-table">
             <tr>
@@ -375,18 +376,18 @@ public function register_post_type() {
             </tr>
             <tr>
                 <th scope="row">
-                    <label for="location_short_description"><?php _e( 'Descripción Breve', 'lealez' ); ?></label>
+                    <label for="location_short_description"><?php _e( 'Descripción (GMB)', 'lealez' ); ?></label>
                 </th>
                 <td>
                     <textarea name="location_short_description"
                               id="location_short_description"
-                              rows="3"
+                              rows="4"
                               class="large-text"
-                              maxlength="160"
-                              placeholder="<?php esc_attr_e( 'Máximo 160 caracteres', 'lealez' ); ?>"><?php echo esc_textarea( $location_short_description ); ?></textarea>
+                              maxlength="750"
+                              placeholder="<?php esc_attr_e( 'Máximo 750 caracteres (límite de Google My Business)', 'lealez' ); ?>"><?php echo esc_textarea( $location_short_description ); ?></textarea>
                     <p class="description">
-                        <?php _e( 'Descripción corta (máximo 160 caracteres) - Se usa en listados y previsualizaciones.', 'lealez' ); ?>
-                        <span id="char-count">0/160</span>
+                        <?php _e( 'Descripción del negocio para Google My Business (máximo 750 caracteres). Importado desde GMB: <code>profile.description</code>.', 'lealez' ); ?>
+                        <span id="gmb-desc-char-count" style="font-weight:600;"><?php echo esc_html( $desc_len ); ?>/750</span>
                     </p>
                 </td>
             </tr>
@@ -415,22 +416,18 @@ public function register_post_type() {
                            class="regular-text">
                 </td>
             </tr>
-            <tr>
-                <th scope="row">
-                    <label for="closing_date"><?php _e( 'Fecha de Cierre', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="date"
-                           name="closing_date"
-                           id="closing_date"
-                           value="<?php echo esc_attr( $closing_date ); ?>"
-                           class="regular-text">
-                    <p class="description">
-                        <?php _e( 'Solo si la ubicación está cerrada permanentemente.', 'lealez' ); ?>
-                    </p>
-                </td>
-            </tr>
         </table>
+        <script>
+        jQuery(document).ready(function($){
+            var $ta  = $('#location_short_description');
+            var $cnt = $('#gmb-desc-char-count');
+            $ta.on('input', function(){
+                var len = $(this).val().length;
+                $cnt.text(len + '/750');
+                $cnt.css('color', len > 700 ? '#dc3232' : '');
+            });
+        });
+        </script>
         <?php
     }
 
@@ -438,31 +435,67 @@ public function register_post_type() {
      * Render Address meta box
      */
     public function render_address_meta_box( $post ) {
-        $address_line1     = get_post_meta( $post->ID, 'location_address_line1', true );
-        $address_line2     = get_post_meta( $post->ID, 'location_address_line2', true );
-        $neighborhood      = get_post_meta( $post->ID, 'location_neighborhood', true );
-        $city              = get_post_meta( $post->ID, 'location_city', true );
-        $state             = get_post_meta( $post->ID, 'location_state', true );
-        $country           = get_post_meta( $post->ID, 'location_country', true );
-        $postal_code       = get_post_meta( $post->ID, 'location_postal_code', true );
-        $latitude          = get_post_meta( $post->ID, 'location_latitude', true );
-        $longitude         = get_post_meta( $post->ID, 'location_longitude', true );
-        $place_id          = get_post_meta( $post->ID, 'location_place_id', true );
-        $formatted_address = get_post_meta( $post->ID, 'location_formatted_address', true );
-        $map_url           = get_post_meta( $post->ID, 'location_map_url', true );
-        // Construir map_url automáticamente si tenemos place_id y no hay uno manual
-        if ( empty( $map_url ) && ! empty( $place_id ) ) {
-            $map_url = 'https://www.google.com/maps/place/?q=place_id:' . rawurlencode( $place_id );
+        $address_line1        = get_post_meta( $post->ID, 'location_address_line1', true );
+        $address_line2        = get_post_meta( $post->ID, 'location_address_line2', true );
+        $neighborhood         = get_post_meta( $post->ID, 'location_neighborhood', true );
+        $city                 = get_post_meta( $post->ID, 'location_city', true );
+        $state                = get_post_meta( $post->ID, 'location_state', true );
+        $country              = get_post_meta( $post->ID, 'location_country', true );
+        $postal_code          = get_post_meta( $post->ID, 'location_postal_code', true );
+        $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
+        $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
+        $formatted_address    = get_post_meta( $post->ID, 'location_formatted_address', true );
+        $map_url              = get_post_meta( $post->ID, 'location_map_url', true );
+        $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
+        $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
+
+        // Default: show address to customers unless explicitly disabled
+        if ( '' === $show_address ) {
+            $show_address = '1';
         }
 
         if ( empty( $country ) ) {
             $country = '';
         }
+
+        $address_hidden = ( '1' === (string) $service_area_only && '1' !== (string) $show_address );
         ?>
+
+        <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
+        <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
+            <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
+                📍 <?php _e( 'Ubicación de la empresa', 'lealez' ); ?>
+            </h4>
+            <p class="description" style="margin:0 0 12px;">
+                <?php _e( 'Si los clientes visitan tu empresa, agrega una dirección. Si solo ofreces servicios en el domicilio del cliente o en línea, activa la opción "Sin ubicación física".', 'lealez' ); ?>
+            </p>
+
+            <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                <input type="checkbox"
+                       name="service_area_only"
+                       id="service_area_only"
+                       value="1"
+                       <?php checked( $service_area_only, '1' ); ?>>
+                <strong><?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?></strong>
+            </label>
+
+            <div id="oy-show-address-row" style="display:flex; align-items:center; gap:10px; margin-top:6px; <?php echo ( '1' !== (string) $service_area_only ) ? 'display:none;' : ''; ?>">
+                <label class="oy-toggle-label" style="display:flex; align-items:center; gap:8px;">
+                    <input type="checkbox"
+                           name="show_address_to_customers"
+                           id="show_address_to_customers"
+                           value="1"
+                           <?php checked( $show_address, '1' ); ?>>
+                    <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
+                </label>
+            </div>
+        </div>
+
+        <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
         <table class="form-table">
             <tr>
                 <th scope="row">
-                    <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?> <span class="required">*</span></label>
+                    <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
                 </th>
                 <td>
                     <input type="text"
@@ -503,7 +536,7 @@ public function register_post_type() {
             </tr>
             <tr>
                 <th scope="row">
-                    <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?> <span class="required">*</span></label>
+                    <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
                 </th>
                 <td>
                     <input type="text"
@@ -529,7 +562,7 @@ public function register_post_type() {
             </tr>
             <tr>
                 <th scope="row">
-                    <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?> <span class="required">*</span></label>
+                    <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
                 </th>
                 <td>
                     <input type="text"
@@ -596,20 +629,6 @@ public function register_post_type() {
             </tr>
             <tr>
                 <th scope="row">
-                    <label for="location_place_id"><?php _e( 'Google Place ID', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_place_id"
-                           id="location_place_id"
-                           value="<?php echo esc_attr( $place_id ); ?>"
-                           class="large-text"
-                           placeholder="ChIJ...">
-                    <p class="description"><?php _e( '⚙️ Solo manual — Business Information API no retorna el placeId. Se puede obtener vía Places API.', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
                     <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
                 </th>
                 <td>
@@ -619,7 +638,7 @@ public function register_post_type() {
                            value="<?php echo esc_attr( $map_url ); ?>"
                            class="large-text">
                     <p class="description">
-                        <?php _e( '⚙️ Solo manual. Si tienes un Place ID, se auto-construye el enlace.', 'lealez' ); ?>
+                        <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
                         <?php if ( $map_url ) : ?>
                             &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
                         <?php endif; ?>
@@ -627,6 +646,36 @@ public function register_post_type() {
                 </td>
             </tr>
         </table>
+        </div><!-- #oy-address-fields-wrap -->
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($){
+            function oy_toggle_address_fields() {
+                var isServiceAreaOnly    = $('#service_area_only').is(':checked');
+                var showAddressChecked   = $('#show_address_to_customers').is(':checked');
+
+                // Show/hide the "mostrar dirección" row only when service_area_only is checked
+                if ( isServiceAreaOnly ) {
+                    $('#oy-show-address-row').show();
+                } else {
+                    $('#oy-show-address-row').hide();
+                }
+
+                // Hide address fields if: service area only AND not showing address
+                if ( isServiceAreaOnly && ! showAddressChecked ) {
+                    $('#oy-address-fields-wrap').hide();
+                } else {
+                    $('#oy-address-fields-wrap').show();
+                }
+            }
+
+            $('#service_area_only').on('change', oy_toggle_address_fields);
+            $('#show_address_to_customers').on('change', oy_toggle_address_fields);
+
+            // Run on load
+            oy_toggle_address_fields();
+        });
+        </script>
         <?php
     }
 
@@ -634,16 +683,48 @@ public function register_post_type() {
      * Render Contact Information meta box
      */
     public function render_contact_meta_box( $post ) {
-        $phone            = get_post_meta( $post->ID, 'location_phone', true );
-        $phone_additional = get_post_meta( $post->ID, 'location_phone_additional', true );
-        $whatsapp         = get_post_meta( $post->ID, 'location_whatsapp', true );
-        $email            = get_post_meta( $post->ID, 'location_email', true );
-        $website          = get_post_meta( $post->ID, 'location_website', true );
-        $booking_url      = get_post_meta( $post->ID, 'location_booking_url', true );
-        $menu_url         = get_post_meta( $post->ID, 'location_menu_url', true );
-        $order_url        = get_post_meta( $post->ID, 'location_order_url', true );
+        $phone               = get_post_meta( $post->ID, 'location_phone', true );
+        $phone_additional_list = get_post_meta( $post->ID, 'gmb_phone_additional_list', true );
+        $chat_url            = get_post_meta( $post->ID, 'location_chat_url', true );
+        // Backward compat: if no chat_url set but old whatsapp field exists
+        if ( empty( $chat_url ) ) {
+            $chat_url = get_post_meta( $post->ID, 'location_whatsapp', true );
+        }
+        $email               = get_post_meta( $post->ID, 'location_email', true );
+        $website             = get_post_meta( $post->ID, 'location_website', true );
+        $booking_url         = get_post_meta( $post->ID, 'location_booking_url', true );
+        $menu_url            = get_post_meta( $post->ID, 'location_menu_url', true );
+        $order_url           = get_post_meta( $post->ID, 'location_order_url', true );
+
+        // Social profiles: from GMB attributes (auto) + manual overrides
+        $gmb_social_profiles = get_post_meta( $post->ID, 'gmb_social_profiles_raw', true );
+        $social_profiles_manual = get_post_meta( $post->ID, 'social_profiles_manual', true );
+
+        if ( ! is_array( $phone_additional_list ) ) {
+            $phone_additional_list = array();
+        }
+        if ( ! is_array( $gmb_social_profiles ) ) {
+            $gmb_social_profiles = array();
+        }
+        if ( ! is_array( $social_profiles_manual ) ) {
+            $social_profiles_manual = array();
+        }
+
+        // Social network labels
+        $social_network_labels = array(
+            'facebook'  => 'Facebook',
+            'instagram' => 'Instagram',
+            'twitter'   => 'Twitter / X',
+            'linkedin'  => 'LinkedIn',
+            'youtube'   => 'YouTube',
+            'tiktok'    => 'TikTok',
+            'pinterest' => 'Pinterest',
+        );
         ?>
-        <table class="form-table">
+        <h4 style="margin-top:0;"><?php _e( '📞 Teléfonos', 'lealez' ); ?></h4>
+        <p class="description" style="margin-bottom:10px;"><?php _e( 'Importado desde GMB: <code>phoneNumbers</code>. Puedes agregar o quitar teléfonos adicionales.', 'lealez' ); ?></p>
+
+        <table class="form-table" style="margin-bottom:0;">
             <tr>
                 <th scope="row">
                     <label for="location_phone"><?php _e( 'Teléfono Principal', 'lealez' ); ?></label>
@@ -655,36 +736,55 @@ public function register_post_type() {
                            value="<?php echo esc_attr( $phone ); ?>"
                            class="regular-text"
                            placeholder="+573001234567">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>phoneNumbers.primaryPhone</code>. Formato E.164 recomendado.', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'GMB: <code>phoneNumbers.primaryPhone</code>. Formato E.164 recomendado.', 'lealez' ); ?></p>
                 </td>
             </tr>
+        </table>
+
+        <?php /* Teléfonos adicionales dinámicos */ ?>
+        <div style="margin: 8px 0 16px 160px;" id="oy-additional-phones-wrap">
+            <p style="font-weight:600; margin:0 0 6px; font-size:13px;"><?php _e( 'Teléfonos Adicionales', 'lealez' ); ?> <span style="font-weight:400; color:#777; font-size:12px;"><?php _e( '(GMB: <code>phoneNumbers.additionalPhones</code>)', 'lealez' ); ?></span></p>
+            <div id="oy-additional-phones-list">
+                <?php if ( ! empty( $phone_additional_list ) ) :
+                    foreach ( $phone_additional_list as $idx => $extra_phone ) : ?>
+                    <div class="oy-phone-row" style="display:flex; gap:6px; margin-bottom:6px; align-items:center;">
+                        <input type="tel"
+                               name="gmb_phone_additional_list[]"
+                               value="<?php echo esc_attr( $extra_phone ); ?>"
+                               class="regular-text"
+                               placeholder="+573001234567">
+                        <button type="button" class="button button-small oy-remove-phone" style="color:#dc3232;">✕</button>
+                    </div>
+                    <?php endforeach;
+                endif; ?>
+            </div>
+            <button type="button" id="oy-add-phone" class="button button-small">+ <?php _e( 'Agregar teléfono', 'lealez' ); ?></button>
+        </div>
+
+        <hr style="margin:0 0 16px;">
+
+        <h4><?php _e( '💬 Mensajería', 'lealez' ); ?></h4>
+        <table class="form-table" style="margin-bottom:0;">
             <tr>
                 <th scope="row">
-                    <label for="location_phone_additional"><?php _e( 'Teléfono Adicional', 'lealez' ); ?></label>
+                    <label for="location_chat_url"><?php _e( 'Usuario de chat', 'lealez' ); ?></label>
                 </th>
                 <td>
-                    <input type="tel"
-                           name="location_phone_additional"
-                           id="location_phone_additional"
-                           value="<?php echo esc_attr( $phone_additional ); ?>"
-                           class="regular-text">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>phoneNumbers.additionalPhones[0]</code>', 'lealez' ); ?></p>
+                    <input type="url"
+                           name="location_chat_url"
+                           id="location_chat_url"
+                           value="<?php echo esc_attr( $chat_url ); ?>"
+                           class="large-text"
+                           placeholder="https://wa.me/573001234567">
+                    <p class="description"><?php _e( 'Permite que los clientes chateen con tu empresa por SMS o a través de otras apps (ej: WhatsApp click-to-chat). ⚙️ Solo manual — no viene de GMB API.', 'lealez' ); ?></p>
                 </td>
             </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_whatsapp"><?php _e( 'WhatsApp Business', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="tel"
-                           name="location_whatsapp"
-                           id="location_whatsapp"
-                           value="<?php echo esc_attr( $whatsapp ); ?>"
-                           class="regular-text"
-                           placeholder="+573001234567">
-                    <p class="description"><?php _e( '⚙️ Solo manual — Google My Business no expone WhatsApp en su API.', 'lealez' ); ?></p>
-                </td>
-            </tr>
+        </table>
+
+        <hr style="margin:16px 0;">
+
+        <h4><?php _e( '📧 Contacto Web', 'lealez' ); ?></h4>
+        <table class="form-table" style="margin-bottom:0;">
             <tr>
                 <th scope="row">
                     <label for="location_email"><?php _e( 'Email', 'lealez' ); ?></label>
@@ -751,6 +851,96 @@ public function register_post_type() {
                 </td>
             </tr>
         </table>
+
+        <hr style="margin:16px 0;">
+
+        <h4><?php _e( '📱 Perfiles de Redes Sociales', 'lealez' ); ?></h4>
+        <p class="description" style="margin-bottom:10px;">
+            <?php _e( 'Importados desde GMB: <code>attributes[url_facebook]</code>, <code>attributes[url_instagram]</code>, etc. Puedes editar o agregar perfiles manualmente.', 'lealez' ); ?>
+        </p>
+
+        <?php if ( ! empty( $gmb_social_profiles ) ) : ?>
+        <div style="background:#f6f7f7; border:1px solid #e0e0e0; border-radius:4px; padding:10px 14px; margin-bottom:12px;">
+            <strong style="font-size:12px; color:#666; display:block; margin-bottom:8px;">
+                🔄 <?php _e( 'Sincronizados desde Google My Business:', 'lealez' ); ?>
+            </strong>
+            <?php foreach ( $gmb_social_profiles as $network => $url ) :
+                $network_label = isset( $social_network_labels[ $network ] ) ? $social_network_labels[ $network ] : ucfirst( $network );
+                ?>
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <span style="min-width:90px; font-weight:600; font-size:12px;"><?php echo esc_html( $network_label ); ?></span>
+                    <a href="<?php echo esc_url( $url ); ?>" target="_blank" style="font-size:12px; color:#2271b1; word-break:break-all;"><?php echo esc_html( $url ); ?></a>
+                </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+
+        <div id="oy-social-profiles-list">
+            <?php
+            // Merge GMB profiles (as base) with manual overrides
+            // Manual entries are for social profiles NOT in GMB or custom edits
+            $all_social = array_merge( $gmb_social_profiles, $social_profiles_manual );
+            if ( ! empty( $all_social ) ) :
+                foreach ( $all_social as $network => $url ) :
+                    $network_label = isset( $social_network_labels[ $network ] ) ? $social_network_labels[ $network ] : ucfirst( $network );
+                    ?>
+                    <div class="oy-social-row" style="display:flex; gap:6px; margin-bottom:8px; align-items:center; flex-wrap:wrap;">
+                        <select name="social_profiles_manual_network[]" class="oy-social-network-select" style="min-width:130px;">
+                            <?php foreach ( $social_network_labels as $val => $lbl ) : ?>
+                                <option value="<?php echo esc_attr( $val ); ?>" <?php selected( $network, $val ); ?>><?php echo esc_html( $lbl ); ?></option>
+                            <?php endforeach; ?>
+                            <option value="other" <?php selected( ! isset( $social_network_labels[ $network ] ), true ); ?>><?php _e( 'Otra', 'lealez' ); ?></option>
+                        </select>
+                        <input type="url"
+                               name="social_profiles_manual_url[]"
+                               value="<?php echo esc_attr( $url ); ?>"
+                               class="large-text"
+                               placeholder="https://...">
+                        <button type="button" class="button button-small oy-remove-social" style="color:#dc3232;">✕</button>
+                    </div>
+                <?php endforeach;
+            endif; ?>
+        </div>
+        <button type="button" id="oy-add-social" class="button button-small">+ <?php _e( 'Agregar red social', 'lealez' ); ?></button>
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($){
+
+            // ── Teléfonos adicionales ──
+            $('#oy-add-phone').on('click', function(){
+                var row = '<div class="oy-phone-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">' +
+                    '<input type="tel" name="gmb_phone_additional_list[]" class="regular-text" placeholder="+573001234567">' +
+                    '<button type="button" class="button button-small oy-remove-phone" style="color:#dc3232;">✕</button>' +
+                    '</div>';
+                $('#oy-additional-phones-list').append(row);
+            });
+            $(document).on('click', '.oy-remove-phone', function(){
+                $(this).closest('.oy-phone-row').remove();
+            });
+
+            // ── Redes sociales ──
+            var networkOptions = '<?php
+                $opts = '';
+                foreach ( $social_network_labels as $val => $lbl ) {
+                    $opts .= '<option value="' . esc_attr( $val ) . '">' . esc_html( $lbl ) . '</option>';
+                }
+                $opts .= '<option value="other">' . esc_html__( 'Otra', 'lealez' ) . '</option>';
+                echo esc_js( $opts );
+            ?>';
+
+            $('#oy-add-social').on('click', function(){
+                var row = '<div class="oy-social-row" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
+                    '<select name="social_profiles_manual_network[]" class="oy-social-network-select" style="min-width:130px;">' + networkOptions + '</select>' +
+                    '<input type="url" name="social_profiles_manual_url[]" class="large-text" placeholder="https://...">' +
+                    '<button type="button" class="button button-small oy-remove-social" style="color:#dc3232;">✕</button>' +
+                    '</div>';
+                $('#oy-social-profiles-list').append(row);
+            });
+            $(document).on('click', '.oy-remove-social', function(){
+                $(this).closest('.oy-social-row').remove();
+            });
+        });
+        </script>
         <?php
     }
 
@@ -910,39 +1100,89 @@ public function register_post_type() {
         <?php
         // Horarios adicionales: delivery, pickup, etc.
         $gmb_more_hours_raw = get_post_meta( $post->ID, 'gmb_more_hours_raw', true );
-        if ( ! empty( $gmb_more_hours_raw ) && is_array( $gmb_more_hours_raw ) ) : ?>
+        if ( ! empty( $gmb_more_hours_raw ) && is_array( $gmb_more_hours_raw ) ) :
+            // Map GMB hoursTypeId to Spanish labels
+            $more_hours_labels = array(
+                'DELIVERY'              => __( 'Entrega a domicilio', 'lealez' ),
+                'PICKUP'                => __( 'Para llevar / Retiro en tienda', 'lealez' ),
+                'TAKEOUT'               => __( 'Para llevar', 'lealez' ),
+                'DRIVE_THROUGH'         => __( 'Pedidos desde el auto', 'lealez' ),
+                'ONLINE_SERVICE_HOURS'  => __( 'Horario de atención en línea', 'lealez' ),
+                'KITCHEN'               => __( 'Cocina', 'lealez' ),
+                'BREAKFAST'             => __( 'Desayuno', 'lealez' ),
+                'LUNCH'                 => __( 'Almuerzo', 'lealez' ),
+                'BRUNCH'                => __( 'Brunch', 'lealez' ),
+                'DINNER'                => __( 'Cena', 'lealez' ),
+                'HAPPY_HOUR'            => __( 'Hora feliz', 'lealez' ),
+                'ACCESS'                => __( 'Acceso', 'lealez' ),
+                'SENIOR_HOURS'          => __( 'Población en riesgo', 'lealez' ),
+            );
+
+            $day_labels_es = array(
+                'MONDAY'    => __( 'Lunes', 'lealez' ),
+                'TUESDAY'   => __( 'Martes', 'lealez' ),
+                'WEDNESDAY' => __( 'Miércoles', 'lealez' ),
+                'THURSDAY'  => __( 'Jueves', 'lealez' ),
+                'FRIDAY'    => __( 'Viernes', 'lealez' ),
+                'SATURDAY'  => __( 'Sábado', 'lealez' ),
+                'SUNDAY'    => __( 'Domingo', 'lealez' ),
+            );
+            ?>
             <hr>
-            <h4 style="margin-top:10px;"><?php _e( 'Horarios Adicionales (Delivery, Pickup, etc.)', 'lealez' ); ?></h4>
-            <p class="description"><?php _e( 'Importados desde GMB: <code>moreHours</code>. Solo lectura.', 'lealez' ); ?></p>
+            <h4 style="margin-top:12px;">
+                <?php _e( 'Otros Horarios (desde GMB)', 'lealez' ); ?>
+            </h4>
+            <p class="description">
+                <?php _e( 'Importados desde GMB: <code>moreHours</code>. Solo lectura — editarlos directamente en Google Business Profile.', 'lealez' ); ?>
+            </p>
             <?php foreach ( $gmb_more_hours_raw as $more ) :
                 if ( ! is_array( $more ) ) continue;
-                $type_label = isset( $more['hoursTypeId'] ) ? esc_html( $more['hoursTypeId'] ) : __( 'Tipo desconocido', 'lealez' );
+                $type_id    = isset( $more['hoursTypeId'] ) ? strtoupper( (string) $more['hoursTypeId'] ) : '';
+                $type_label = isset( $more_hours_labels[ $type_id ] )
+                    ? $more_hours_labels[ $type_id ]
+                    : ( $type_id ? ucfirst( strtolower( str_replace( '_', ' ', $type_id ) ) ) : __( 'Tipo desconocido', 'lealez' ) );
                 $periods    = isset( $more['periods'] ) && is_array( $more['periods'] ) ? $more['periods'] : array();
                 ?>
-                <h5 style="margin: 10px 0 4px; font-size: 13px; text-transform: uppercase; color: #555;"><?php echo $type_label; ?></h5>
-                <?php if ( ! empty( $periods ) ) : ?>
-                    <table class="widefat striped" style="max-width:400px; margin-bottom:10px;">
-                        <thead><tr>
-                            <th><?php _e( 'Día', 'lealez' ); ?></th>
-                            <th><?php _e( 'Apertura', 'lealez' ); ?></th>
-                            <th><?php _e( 'Cierre', 'lealez' ); ?></th>
-                        </tr></thead>
-                        <tbody>
-                            <?php foreach ( $periods as $p ) :
-                                $ot      = isset( $p['openTime'] ) ? $p['openTime'] : '';
-                                $ct      = isset( $p['closeTime'] ) ? $p['closeTime'] : '';
-                                $open_t  = is_array( $ot ) ? ( ( $ot['hours'] ?? 0 ) . ':' . str_pad( $ot['minutes'] ?? 0, 2, '0', STR_PAD_LEFT ) ) : $ot;
-                                $close_t = is_array( $ct ) ? ( ( $ct['hours'] ?? 0 ) . ':' . str_pad( $ct['minutes'] ?? 0, 2, '0', STR_PAD_LEFT ) ) : $ct;
-                                ?>
+                <div style="margin-bottom:14px;">
+                    <h5 style="margin:10px 0 4px; font-size:13px; font-weight:600; color:#1d2327; border-bottom:1px solid #e2e4e7; padding-bottom:4px;">
+                        🕐 <?php echo esc_html( $type_label ); ?>
+                        <span style="font-size:11px; font-weight:400; color:#888;"><?php echo esc_html( '(' . $type_id . ')' ); ?></span>
+                    </h5>
+                    <?php if ( ! empty( $periods ) ) : ?>
+                        <table class="widefat striped" style="max-width:480px; margin-top:4px;">
+                            <thead>
                                 <tr>
-                                    <td><?php echo esc_html( isset( $p['openDay'] ) ? $p['openDay'] : '' ); ?></td>
-                                    <td><?php echo esc_html( $open_t ); ?></td>
-                                    <td><?php echo esc_html( $close_t ); ?></td>
+                                    <th style="width:30%;"><?php _e( 'Día', 'lealez' ); ?></th>
+                                    <th style="width:35%;"><?php _e( 'Apertura', 'lealez' ); ?></th>
+                                    <th style="width:35%;"><?php _e( 'Cierre', 'lealez' ); ?></th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                <?php endif; ?>
+                            </thead>
+                            <tbody>
+                                <?php foreach ( $periods as $p ) :
+                                    $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
+                                    $day_label_es = isset( $day_labels_es[ $open_day_raw ] ) ? $day_labels_es[ $open_day_raw ] : esc_html( $open_day_raw );
+
+                                    $ot      = isset( $p['openTime'] ) ? $p['openTime'] : '';
+                                    $ct      = isset( $p['closeTime'] ) ? $p['closeTime'] : '';
+                                    $open_t  = is_array( $ot )
+                                        ? sprintf( '%02d:%02d', $ot['hours'] ?? 0, $ot['minutes'] ?? 0 )
+                                        : (string) $ot;
+                                    $close_t = is_array( $ct )
+                                        ? sprintf( '%02d:%02d', $ct['hours'] ?? 0, $ct['minutes'] ?? 0 )
+                                        : (string) $ct;
+                                    ?>
+                                    <tr>
+                                        <td><?php echo esc_html( $day_label_es ); ?></td>
+                                        <td><?php echo esc_html( $open_t ?: '—' ); ?></td>
+                                        <td><?php echo esc_html( $close_t ?: '—' ); ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    <?php else : ?>
+                        <p class="description" style="margin:4px 0 0;"><?php _e( 'No hay períodos definidos para este tipo de horario.', 'lealez' ); ?></p>
+                    <?php endif; ?>
+                </div>
             <?php endforeach; ?>
         <?php endif; ?>
         <?php
@@ -1485,25 +1725,11 @@ public function render_gmb_meta_box( $post ) {
     public function render_attributes_meta_box( $post ) {
         $google_primary_category = get_post_meta( $post->ID, 'google_primary_category', true );
         $price_range             = get_post_meta( $post->ID, 'price_range', true );
-        $attributes_accessibility = get_post_meta( $post->ID, 'attributes_accessibility', true );
-        $attributes_amenities     = get_post_meta( $post->ID, 'attributes_amenities', true );
-        $attributes_payments      = get_post_meta( $post->ID, 'attributes_payments', true );
 
-        // ✅ Google RAW categories
-        $gmb_categories_raw        = get_post_meta( $post->ID, 'gmb_categories_raw', true );
+        // Google RAW categories
         $gmb_primary_category_name = get_post_meta( $post->ID, 'gmb_primary_category_name', true );
         $gmb_primary_category_dn   = get_post_meta( $post->ID, 'gmb_primary_category_display_name', true );
         $gmb_additional_categories = get_post_meta( $post->ID, 'gmb_additional_categories', true );
-
-        if ( ! is_array( $attributes_accessibility ) ) {
-            $attributes_accessibility = array();
-        }
-        if ( ! is_array( $attributes_amenities ) ) {
-            $attributes_amenities = array();
-        }
-        if ( ! is_array( $attributes_payments ) ) {
-            $attributes_payments = array();
-        }
 
         if ( ! is_array( $gmb_additional_categories ) ) {
             $gmb_additional_categories = array();
@@ -1522,7 +1748,7 @@ public function render_gmb_meta_box( $post ) {
                            class="regular-text"
                            placeholder="<?php esc_attr_e( 'Ej: Restaurant, Retail Store, Gym', 'lealez' ); ?>">
                     <p class="description">
-                        <?php _e( 'Este campo es tu vista “humana”. Al importar, se poblará desde categories.primaryCategory.displayName.', 'lealez' ); ?>
+                        <?php _e( 'Este campo es tu vista "humana". Al importar, se poblará desde categories.primaryCategory.displayName.', 'lealez' ); ?>
                     </p>
                 </td>
             </tr>
@@ -1557,7 +1783,7 @@ public function render_gmb_meta_box( $post ) {
             <tr>
                 <th scope="row"><?php _e( 'Additional Categories', 'lealez' ); ?></th>
                 <td>
-                    <textarea readonly class="large-text" rows="3" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;"><?php
+                    <textarea readonly class="large-text" rows="3" style="font-family:monospace;"><?php
                         echo esc_textarea( ! empty( $gmb_additional_categories ) ? wp_json_encode( $gmb_additional_categories, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '' );
                     ?></textarea>
                 </td>
@@ -1566,143 +1792,198 @@ public function render_gmb_meta_box( $post ) {
 
         <hr>
 
-        <h4><?php _e( 'Atributos desde Google My Business', 'lealez' ); ?></h4>
         <?php
-        // ✅ CORRECCIÓN: Mostrar atributos sincronizados desde GMB
+        // Classify attributes from GMB
         $gmb_attributes_raw = get_post_meta( $post->ID, 'gmb_attributes_raw', true );
-        
+
+        // Helper: get display value from attribute (handles both values[] and uriValues[])
+        $get_attr_value = function( $attr ) {
+            if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                $uris = array_map( function( $u ) { return isset( $u['uri'] ) ? (string) $u['uri'] : ''; }, $attr['uriValues'] );
+                return implode( ', ', array_filter( $uris ) );
+            }
+            if ( isset( $attr['values'] ) && is_array( $attr['values'] ) ) {
+                return implode( ', ', array_map( 'strval', $attr['values'] ) );
+            }
+            return '';
+        };
+
+        // Credit card display labels
+        $credit_card_labels = array(
+            'visa'            => 'VISA',
+            'mastercard'      => 'MasterCard',
+            'amex'            => 'American Express',
+            'american_express'=> 'American Express',
+            'diners'          => 'Diners Club',
+            'diners_club'     => 'Diners Club',
+            'discover'        => 'Discover',
+            'jcb'             => 'JCB',
+            'china_union_pay' => 'China Union Pay',
+            'unionpay'        => 'China Union Pay',
+        );
+
         if ( ! empty( $gmb_attributes_raw ) && is_array( $gmb_attributes_raw ) ) {
-            // Organizar atributos por categorías
-            $accessibility_attrs = array();
-            $amenities_attrs = array();
-            $payment_attrs = array();
-            $other_attrs = array();
+
+            $accessibility_attrs   = array();
+            $amenities_attrs       = array();
+            $payment_general_attrs = array();
+            $payment_credit_attrs  = array();
+            $payment_debit_attrs   = array();
+            $identity_attrs        = array();
+            $audience_attrs        = array();
+            $other_attrs           = array();
 
             foreach ( $gmb_attributes_raw as $attr ) {
                 if ( ! is_array( $attr ) || empty( $attr['attributeId'] ) ) {
                     continue;
                 }
+                $attr_id_raw = (string) $attr['attributeId'];
+                $attr_id     = strtolower( $attr_id_raw );
+                $attr_name   = $this->humanize_attribute_id( $attr_id_raw );
+                $value_str   = $get_attr_value( $attr );
+                $entry       = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id_raw );
 
-                $attr_id = (string) $attr['attributeId'];
-                $attr_name = $this->humanize_attribute_id( $attr_id );
-                $values = isset( $attr['values'] ) && is_array( $attr['values'] ) ? $attr['values'] : array();
-                $value_str = implode( ', ', array_map( 'strval', $values ) );
-
-                // Clasificar por tipo
                 if ( stripos( $attr_id, 'wheelchair' ) !== false || stripos( $attr_id, 'accessible' ) !== false ) {
-                    $accessibility_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
-                } elseif ( stripos( $attr_id, 'wifi' ) !== false || stripos( $attr_id, 'parking' ) !== false || 
-                           stripos( $attr_id, 'restroom' ) !== false || stripos( $attr_id, 'outdoor' ) !== false || 
+                    $accessibility_attrs[] = $entry;
+                } elseif ( stripos( $attr_id, 'wifi' ) !== false || stripos( $attr_id, 'parking' ) !== false ||
+                           stripos( $attr_id, 'restroom' ) !== false || stripos( $attr_id, 'outdoor' ) !== false ||
                            stripos( $attr_id, 'seating' ) !== false ) {
-                    $amenities_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
-                } elseif ( stripos( $attr_id, 'payment' ) !== false || stripos( $attr_id, 'credit' ) !== false || 
-                           stripos( $attr_id, 'debit' ) !== false || stripos( $attr_id, 'cash' ) !== false || 
-                           stripos( $attr_id, 'mobile_payment' ) !== false ) {
-                    $payment_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
+                    $amenities_attrs[] = $entry;
+                } elseif (
+                    stripos( $attr_id, 'women_owned' ) !== false || stripos( $attr_id, 'women-owned' ) !== false ||
+                    stripos( $attr_id, 'veteran_owned' ) !== false || stripos( $attr_id, 'veteran-owned' ) !== false ||
+                    stripos( $attr_id, 'identifies_as' ) !== false || stripos( $attr_id, 'black_owned' ) !== false ||
+                    stripos( $attr_id, 'latinx_owned' ) !== false || stripos( $attr_id, 'minority_owned' ) !== false
+                ) {
+                    $identity_attrs[] = $entry;
+                } elseif (
+                    stripos( $attr_id, 'lgbtq' ) !== false || stripos( $attr_id, 'lgbt' ) !== false ||
+                    stripos( $attr_id, 'transgender' ) !== false || stripos( $attr_id, 'friendly' ) !== false
+                ) {
+                    $audience_attrs[] = $entry;
+                } elseif (
+                    stripos( $attr_id, 'visa' ) !== false || stripos( $attr_id, 'mastercard' ) !== false ||
+                    stripos( $attr_id, 'amex' ) !== false || stripos( $attr_id, 'american_express' ) !== false ||
+                    stripos( $attr_id, 'diners' ) !== false || stripos( $attr_id, 'discover' ) !== false ||
+                    stripos( $attr_id, 'jcb' ) !== false || stripos( $attr_id, 'union_pay' ) !== false ||
+                    stripos( $attr_id, 'unionpay' ) !== false
+                ) {
+                    $card_label = $attr_name;
+                    foreach ( $credit_card_labels as $key => $lbl ) {
+                        if ( stripos( $attr_id, $key ) !== false ) {
+                            $card_label = $lbl;
+                            break;
+                        }
+                    }
+                    $entry['name'] = $card_label;
+                    $payment_credit_attrs[] = $entry;
+                } elseif ( stripos( $attr_id, 'debit' ) !== false ) {
+                    $payment_debit_attrs[] = $entry;
+                } elseif (
+                    stripos( $attr_id, 'payment' ) !== false || stripos( $attr_id, 'credit_card' ) !== false ||
+                    stripos( $attr_id, 'cash' ) !== false || stripos( $attr_id, 'mobile_payment' ) !== false ||
+                    stripos( $attr_id, 'nfc' ) !== false || strpos( $attr_id, 'pay-' ) !== false
+                ) {
+                    $payment_general_attrs[] = $entry;
                 } else {
-                    $other_attrs[] = array( 'name' => $attr_name, 'value' => $value_str, 'raw' => $attr_id );
+                    $other_attrs[] = $entry;
                 }
             }
 
-            // Mostrar Accesibilidad
+            // Helper: render attribute table
+            $render_attr_table = function( $attrs, $show_raw = true ) {
+                if ( empty( $attrs ) ) return;
+                echo '<table class="widefat" style="max-width:800px; margin-bottom:16px;">';
+                echo '<thead><tr>';
+                echo '<th style="width:45%;">' . esc_html__( 'Atributo', 'lealez' ) . '</th>';
+                echo '<th style="width:25%;">' . esc_html__( 'Valor', 'lealez' ) . '</th>';
+                if ( $show_raw ) {
+                    echo '<th style="width:30%;">' . esc_html__( 'ID GMB', 'lealez' ) . '</th>';
+                }
+                echo '</tr></thead><tbody>';
+                foreach ( $attrs as $a ) {
+                    $v = strtolower( trim( $a['value'] ) );
+                    if ( in_array( $v, array( 'true', '1' ), true ) ) {
+                        $val_html = '<span style="color:#46b450;font-weight:600;">&#10003; Sí</span>';
+                    } elseif ( in_array( $v, array( 'false', '0', '' ), true ) ) {
+                        $val_html = '<span style="color:#dc3232;">&#10007; No / Sin datos</span>';
+                    } else {
+                        $val_html = '<strong>' . esc_html( $a['value'] ) . '</strong>';
+                    }
+                    echo '<tr>';
+                    echo '<td>' . esc_html( $a['name'] ) . '</td>';
+                    echo '<td>' . wp_kses_post( $val_html ) . '</td>';
+                    if ( $show_raw ) {
+                        echo '<td><code style="font-size:11px;">' . esc_html( $a['raw'] ) . '</code></td>';
+                    }
+                    echo '</tr>';
+                }
+                echo '</tbody></table>';
+            };
+
+            // Accesibilidad
             if ( ! empty( $accessibility_attrs ) ) {
-                ?>
-                <h4><?php _e( 'Accesibilidad', 'lealez' ); ?></h4>
-                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
-                    <thead>
-                        <tr>
-                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
-                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
-                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ( $accessibility_attrs as $attr ) : ?>
-                            <tr>
-                                <td><?php echo esc_html( $attr['name'] ); ?></td>
-                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
-                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <?php
+                echo '<h4>' . esc_html__( 'Accesibilidad', 'lealez' ) . '</h4>';
+                $render_attr_table( $accessibility_attrs );
             }
 
-            // Mostrar Comodidades
+            // Comodidades
             if ( ! empty( $amenities_attrs ) ) {
-                ?>
-                <h4><?php _e( 'Comodidades', 'lealez' ); ?></h4>
-                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
-                    <thead>
-                        <tr>
-                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
-                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
-                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ( $amenities_attrs as $attr ) : ?>
-                            <tr>
-                                <td><?php echo esc_html( $attr['name'] ); ?></td>
-                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
-                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <?php
+                echo '<h4>' . esc_html__( 'Comodidades', 'lealez' ) . '</h4>';
+                $render_attr_table( $amenities_attrs );
             }
 
-            // Mostrar Métodos de Pago
-            if ( ! empty( $payment_attrs ) ) {
-                ?>
-                <h4><?php _e( 'Métodos de Pago', 'lealez' ); ?></h4>
-                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
-                    <thead>
-                        <tr>
-                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
-                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
-                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ( $payment_attrs as $attr ) : ?>
-                            <tr>
-                                <td><?php echo esc_html( $attr['name'] ); ?></td>
-                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
-                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <?php
+            // Pagos
+            if ( ! empty( $payment_general_attrs ) || ! empty( $payment_credit_attrs ) || ! empty( $payment_debit_attrs ) ) {
+                echo '<h4 style="margin-bottom:4px;">💳 ' . esc_html__( 'Pagos', 'lealez' ) . '</h4>';
+                echo '<p class="description" style="margin-bottom:10px;">' .
+                    esc_html__( 'Atributos de pago sincronizados desde Google My Business. Aparecen públicamente en Búsqueda y Maps.', 'lealez' ) .
+                    '</p>';
+                if ( ! empty( $payment_general_attrs ) ) {
+                    echo '<p style="font-weight:600;font-size:12px;margin:4px 0;">' . esc_html__( 'General', 'lealez' ) . '</p>';
+                    $render_attr_table( $payment_general_attrs );
+                }
+                if ( ! empty( $payment_credit_attrs ) ) {
+                    echo '<p style="font-weight:600;font-size:12px;margin:4px 0;">' . esc_html__( 'Tarjetas de Crédito', 'lealez' ) . '</p>';
+                    $render_attr_table( $payment_credit_attrs, false );
+                }
+                if ( ! empty( $payment_debit_attrs ) ) {
+                    echo '<p style="font-weight:600;font-size:12px;margin:4px 0;">' . esc_html__( 'Tarjetas de Débito', 'lealez' ) . '</p>';
+                    $render_attr_table( $payment_debit_attrs, false );
+                }
             }
 
-            // Mostrar Otros Atributos
+            // Información proporcionada por la empresa
+            if ( ! empty( $identity_attrs ) ) {
+                echo '<h4 style="margin-bottom:4px;">🏷️ ' . esc_html__( 'Información proporcionada por la empresa', 'lealez' ) . '</h4>';
+                echo '<p class="description" style="margin-bottom:10px;">' .
+                    esc_html__( 'Atributos de identidad del negocio (ej: mujer empresaria, propiedad de veteranos). Pueden aparecer públicamente.', 'lealez' ) .
+                    '</p>';
+                $render_attr_table( $identity_attrs );
+            }
+
+            // Público usual
+            if ( ! empty( $audience_attrs ) ) {
+                echo '<h4 style="margin-bottom:4px;">🌈 ' . esc_html__( 'Público usual', 'lealez' ) . '</h4>';
+                echo '<p class="description" style="margin-bottom:10px;">' .
+                    esc_html__( 'Atributos de audiencia objetivo (ej: Amigable con LGBTQ+). Pueden aparecer públicamente.', 'lealez' ) .
+                    '</p>';
+                $render_attr_table( $audience_attrs );
+            }
+
+            // Otros Atributos
             if ( ! empty( $other_attrs ) ) {
-                ?>
-                <h4><?php _e( 'Otros Atributos', 'lealez' ); ?></h4>
-                <table class="widefat" style="max-width: 800px; margin-bottom: 20px;">
-                    <thead>
-                        <tr>
-                            <th style="width: 50%;"><?php _e( 'Atributo', 'lealez' ); ?></th>
-                            <th style="width: 30%;"><?php _e( 'Valor', 'lealez' ); ?></th>
-                            <th style="width: 20%;"><?php _e( 'ID GMB', 'lealez' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ( $other_attrs as $attr ) : ?>
-                            <tr>
-                                <td><?php echo esc_html( $attr['name'] ); ?></td>
-                                <td><strong><?php echo esc_html( $attr['value'] ); ?></strong></td>
-                                <td><code style="font-size: 11px;"><?php echo esc_html( $attr['raw'] ); ?></code></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <?php
+                echo '<h4>' . esc_html__( 'Otros Atributos', 'lealez' ) . '</h4>';
+                $render_attr_table( $other_attrs );
             }
+
+            $has_any = ! empty( $accessibility_attrs ) || ! empty( $amenities_attrs ) || ! empty( $payment_general_attrs ) ||
+                       ! empty( $payment_credit_attrs ) || ! empty( $payment_debit_attrs ) || ! empty( $identity_attrs ) ||
+                       ! empty( $audience_attrs ) || ! empty( $other_attrs );
+            if ( ! $has_any ) {
+                echo '<p class="description"><strong>' . esc_html__( 'No hay atributos sincronizados desde Google My Business.', 'lealez' ) . '</strong></p>';
+            }
+
         } else {
             ?>
             <p class="description">
@@ -1940,9 +2221,6 @@ private function humanize_attribute_id( $attr_id ) {
         $location_manager       = get_post_meta( $post->ID, 'location_manager', true );
         $location_manager_email = get_post_meta( $post->ID, 'location_manager_email', true );
         $location_manager_phone = get_post_meta( $post->ID, 'location_manager_phone', true );
-        $social_facebook_local  = get_post_meta( $post->ID, 'social_facebook_local', true );
-        $social_instagram_local = get_post_meta( $post->ID, 'social_instagram_local', true );
-        $social_whatsapp_local  = get_post_meta( $post->ID, 'location_whatsapp', true ); // reuse existing field
         $internal_notes         = get_post_meta( $post->ID, 'internal_notes', true );
         $manager_notes          = get_post_meta( $post->ID, 'manager_notes', true );
         ?>
@@ -1991,33 +2269,6 @@ private function humanize_attribute_id( $attr_id ) {
                            value="<?php echo esc_attr( $location_manager_phone ); ?>"
                            class="regular-text"
                            placeholder="+573001234567">
-                </td>
-            </tr>
-        </table>
-
-        <p class="oy-staff-section-title"><?php _e( '📱 Redes Sociales Locales', 'lealez' ); ?></p>
-        <p class="description"><?php _e( '⚙️ Solo manual — Google My Business no expone perfiles sociales por sucursal en su API.', 'lealez' ); ?></p>
-        <table class="form-table" style="margin-top:0;">
-            <tr>
-                <th scope="row"><label for="social_facebook_local"><?php _e( 'Facebook (sucursal)', 'lealez' ); ?></label></th>
-                <td>
-                    <input type="url"
-                           name="social_facebook_local"
-                           id="social_facebook_local"
-                           value="<?php echo esc_attr( $social_facebook_local ); ?>"
-                           class="large-text"
-                           placeholder="https://facebook.com/sucursal">
-                </td>
-            </tr>
-            <tr>
-                <th scope="row"><label for="social_instagram_local"><?php _e( 'Instagram (sucursal)', 'lealez' ); ?></label></th>
-                <td>
-                    <input type="url"
-                           name="social_instagram_local"
-                           id="social_instagram_local"
-                           value="<?php echo esc_attr( $social_instagram_local ); ?>"
-                           class="large-text"
-                           placeholder="https://instagram.com/sucursal">
                 </td>
             </tr>
         </table>
@@ -2182,14 +2433,15 @@ private function humanize_attribute_id( $attr_id ) {
             // Parent Business
             'parent_business_id'              => 'sanitize_text_field',
 
-            // Basic Info
+            // Basic Info (closing_date removed from form but kept as meta)
             'location_code'                   => 'sanitize_text_field',
             'location_short_description'      => 'sanitize_textarea_field',
             'location_status'                 => 'sanitize_text_field',
             'opening_date'                    => 'sanitize_text_field',
-            'closing_date'                    => 'sanitize_text_field',
 
             // Address (human)
+            'service_area_only'               => 'absint',
+            'show_address_to_customers'       => 'absint',
             'location_address_line1'          => 'sanitize_text_field',
             'location_address_line2'          => 'sanitize_text_field',
             'location_neighborhood'           => 'sanitize_text_field',
@@ -2199,13 +2451,12 @@ private function humanize_attribute_id( $attr_id ) {
             'location_postal_code'            => 'sanitize_text_field',
             'location_latitude'               => 'sanitize_text_field',
             'location_longitude'              => 'sanitize_text_field',
-            'location_place_id'               => 'sanitize_text_field',
+            'location_place_id'               => 'sanitize_text_field', // kept as meta even though not in UI
             'location_plus_code'              => 'sanitize_text_field',
 
             // Contact (human)
             'location_phone'                  => 'sanitize_text_field',
-            'location_phone_additional'       => 'sanitize_text_field',
-            'location_whatsapp'               => 'sanitize_text_field',
+            'location_chat_url'               => 'esc_url_raw',
             'location_email'                  => 'sanitize_email',
             'location_website'                => 'esc_url_raw',
             'location_booking_url'            => 'esc_url_raw',
@@ -2239,16 +2490,14 @@ private function humanize_attribute_id( $attr_id ) {
             'loyalty_multiplier'              => 'floatval',
             'loyalty_terminal_id'             => 'sanitize_text_field',
 
-            // Staff & Notes (new)
+            // Staff & Notes
             'location_manager'                => 'sanitize_text_field',
             'location_manager_email'          => 'sanitize_email',
             'location_manager_phone'          => 'sanitize_text_field',
-            'social_facebook_local'           => 'esc_url_raw',
-            'social_instagram_local'          => 'esc_url_raw',
             'internal_notes'                  => 'sanitize_textarea_field',
             'manager_notes'                   => 'sanitize_textarea_field',
 
-            // Address extras (new)
+            // Address extras
             'location_map_url'                => 'esc_url_raw',
         );
 
@@ -2266,7 +2515,7 @@ private function humanize_attribute_id( $attr_id ) {
                 }
                 
                 // ✅ ojo: checkboxes no vienen si están off
-                if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save' ), true ) ) {
+                if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save', 'service_area_only', 'show_address_to_customers' ), true ) ) {
                     delete_post_meta( $post_id, $field_name );
                 } else {
                     // Para el resto, mantenemos comportamiento original
@@ -2283,6 +2532,50 @@ private function humanize_attribute_id( $attr_id ) {
         } else {
             // No programs selected (all checkboxes unchecked)
             update_post_meta( $post_id, 'loyalty_programs_accepted', array() );
+        }
+
+        // ✅ Save additional phones (dynamic list from gmb_phone_additional_list[])
+        if ( isset( $_POST['gmb_phone_additional_list'] ) && is_array( $_POST['gmb_phone_additional_list'] ) ) {
+            $additional_phones = array_map(
+                'sanitize_text_field',
+                array_map( 'wp_unslash', $_POST['gmb_phone_additional_list'] )
+            );
+            $additional_phones = array_values( array_filter( $additional_phones ) );
+            update_post_meta( $post_id, 'gmb_phone_additional_list', $additional_phones );
+
+            // Backward compat: fill location_phone_additional with first entry
+            if ( ! empty( $additional_phones ) ) {
+                update_post_meta( $post_id, 'location_phone_additional', $additional_phones[0] );
+            } else {
+                delete_post_meta( $post_id, 'location_phone_additional' );
+            }
+        } else {
+            update_post_meta( $post_id, 'gmb_phone_additional_list', array() );
+            delete_post_meta( $post_id, 'location_phone_additional' );
+        }
+
+        // ✅ Save social profiles (manual entries from dynamic list)
+        $social_networks_raw = isset( $_POST['social_profiles_manual_network'] ) && is_array( $_POST['social_profiles_manual_network'] )
+            ? array_map( 'sanitize_text_field', array_map( 'wp_unslash', $_POST['social_profiles_manual_network'] ) )
+            : array();
+        $social_urls_raw     = isset( $_POST['social_profiles_manual_url'] ) && is_array( $_POST['social_profiles_manual_url'] )
+            ? array_map( 'esc_url_raw', array_map( 'wp_unslash', $_POST['social_profiles_manual_url'] ) )
+            : array();
+
+        $social_profiles_manual = array();
+        foreach ( $social_networks_raw as $idx => $net ) {
+            if ( ! empty( $net ) && ! empty( $social_urls_raw[ $idx ] ) ) {
+                $social_profiles_manual[ sanitize_key( $net ) ] = $social_urls_raw[ $idx ];
+            }
+        }
+        update_post_meta( $post_id, 'social_profiles_manual', $social_profiles_manual );
+
+        // Backward compat: keep old social_facebook_local / social_instagram_local
+        if ( isset( $social_profiles_manual['facebook'] ) ) {
+            update_post_meta( $post_id, 'social_facebook_local', $social_profiles_manual['facebook'] );
+        }
+        if ( isset( $social_profiles_manual['instagram'] ) ) {
+            update_post_meta( $post_id, 'social_instagram_local', $social_profiles_manual['instagram'] );
         }
 
         // Save hours (per day) arrays
@@ -2534,20 +2827,92 @@ private function humanize_attribute_id( $attr_id ) {
         // openInfo / locationState / metadata / labels
         if ( ! empty( $data['openInfo'] ) && is_array( $data['openInfo'] ) ) {
             update_post_meta( $post_id, 'gmb_open_info_raw', $data['openInfo'] );
+
+            // Detect service-area-only business: no storefront address
+            // GMB openInfo.canReopen is unrelated; we use presence of storefrontAddress to determine
+            $has_storefront = ! empty( $data['storefrontAddress'] ) && is_array( $data['storefrontAddress'] );
+            if ( ! $has_storefront ) {
+                update_post_meta( $post_id, 'service_area_only', '1' );
+            } else {
+                // Only update if not already set manually
+                $existing = get_post_meta( $post_id, 'service_area_only', true );
+                if ( '' === $existing ) {
+                    update_post_meta( $post_id, 'service_area_only', '0' );
+                }
+            }
         }
         if ( ! empty( $data['locationState'] ) && is_array( $data['locationState'] ) ) {
             update_post_meta( $post_id, 'gmb_location_state_raw', $data['locationState'] );
         }
         if ( ! empty( $data['metadata'] ) && is_array( $data['metadata'] ) ) {
             update_post_meta( $post_id, 'gmb_metadata_raw', $data['metadata'] );
+
+            // ✅ Map metadata.mapsUri → location_map_url
+            if ( ! empty( $data['metadata']['mapsUri'] ) ) {
+                update_post_meta( $post_id, 'location_map_url', esc_url_raw( (string) $data['metadata']['mapsUri'] ) );
+            }
+
+            // Also save placeId as hidden meta (not shown in UI)
+            if ( ! empty( $data['metadata']['placeId'] ) ) {
+                update_post_meta( $post_id, 'location_place_id', sanitize_text_field( (string) $data['metadata']['placeId'] ) );
+            }
         }
         if ( ! empty( $data['labels'] ) && is_array( $data['labels'] ) ) {
             update_post_meta( $post_id, 'gmb_labels_raw', $data['labels'] );
         }
 
+        // ✅ Map profile.description → location_short_description (GMB description, max 750 chars)
+        if ( ! empty( $data['profile'] ) && is_array( $data['profile'] ) ) {
+            update_post_meta( $post_id, 'gmb_profile_raw', $data['profile'] );
+            if ( ! empty( $data['profile']['description'] ) ) {
+                $gmb_description = sanitize_textarea_field( (string) $data['profile']['description'] );
+                $gmb_description = mb_substr( $gmb_description, 0, 750 );
+                update_post_meta( $post_id, 'location_short_description', $gmb_description );
+            }
+        }
+
         // ✅ NUEVO: Guardar attributes desde GMB
         if ( ! empty( $data['attributes'] ) && is_array( $data['attributes'] ) ) {
             update_post_meta( $post_id, 'gmb_attributes_raw', $data['attributes'] );
+
+            // ✅ Extract social media profiles from uriValues attributes
+            $social_uri_map = array(
+                'url_facebook'  => 'facebook',
+                'url_instagram' => 'instagram',
+                'url_twitter'   => 'twitter',
+                'url_linkedin'  => 'linkedin',
+                'url_youtube'   => 'youtube',
+                'url_tiktok'    => 'tiktok',
+                'url_pinterest' => 'pinterest',
+            );
+            $gmb_social_profiles = array();
+            foreach ( $data['attributes'] as $attr ) {
+                if ( ! is_array( $attr ) || empty( $attr['attributeId'] ) ) {
+                    continue;
+                }
+                $attr_id_lower = strtolower( (string) $attr['attributeId'] );
+                foreach ( $social_uri_map as $gmb_key => $network_key ) {
+                    if ( $attr_id_lower === $gmb_key || strpos( $attr_id_lower, $gmb_key ) !== false ) {
+                        if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                            $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+                            if ( $uri ) {
+                                $gmb_social_profiles[ $network_key ] = $uri;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            if ( ! empty( $gmb_social_profiles ) ) {
+                update_post_meta( $post_id, 'gmb_social_profiles_raw', $gmb_social_profiles );
+                // Backward compat
+                if ( isset( $gmb_social_profiles['facebook'] ) ) {
+                    update_post_meta( $post_id, 'social_facebook_local', $gmb_social_profiles['facebook'] );
+                }
+                if ( isset( $gmb_social_profiles['instagram'] ) ) {
+                    update_post_meta( $post_id, 'social_instagram_local', $gmb_social_profiles['instagram'] );
+                }
+            }
         }
 
 // ✅ VERIFICACIÓN (SIEMPRE desde My Business Verifications API)
