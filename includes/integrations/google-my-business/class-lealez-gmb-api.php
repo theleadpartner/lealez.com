@@ -1589,6 +1589,9 @@ public static function get_locations( $business_id, $account_name, $force_refres
                     'labels'             => $location['labels'] ?? array(),
                     'languageCode'       => $location['languageCode'] ?? '',
 
+                    // ✅ profile.description → necesario para campo Descripción (GMB)
+                    'profile'            => $location['profile'] ?? array(),
+
                     'verification'       => is_array( $verification ) ? $verification : array(),
 
                     '_used_read_mask'    => $used_mask,
