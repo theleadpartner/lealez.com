@@ -1692,6 +1692,31 @@ function applyLocationToForm(loc){
 
         // Hours mapping (simple) -> location_hours_* meta UI
         // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
+
+        // ✅ metadata.mapsUri → URL en Google Maps
+        if(loc.metadata && loc.metadata.mapsUri){
+            var $mapUrl = $('#location_map_url');
+            if($mapUrl.length){
+                $mapUrl.val(loc.metadata.mapsUri);
+            }
+        }
+
+        // ✅ metadata.newReviewUri → URL de reseñas de Google (si el campo existe)
+        if(loc.metadata && loc.metadata.newReviewUri){
+            var $reviewUrl = $('#google_reviews_url');
+            if($reviewUrl.length && !$reviewUrl.val()){
+                $reviewUrl.val(loc.metadata.newReviewUri);
+            }
+        }
+
+        // ✅ metadata.placeId → location_place_id
+        if(loc.metadata && loc.metadata.placeId){
+            var $placeId = $('#location_place_id');
+            if($placeId.length){
+                $placeId.val(loc.metadata.placeId);
+            }
+        }
+
     }catch(e){
         if(window.console && window.console.error){ console.error('[OY Location] applyLocationToForm error:', e); }
     }
@@ -3322,10 +3347,10 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             }
         }
 
-        // ✅ Si la entrada cacheada NO tiene 'profile' o tiene 'profile' vacío, forzar re-fetch fresco desde API.
-        // Esto ocurre cuando la caché fue generada con una readMask de fallback que no incluía 'profile'
-        // (el array queda guardado como [] o la key no existe). isset() no detecta este caso, empty() sí.
-        if ( null !== $found && empty( $found['profile'] ) ) {
+        // ✅ Si la entrada cacheada NO tiene 'profile' o 'metadata', forzar re-fetch fresco desde API.
+        // Ocurre cuando la caché fue generada con un readMask de fallback que no incluía estos campos.
+        // Sin 'metadata', el campo metadata.mapsUri (→ location_map_url) nunca se populará en el formulario.
+        if ( null !== $found && ( empty( $found['profile'] ) || empty( $found['metadata'] ) ) ) {
             $found = null; // Forzar re-fetch
         }
 
