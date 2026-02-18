@@ -431,253 +431,264 @@ public function register_post_type() {
         <?php
     }
 
-    /**
-     * Render Address meta box
-     */
-    public function render_address_meta_box( $post ) {
-        $address_line1        = get_post_meta( $post->ID, 'location_address_line1', true );
-        $address_line2        = get_post_meta( $post->ID, 'location_address_line2', true );
-        $neighborhood         = get_post_meta( $post->ID, 'location_neighborhood', true );
-        $city                 = get_post_meta( $post->ID, 'location_city', true );
-        $state                = get_post_meta( $post->ID, 'location_state', true );
-        $country              = get_post_meta( $post->ID, 'location_country', true );
-        $postal_code          = get_post_meta( $post->ID, 'location_postal_code', true );
-        $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
-        $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
-        $formatted_address    = get_post_meta( $post->ID, 'location_formatted_address', true );
-        $map_url              = get_post_meta( $post->ID, 'location_map_url', true );
-        $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
-        $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
+/**
+ * Render Address meta box
+ */
+public function render_address_meta_box( $post ) {
+    $address_line1        = get_post_meta( $post->ID, 'location_address_line1', true );
+    $address_line2        = get_post_meta( $post->ID, 'location_address_line2', true );
+    $neighborhood         = get_post_meta( $post->ID, 'location_neighborhood', true );
+    $city                 = get_post_meta( $post->ID, 'location_city', true );
+    $state                = get_post_meta( $post->ID, 'location_state', true );
+    $country              = get_post_meta( $post->ID, 'location_country', true );
+    $postal_code          = get_post_meta( $post->ID, 'location_postal_code', true );
+    $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
+    $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
+    $formatted_address    = get_post_meta( $post->ID, 'location_formatted_address', true );
+    $map_url              = get_post_meta( $post->ID, 'location_map_url', true );
+    $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
+    $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
 
-        // Default: show address to customers unless explicitly disabled
-        if ( '' === $show_address ) {
-            $show_address = '1';
-        }
-
-        if ( empty( $country ) ) {
-            $country = '';
-        }
-
-        $address_hidden = ( '1' === (string) $service_area_only && '1' !== (string) $show_address );
-        ?>
-
-        <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
-        <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
-            <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
-                📍 <?php _e( 'Ubicación de la empresa', 'lealez' ); ?>
-            </h4>
-            <p class="description" style="margin:0 0 12px;">
-                <?php _e( 'Si los clientes visitan tu empresa, agrega una dirección. Si solo ofreces servicios en el domicilio del cliente o en línea, activa la opción "Sin ubicación física".', 'lealez' ); ?>
-            </p>
-
-            <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                <input type="checkbox"
-                       name="service_area_only"
-                       id="service_area_only"
-                       value="1"
-                       <?php checked( $service_area_only, '1' ); ?>>
-                <strong><?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?></strong>
-            </label>
-
-            <div id="oy-show-address-row" style="display:flex; align-items:center; gap:10px; margin-top:6px; <?php echo ( '1' !== (string) $service_area_only ) ? 'display:none;' : ''; ?>">
-                <label class="oy-toggle-label" style="display:flex; align-items:center; gap:8px;">
-                    <input type="checkbox"
-                           name="show_address_to_customers"
-                           id="show_address_to_customers"
-                           value="1"
-                           <?php checked( $show_address, '1' ); ?>>
-                    <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
-                </label>
-            </div>
-        </div>
-
-        <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
-        <table class="form-table">
-            <tr>
-                <th scope="row">
-                    <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_address_line1"
-                           id="location_address_line1"
-                           value="<?php echo esc_attr( $address_line1 ); ?>"
-                           class="large-text"
-                           placeholder="<?php esc_attr_e( 'Ej: Calle 10 # 25-30', 'lealez' ); ?>">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[0]</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_address_line2"><?php _e( 'Complemento', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_address_line2"
-                           id="location_address_line2"
-                           value="<?php echo esc_attr( $address_line2 ); ?>"
-                           class="large-text"
-                           placeholder="<?php esc_attr_e( 'Ej: Local 202, Piso 2, Edificio Torre Norte', 'lealez' ); ?>">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[1]</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_neighborhood"><?php _e( 'Barrio/Colonia', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_neighborhood"
-                           id="location_neighborhood"
-                           value="<?php echo esc_attr( $neighborhood ); ?>"
-                           class="regular-text">
-                    <p class="description"><?php _e( '⚙️ Solo manual — Google My Business no expone este campo en su API.', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_city"
-                           id="location_city"
-                           value="<?php echo esc_attr( $city ); ?>"
-                           class="regular-text">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.locality</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_state"><?php _e( 'Estado/Departamento', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_state"
-                           id="location_state"
-                           value="<?php echo esc_attr( $state ); ?>"
-                           class="regular-text">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.administrativeArea</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_country"
-                           id="location_country"
-                           value="<?php echo esc_attr( $country ); ?>"
-                           class="regular-text"
-                           placeholder="<?php esc_attr_e( 'CO, MX, US', 'lealez' ); ?>"
-                           maxlength="2">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.regionCode</code> (ISO 3166-1 alpha-2).', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_postal_code"><?php _e( 'Código Postal', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text"
-                           name="location_postal_code"
-                           id="location_postal_code"
-                           value="<?php echo esc_attr( $postal_code ); ?>"
-                           class="regular-text">
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <?php if ( $formatted_address ) : ?>
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="text" readonly class="large-text" value="<?php echo esc_attr( $formatted_address ); ?>">
-                    <p class="description"><?php _e( 'Auto-generada al importar desde GMB.', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <?php endif; ?>
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                        <div>
-                            <label for="location_latitude"><?php _e( 'Latitud', 'lealez' ); ?></label>
-                            <input type="text"
-                                   name="location_latitude"
-                                   id="location_latitude"
-                                   value="<?php echo esc_attr( $latitude ); ?>"
-                                   class="regular-text"
-                                   placeholder="6.2476376">
-                        </div>
-                        <div>
-                            <label for="location_longitude"><?php _e( 'Longitud', 'lealez' ); ?></label>
-                            <input type="text"
-                                   name="location_longitude"
-                                   id="location_longitude"
-                                   value="<?php echo esc_attr( $longitude ); ?>"
-                                   class="regular-text"
-                                   placeholder="-75.5658153">
-                        </div>
-                    </div>
-                    <p class="description"><?php _e( 'Importado desde GMB: <code>latlng.latitude</code> / <code>latlng.longitude</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="url"
-                           name="location_map_url"
-                           id="location_map_url"
-                           value="<?php echo esc_attr( $map_url ); ?>"
-                           class="large-text">
-                    <p class="description">
-                        <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
-                        <?php if ( $map_url ) : ?>
-                            &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
-                        <?php endif; ?>
-                    </p>
-                </td>
-            </tr>
-        </table>
-        </div><!-- #oy-address-fields-wrap -->
-
-        <script type="text/javascript">
-        jQuery(document).ready(function($){
-            function oy_toggle_address_fields() {
-                var isServiceAreaOnly    = $('#service_area_only').is(':checked');
-                var showAddressChecked   = $('#show_address_to_customers').is(':checked');
-
-                // Show/hide the "mostrar dirección" row only when service_area_only is checked
-                if ( isServiceAreaOnly ) {
-                    $('#oy-show-address-row').show();
-                } else {
-                    $('#oy-show-address-row').hide();
-                }
-
-                // Hide address fields if: service area only AND not showing address
-                if ( isServiceAreaOnly && ! showAddressChecked ) {
-                    $('#oy-address-fields-wrap').hide();
-                } else {
-                    $('#oy-address-fields-wrap').show();
-                }
-            }
-
-            $('#service_area_only').on('change', oy_toggle_address_fields);
-            $('#show_address_to_customers').on('change', oy_toggle_address_fields);
-
-            // Run on load
-            oy_toggle_address_fields();
-        });
-        </script>
-        <?php
+    // Default: show address to customers unless explicitly disabled
+    if ( '' === $show_address ) {
+        $show_address = '1';
     }
+
+    if ( empty( $country ) ) {
+        $country = '';
+    }
+
+    // Determine initial states
+    $is_service_area    = ( '1' === (string) $service_area_only );
+    $is_show_address    = ( '1' === (string) $show_address );
+    $address_hidden     = $is_service_area && ! $is_show_address;
+    $show_address_row   = $is_service_area;
+    ?>
+
+    <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
+    <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
+        <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
+            📍 <?php _e( 'Ubicación de la empresa', 'lealez' ); ?>
+        </h4>
+        <p class="description" style="margin:0 0 12px;">
+            <?php _e( 'Si los clientes visitan tu empresa, agrega una dirección. Si solo ofreces servicios en el domicilio del cliente o en línea, activa la opción "Sin ubicación física".', 'lealez' ); ?>
+        </p>
+
+        <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+            <input type="checkbox"
+                   name="service_area_only"
+                   id="service_area_only"
+                   value="1"
+                   <?php checked( $service_area_only, '1' ); ?>>
+            <strong><?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?></strong>
+        </label>
+
+        <div id="oy-show-address-row"
+             style="display:<?php echo $show_address_row ? 'flex' : 'none'; ?>; align-items:center; gap:10px; margin-top:6px;">
+            <label class="oy-toggle-label" style="display:flex; align-items:center; gap:8px;">
+                <input type="checkbox"
+                       name="show_address_to_customers"
+                       id="show_address_to_customers"
+                       value="1"
+                       <?php checked( $show_address, '1' ); ?>>
+                <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
+            </label>
+        </div>
+    </div>
+
+    <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
+    <table class="form-table">
+        <tr>
+            <th scope="row">
+                <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_address_line1"
+                       id="location_address_line1"
+                       value="<?php echo esc_attr( $address_line1 ); ?>"
+                       class="large-text"
+                       placeholder="<?php esc_attr_e( 'Ej: Calle 10 # 25-30', 'lealez' ); ?>">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[0]</code>', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_address_line2"><?php _e( 'Complemento', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_address_line2"
+                       id="location_address_line2"
+                       value="<?php echo esc_attr( $address_line2 ); ?>"
+                       class="large-text"
+                       placeholder="<?php esc_attr_e( 'Ej: Local 202, Piso 2, Edificio Torre Norte', 'lealez' ); ?>">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.subPremise</code> o <code>addressLines[1]</code>', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_neighborhood"><?php _e( 'Barrio/Colonia', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_neighborhood"
+                       id="location_neighborhood"
+                       value="<?php echo esc_attr( $neighborhood ); ?>"
+                       class="regular-text">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.sublocality</code> (si disponible). ⚙️ También editable manualmente.', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_city"
+                       id="location_city"
+                       value="<?php echo esc_attr( $city ); ?>"
+                       class="regular-text">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.locality</code>', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_state"><?php _e( 'Estado/Departamento', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_state"
+                       id="location_state"
+                       value="<?php echo esc_attr( $state ); ?>"
+                       class="regular-text">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.administrativeArea</code>', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_country"
+                       id="location_country"
+                       value="<?php echo esc_attr( $country ); ?>"
+                       class="regular-text"
+                       placeholder="<?php esc_attr_e( 'CO, MX, US', 'lealez' ); ?>"
+                       maxlength="2">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.regionCode</code> (ISO 3166-1 alpha-2).', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_postal_code"><?php _e( 'Código Postal', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_postal_code"
+                       id="location_postal_code"
+                       value="<?php echo esc_attr( $postal_code ); ?>"
+                       class="regular-text">
+                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <?php if ( $formatted_address ) : ?>
+        <tr>
+            <th scope="row">
+                <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text" readonly class="large-text" value="<?php echo esc_attr( $formatted_address ); ?>">
+                <p class="description"><?php _e( 'Auto-generada al importar desde GMB.', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <?php endif; ?>
+        <tr>
+            <th scope="row">
+                <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <div>
+                        <label for="location_latitude"><?php _e( 'Latitud', 'lealez' ); ?></label>
+                        <input type="text"
+                               name="location_latitude"
+                               id="location_latitude"
+                               value="<?php echo esc_attr( $latitude ); ?>"
+                               class="regular-text"
+                               placeholder="6.2476376">
+                    </div>
+                    <div>
+                        <label for="location_longitude"><?php _e( 'Longitud', 'lealez' ); ?></label>
+                        <input type="text"
+                               name="location_longitude"
+                               id="location_longitude"
+                               value="<?php echo esc_attr( $longitude ); ?>"
+                               class="regular-text"
+                               placeholder="-75.5658153">
+                    </div>
+                </div>
+                <p class="description"><?php _e( 'Importado desde GMB: <code>latlng.latitude</code> / <code>latlng.longitude</code>', 'lealez' ); ?></p>
+            </td>
+        </tr>
+        <tr>
+            <th scope="row">
+                <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="url"
+                       name="location_map_url"
+                       id="location_map_url"
+                       value="<?php echo esc_attr( $map_url ); ?>"
+                       class="large-text">
+                <p class="description">
+                    <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
+                    <?php if ( $map_url ) : ?>
+                        &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
+                    <?php endif; ?>
+                </p>
+            </td>
+        </tr>
+    </table>
+    </div><!-- #oy-address-fields-wrap -->
+
+    <script type="text/javascript">
+    /**
+     * oy_toggle_address_fields
+     * Controla visibilidad del bloque de dirección y del row "mostrar dirección".
+     * Se declara en window para que applyLocationToForm (GMB metabox) pueda llamarla.
+     */
+    window.oy_toggle_address_fields = function() {
+        var $ = jQuery;
+        var isServiceAreaOnly  = $('#service_area_only').is(':checked');
+        var showAddressChecked = $('#show_address_to_customers').is(':checked');
+
+        // Mostrar/ocultar el row "mostrar dirección" solo cuando service_area_only está activo
+        if ( isServiceAreaOnly ) {
+            $('#oy-show-address-row').css('display', 'flex');
+        } else {
+            $('#oy-show-address-row').css('display', 'none');
+        }
+
+        // Ocultar campos de dirección si: solo servicio Y no mostrar dirección
+        if ( isServiceAreaOnly && ! showAddressChecked ) {
+            $('#oy-address-fields-wrap').hide();
+        } else {
+            $('#oy-address-fields-wrap').show();
+        }
+    };
+
+    jQuery(document).ready(function($){
+        $('#service_area_only').on('change', window.oy_toggle_address_fields);
+        $('#show_address_to_customers').on('change', window.oy_toggle_address_fields);
+
+        // Ejecutar al cargar
+        window.oy_toggle_address_fields();
+    });
+    </script>
+    <?php
+}
 
     /**
      * Render Contact Information meta box
@@ -1549,88 +1560,142 @@ public function render_gmb_meta_box( $post ) {
             });
         }
 
-        function applyLocationToForm(loc){
-            // Map a subset to existing fields
-            try{
-                // Title
-                if(loc.title){
-                    // WP title field
-                    $('#title').val(loc.title);
-                }
-
-                // Store code -> location_code (si está vacío)
-                if(loc.storeCode){
-                    var $code = $('#location_code');
-                    if($code.length && !$code.val()){
-                        $code.val(loc.storeCode);
-                    }
-                }
-
-                // Website
-                if(loc.websiteUri){
-                    $('#location_website').val(loc.websiteUri);
-                }
-
-                // Phones
-                if(loc.phoneNumbers){
-                    if(loc.phoneNumbers.primaryPhone){
-                        $('#location_phone').val(loc.phoneNumbers.primaryPhone);
-                    }
-                    if(loc.phoneNumbers.additionalPhones && loc.phoneNumbers.additionalPhones.length){
-                        $('#location_phone_additional').val(loc.phoneNumbers.additionalPhones[0]);
-                    }
-                }
-
-                // Address
-                if(loc.storefrontAddress){
-                    var a = loc.storefrontAddress;
-                    if(a.addressLines && a.addressLines.length){
-                        $('#location_address_line1').val(a.addressLines[0] || '');
-                        $('#location_address_line2').val(a.addressLines[1] || '');
-                    }
-                    if(a.locality){ $('#location_city').val(a.locality); }
-                    if(a.administrativeArea){ $('#location_state').val(a.administrativeArea); }
-                    if(a.postalCode){ $('#location_postal_code').val(a.postalCode); }
-                    if(a.regionCode){ $('#location_country').val(a.regionCode); }
-                }
-
-                // LatLng
-                if(loc.latlng){
-                    if(typeof loc.latlng.latitude !== 'undefined'){
-                        $('#location_latitude').val(loc.latlng.latitude);
-                    }
-                    if(typeof loc.latlng.longitude !== 'undefined'){
-                        $('#location_longitude').val(loc.latlng.longitude);
-                    }
-                }
-
-                // Category
-                if(loc.categories && loc.categories.primaryCategory){
-                    var pc = loc.categories.primaryCategory;
-                    var cat = pc.displayName || pc.name || '';
-                    if(cat){
-                        $('#google_primary_category').val(cat);
-                    }
-                }
-
-                // ✅ Profile description → Descripción (GMB)
-                if(loc.profile && loc.profile.description){
-                    var desc = loc.profile.description;
-                    var $desc = $('#location_short_description');
-                    if($desc.length){
-                        $desc.val(desc);
-                        // Actualizar contador de caracteres
-                        var $counter = $desc.closest('td').find('.oy-char-count');
-                        if($counter.length){
-                            $counter.text(desc.length + '/750');
-                        }
-                    }
-                }
-
-                // Hours mapping (simple) -> location_hours_* meta UI
-                // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
-            }catch(e){}
+function applyLocationToForm(loc){
+    // Map a subset to existing fields
+    try{
+        // Title
+        if(loc.title){
+            $('#title').val(loc.title);
         }
+
+        // Store code -> location_code (si está vacío)
+        if(loc.storeCode){
+            var $code = $('#location_code');
+            if($code.length && !$code.val()){
+                $code.val(loc.storeCode);
+            }
+        }
+
+        // Website
+        if(loc.websiteUri){
+            $('#location_website').val(loc.websiteUri);
+        }
+
+        // Phones
+        if(loc.phoneNumbers){
+            if(loc.phoneNumbers.primaryPhone){
+                $('#location_phone').val(loc.phoneNumbers.primaryPhone);
+            }
+            if(loc.phoneNumbers.additionalPhones && loc.phoneNumbers.additionalPhones.length){
+                $('#location_phone_additional').val(loc.phoneNumbers.additionalPhones[0]);
+            }
+        }
+
+        // ── Dirección — espeja la UX "Ubicación de la empresa" de GMB ──────────
+        //
+        // Determinar si la ubicación tiene dirección física real.
+        // Una dirección se considera vacía si storefrontAddress no existe o no tiene
+        // addressLines[0], locality ni regionCode poblados.
+        var hasStorefront = !!(
+            loc.storefrontAddress &&
+            (
+                ( loc.storefrontAddress.addressLines &&
+                  loc.storefrontAddress.addressLines.length &&
+                  loc.storefrontAddress.addressLines[0] ) ||
+                loc.storefrontAddress.locality ||
+                loc.storefrontAddress.regionCode
+            )
+        );
+
+        if ( !hasStorefront ) {
+            // Sin dirección física: activar "Sin ubicación física"
+            $('#service_area_only').prop('checked', true);
+            // Desmarcar "Mostrar dirección" (no hay dirección que mostrar)
+            $('#show_address_to_customers').prop('checked', false);
+            // Limpiar campos de dirección para no dejar datos residuales
+            $('#location_address_line1').val('');
+            $('#location_address_line2').val('');
+            $('#location_city').val('');
+            $('#location_state').val('');
+            $('#location_country').val('');
+            $('#location_postal_code').val('');
+        } else {
+            // Con dirección física: desmarcar "Solo servicio" y poblar campos
+            $('#service_area_only').prop('checked', false);
+
+            var a = loc.storefrontAddress;
+
+            // Línea 1
+            if(a.addressLines && a.addressLines.length){
+                $('#location_address_line1').val(a.addressLines[0] || '');
+            }
+
+            // Línea 2: subPremise tiene prioridad (GMB); fallback a addressLines[1]
+            var line2 = '';
+            if(a.subPremise){
+                line2 = a.subPremise;
+            } else if(a.addressLines && a.addressLines[1]){
+                line2 = a.addressLines[1];
+            }
+            $('#location_address_line2').val(line2);
+
+            // Barrio/Colonia: sublocality si viene de GMB
+            if(a.sublocality){
+                $('#location_neighborhood').val(a.sublocality);
+            }
+
+            // Demás campos de dirección
+            if(a.locality)           { $('#location_city').val(a.locality); }
+            if(a.administrativeArea) { $('#location_state').val(a.administrativeArea); }
+            if(a.postalCode)         { $('#location_postal_code').val(a.postalCode); }
+            if(a.regionCode)         { $('#location_country').val(a.regionCode); }
+        }
+
+        // Disparar toggle de visibilidad SIEMPRE después de cambiar checkboxes
+        if(typeof window.oy_toggle_address_fields === 'function'){
+            window.oy_toggle_address_fields();
+        }
+        // ── Fin bloque dirección ─────────────────────────────────────────────────
+
+        // LatLng
+        if(loc.latlng){
+            if(typeof loc.latlng.latitude !== 'undefined'){
+                $('#location_latitude').val(loc.latlng.latitude);
+            }
+            if(typeof loc.latlng.longitude !== 'undefined'){
+                $('#location_longitude').val(loc.latlng.longitude);
+            }
+        }
+
+        // Category
+        if(loc.categories && loc.categories.primaryCategory){
+            var pc = loc.categories.primaryCategory;
+            var cat = pc.displayName || pc.name || '';
+            if(cat){
+                $('#google_primary_category').val(cat);
+            }
+        }
+
+        // ✅ Profile description → Descripción (GMB)
+        if(loc.profile && loc.profile.description){
+            var desc = loc.profile.description;
+            var $desc = $('#location_short_description');
+            if($desc.length){
+                $desc.val(desc);
+                // Actualizar contador de caracteres
+                var $counter = $desc.closest('td').find('.oy-char-count, #gmb-desc-char-count');
+                if($counter.length){
+                    $counter.text(desc.length + '/750');
+                }
+            }
+        }
+
+        // Hours mapping (simple) -> location_hours_* meta UI
+        // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
+    }catch(e){
+        if(window.console && window.console.error){ console.error('[OY Location] applyLocationToForm error:', e); }
+    }
+}
 
         function importNow(businessId, locationName, accountName){
             if(!businessId || !locationName){
@@ -2838,23 +2903,40 @@ private function humanize_attribute_id( $attr_id ) {
             update_post_meta( $post_id, 'gmb_more_hours_raw', $more );
         }
 
-        // openInfo / locationState / metadata / labels
+// openInfo (RAW — guardamos independientemente)
         if ( ! empty( $data['openInfo'] ) && is_array( $data['openInfo'] ) ) {
             update_post_meta( $post_id, 'gmb_open_info_raw', $data['openInfo'] );
-
-            // Detect service-area-only business: no storefront address
-            // GMB openInfo.canReopen is unrelated; we use presence of storefrontAddress to determine
-            $has_storefront = ! empty( $data['storefrontAddress'] ) && is_array( $data['storefrontAddress'] );
-            if ( ! $has_storefront ) {
-                update_post_meta( $post_id, 'service_area_only', '1' );
-            } else {
-                // Only update if not already set manually
-                $existing = get_post_meta( $post_id, 'service_area_only', true );
-                if ( '' === $existing ) {
-                    update_post_meta( $post_id, 'service_area_only', '0' );
-                }
-            }
         }
+
+        // ── Detección de "Sin ubicación física" (service_area_only) ──────────────
+        // Se evalúa SIEMPRE, independiente de si openInfo viene en la respuesta.
+        // Espeja la lógica de GMB "Ubicación de la empresa":
+        //   - Sin storefrontAddress con datos reales → negocio de servicio a domicilio/online
+        //   - Con storefrontAddress → negocio con local físico
+        $addr_raw        = isset( $data['storefrontAddress'] ) && is_array( $data['storefrontAddress'] ) ? $data['storefrontAddress'] : array();
+        $has_storefront  = ! empty( $addr_raw ) && (
+            ! empty( $addr_raw['addressLines'][0] ) ||
+            ! empty( $addr_raw['locality'] )         ||
+            ! empty( $addr_raw['regionCode'] )
+        );
+
+        if ( ! $has_storefront ) {
+            // Sin dirección física: marcar como solo-servicio
+            update_post_meta( $post_id, 'service_area_only', '1' );
+            // Aseguramos que "mostrar dirección" quede en false para no confundir la UI
+            update_post_meta( $post_id, 'show_address_to_customers', '0' );
+        } else {
+            // Con dirección física: siempre actualizar (override valores anteriores)
+            update_post_meta( $post_id, 'service_area_only', '0' );
+        }
+
+        // serviceArea RAW — para negocios sin local físico (área de cobertura)
+        if ( ! empty( $data['serviceArea'] ) && is_array( $data['serviceArea'] ) ) {
+            update_post_meta( $post_id, 'gmb_service_area_raw', $data['serviceArea'] );
+            update_post_meta( $post_id, 'service_area_enabled', '1' );
+        }
+        // ── Fin bloque service_area_only ─────────────────────────────────────────
+        
         if ( ! empty( $data['locationState'] ) && is_array( $data['locationState'] ) ) {
             update_post_meta( $post_id, 'gmb_location_state_raw', $data['locationState'] );
         }
