@@ -2836,16 +2836,36 @@ private function humanize_attribute_id( $attr_id ) {
             return;
         }
 
-        $data = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
-        if ( is_wp_error( $data ) || ! is_array( $data ) ) {
-            // No rompemos el save: solo registramos last error
-            update_post_meta( $post_id, 'gmb_last_import_error', is_wp_error( $data ) ? $data->get_error_message() : 'Unknown error' );
-            return;
+$data = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
+if ( is_wp_error( $data ) || ! is_array( $data ) ) {
+    // No rompemos el save: solo registramos last error
+    update_post_meta( $post_id, 'gmb_last_import_error', is_wp_error( $data ) ? $data->get_error_message() : 'Unknown error' );
+    return;
+}
+
+// ✅ Cargar atributos por separado (Business Information API v1 no los incluye en location.get)
+// El endpoint dedicado GET /v1/locations/{id}/attributes devuelve url_whatsapp, url_instagram, etc.
+if ( ! isset( $data['attributes'] ) || empty( $data['attributes'] ) ) {
+    $attributes_result = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, false );
+    if ( ! is_wp_error( $attributes_result ) && is_array( $attributes_result ) && ! empty( $attributes_result ) ) {
+        $data['attributes'] = $attributes_result;
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] Attributes loaded via dedicated endpoint: ' . count( $attributes_result ) . ' attribute(s).' );
         }
+    } else {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $err_msg = is_wp_error( $attributes_result ) ? $attributes_result->get_error_message() : 'empty response';
+            error_log( '[OY Location] get_location_attributes failed or returned empty: ' . $err_msg );
+        }
+        // Garantizar que al menos es array vacío para evitar notices en el código posterior
+        if ( ! isset( $data['attributes'] ) ) {
+            $data['attributes'] = array();
+        }
+    }
+}
 
-        // ✅ Guardar RAW completo
-        update_post_meta( $post_id, 'gmb_location_raw', $data );
-
+// ✅ Guardar RAW completo
+update_post_meta( $post_id, 'gmb_location_raw', $data );
         // Extract locationId (último segmento)
         $location_id = $this->extract_location_id_from_resource_name( $location_name );
         if ( $location_id ) {
