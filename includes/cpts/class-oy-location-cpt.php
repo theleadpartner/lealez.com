@@ -1693,11 +1693,35 @@ function applyLocationToForm(loc){
         // Hours mapping (simple) -> location_hours_* meta UI
         // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
 
-        // ✅ metadata.mapsUri → URL en Google Maps
-        if(loc.metadata && loc.metadata.mapsUri){
-            var $mapUrl = $('#location_map_url');
-            if($mapUrl.length){
+        // ✅ metadata → URL en Google Maps (con fallback placeId y latlng)
+        // Intentamos primero metadata.mapsUri; si no existe, construimos desde placeId o latlng.
+        var mapsUrlFilled = false;
+        var $mapUrl = $('#location_map_url');
+
+        if($mapUrl.length){
+            // Opción 1: metadata.mapsUri (valor oficial de Google)
+            if(loc.metadata && loc.metadata.mapsUri){
                 $mapUrl.val(loc.metadata.mapsUri);
+                mapsUrlFilled = true;
+            }
+
+            // Opción 2: fallback desde placeId
+            if(!mapsUrlFilled){
+                var placeIdVal = (loc.metadata && loc.metadata.placeId) ? loc.metadata.placeId : '';
+                if(placeIdVal){
+                    $mapUrl.val('https://www.google.com/maps/place/?q=place_id:' + encodeURIComponent(placeIdVal));
+                    mapsUrlFilled = true;
+                }
+            }
+
+            // Opción 3: fallback desde latlng
+            if(!mapsUrlFilled && loc.latlng){
+                var lat = (typeof loc.latlng.latitude  !== 'undefined') ? loc.latlng.latitude  : 0;
+                var lng = (typeof loc.latlng.longitude !== 'undefined') ? loc.latlng.longitude : 0;
+                if(lat && lng){
+                    $mapUrl.val('https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng);
+                    mapsUrlFilled = true;
+                }
             }
         }
 
@@ -1721,6 +1745,7 @@ function applyLocationToForm(loc){
         if(window.console && window.console.error){ console.error('[OY Location] applyLocationToForm error:', e); }
     }
 }
+
 
         function importNow(businessId, locationName, accountName){
             if(!businessId || !locationName){
@@ -2973,9 +2998,51 @@ private function humanize_attribute_id( $attr_id ) {
                 update_post_meta( $post_id, 'location_map_url', esc_url_raw( (string) $data['metadata']['mapsUri'] ) );
             }
 
-            // Also save placeId as hidden meta (not shown in UI)
+            // placeId → location_place_id
             if ( ! empty( $data['metadata']['placeId'] ) ) {
                 update_post_meta( $post_id, 'location_place_id', sanitize_text_field( (string) $data['metadata']['placeId'] ) );
+            }
+
+            // newReviewUri → google_reviews_url (si el campo está vacío)
+            if ( ! empty( $data['metadata']['newReviewUri'] ) ) {
+                $existing_reviews_url = (string) get_post_meta( $post_id, 'google_reviews_url', true );
+                if ( '' === $existing_reviews_url ) {
+                    update_post_meta( $post_id, 'google_reviews_url', esc_url_raw( (string) $data['metadata']['newReviewUri'] ) );
+                }
+            }
+        }
+
+        /**
+         * ✅ FALLBACK URL de Google Maps:
+         * Si metadata.mapsUri no llegó (p.ej. readMask cayó a un nivel sin metadata),
+         * generamos la URL desde placeId o desde las coordenadas latlng.
+         * Esto garantiza que location_map_url siempre tenga un valor válido.
+         */
+        $existing_map_url = (string) get_post_meta( $post_id, 'location_map_url', true );
+        if ( '' === $existing_map_url ) {
+
+            // Opción 1: usar placeId (más preciso)
+            $place_id = (string) get_post_meta( $post_id, 'location_place_id', true );
+            if ( '' === $place_id && ! empty( $data['metadata']['placeId'] ) ) {
+                $place_id = sanitize_text_field( (string) $data['metadata']['placeId'] );
+            }
+            if ( $place_id ) {
+                $fallback_url = 'https://www.google.com/maps/place/?q=place_id:' . rawurlencode( $place_id );
+                update_post_meta( $post_id, 'location_map_url', esc_url_raw( $fallback_url ) );
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] location_map_url: fallback generada desde placeId: ' . $fallback_url );
+                }
+            } else {
+                // Opción 2: usar coordenadas latlng
+                $lat = ! empty( $data['latlng']['latitude'] )  ? (float) $data['latlng']['latitude']  : 0;
+                $lng = ! empty( $data['latlng']['longitude'] ) ? (float) $data['latlng']['longitude'] : 0;
+                if ( $lat && $lng ) {
+                    $fallback_url = 'https://www.google.com/maps/search/?api=1&query=' . $lat . ',' . $lng;
+                    update_post_meta( $post_id, 'location_map_url', esc_url_raw( $fallback_url ) );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] location_map_url: fallback generada desde latlng: ' . $fallback_url );
+                    }
+                }
             }
         }
         if ( ! empty( $data['labels'] ) && is_array( $data['labels'] ) ) {
