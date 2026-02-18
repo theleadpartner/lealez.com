@@ -1451,21 +1451,20 @@ public static function get_locations( $business_id, $account_name, $force_refres
      * latlng se conserva hasta el mask 5 como fallback de URL via coordenadas.
      */
     $read_masks = array(
-        // Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
-        // Mask 2 - sin campos deprecated pero con metadata + latlng
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,attributes,languageCode,profile',
-        // Mask 3 - reducido pero manteniendo metadata + latlng
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,attributes,languageCode,profile',
-        // Mask 4 - más reducido, todavía con metadata + latlng
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
-        // Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
-        // Mask 6 - solo metadata esencial
-        'name,title,metadata,profile',
-        // Mask 7 - absoluto último recurso sin metadata
-        'name,title,profile',
-        'name,title',
+// Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
+'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode,profile',
+// Mask 2 - sin campos deprecated pero con metadata + latlng
+'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,languageCode,profile',
+// Mask 3 - reducido pero manteniendo metadata + latlng
+'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,languageCode,profile',
+// Mask 4 - más reducido, todavía con metadata + latlng
+'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
+// Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
+'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
+// Mask 6 - solo metadata esencial
+'name,title,metadata,profile',
+// Mask 7 - absoluto último recurso sin metadata
+'name,title,profile',
     );
 
     $all_locations = array();
@@ -1958,21 +1957,21 @@ public static function sync_location_data( $business_id, $location_name ) {
      * el fallback pero metadata se preserva siempre para garantizar location_map_url.
      */
     $read_masks = array(
-        // Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
-        // Mask 2 - sin campos deprecated pero con metadata + latlng
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,attributes,languageCode,profile',
-        // Mask 3 - reducido pero manteniendo metadata + latlng
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,attributes,languageCode,profile',
-        // Mask 4 - más reducido, todavía con metadata + latlng
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
-        // Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
-        // Mask 6 - solo metadata esencial
-        'name,title,metadata,profile',
-        // Mask 7 - absoluto último recurso sin metadata
-        'name,title,profile',
-        'name,title',
+// Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
+'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode,profile',
+// Mask 2 - sin campos deprecated pero con metadata + latlng
+'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,languageCode,profile',
+// Mask 3 - reducido pero manteniendo metadata + latlng
+'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,languageCode,profile',
+// Mask 4 - más reducido, todavía con metadata + latlng
+'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
+// Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
+'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
+// Mask 6 - solo metadata esencial
+'name,title,metadata,profile',
+// Mask 7 - absoluto último recurso sin metadata
+'name,title,profile',
+'name,title',
     );
 
     $last_error = null;
@@ -2064,6 +2063,98 @@ public static function sync_location_data( $business_id, $location_name ) {
 }
 
 
+    /**
+ * Get attributes for a specific location via dedicated endpoint.
+ *
+ * La Business Information API v1 NO incluye atributos inline en el recurso Location.
+ * Para obtener url_whatsapp, url_text_messaging y otros atributos URI, se debe llamar
+ * al endpoint dedicado: GET /v1/locations/{locationId}/attributes
+ *
+ * Documentación: https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/getAttributes
+ *
+ * @param int    $business_id    WP post ID del oy_business.
+ * @param string $location_name  Resource name con formato 'locations/{id}' o 'accounts/{acc}/locations/{id}'.
+ * @param bool   $use_cache      Si usar caché. Default true.
+ *
+ * @return array|WP_Error Array de atributos normalizado para procesamiento, o WP_Error si falla.
+ *                        Formato devuelto: [ ['name' => 'locations/xxx/attributes/url_whatsapp', 'uriValues' => [['uri'=>'...']] ], ... ]
+ */
+public static function get_location_attributes( $business_id, $location_name, $use_cache = true ) {
+    $business_id   = absint( $business_id );
+    $location_name = trim( (string) $location_name );
+
+    if ( ! $business_id || '' === $location_name ) {
+        return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name', 'lealez' ) );
+    }
+
+    // Normalizar location_name al formato corto 'locations/{id}'
+    // Puede llegar como 'accounts/{acc}/locations/{id}' o 'locations/{id}'
+    $normalized_location = $location_name;
+    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+        // Extraer solo 'locations/{id}' desde 'accounts/{acc}/locations/{id}'
+        $parts = explode( '/locations/', $location_name, 2 );
+        if ( ! empty( $parts[1] ) ) {
+            $normalized_location = 'locations/' . $parts[1];
+        }
+    }
+
+    // El endpoint de atributos es: /locations/{id}/attributes
+    // Nota: no usamos readMask aquí — getAttributes devuelve todos los atributos configurados.
+    $endpoint = '/' . rtrim( $normalized_location, '/' ) . '/attributes';
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Fetching location attributes via dedicated endpoint.',
+            array(
+                'location'    => $location_name,
+                'endpoint'    => $endpoint,
+                'normalized'  => $normalized_location,
+            )
+        );
+    }
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$business_api_base,
+        'GET',
+        array(),
+        $use_cache,
+        array() // getAttributes no requiere readMask
+    );
+
+    if ( is_wp_error( $result ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'warning',
+                'get_location_attributes failed: ' . $result->get_error_message(),
+                array( 'location' => $location_name )
+            );
+        }
+        return $result;
+    }
+
+    // La respuesta tiene el formato:
+    // { "name": "locations/{id}/attributes", "attributes": [ { "name": "locations/{id}/attributes/url_whatsapp", "uriValues": [...] }, ... ] }
+    $attributes = array();
+    if ( ! empty( $result['attributes'] ) && is_array( $result['attributes'] ) ) {
+        $attributes = $result['attributes'];
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'Location attributes fetched: %d attribute(s) found.', count( $attributes ) ),
+            array( 'location' => $location_name )
+        );
+    }
+
+    return $attributes;
+}
 
 
 
