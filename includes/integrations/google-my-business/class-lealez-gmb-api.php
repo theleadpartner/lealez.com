@@ -1443,12 +1443,27 @@ public static function get_locations( $business_id, $account_name, $force_refres
      * - make_request ahora adjunta raw_body + body en error_data
      * - usamos self::is_field_mask_error($err) para decidir el fallback correctamente
      */
+    /**
+     * NOTA DE DISEÑO: metadata se mantiene en TODOS los masks porque contiene mapsUri
+     * (URL de Google Maps), esencial para el campo location_map_url.
+     * openInfo y locationState son campos deprecated en Business Information API v1;
+     * si Google los rechaza, hacemos fallback SIN ellos pero SIEMPRE con metadata.
+     * latlng se conserva hasta el mask 5 como fallback de URL via coordenadas.
+     */
     $read_masks = array(
+        // Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode,profile',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode,profile',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,profile',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,profile',
+        // Mask 2 - sin campos deprecated pero con metadata + latlng
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,attributes,languageCode,profile',
+        // Mask 3 - reducido pero manteniendo metadata + latlng
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,attributes,languageCode,profile',
+        // Mask 4 - más reducido, todavía con metadata + latlng
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
+        // Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
+        // Mask 6 - solo metadata esencial
+        'name,title,metadata,profile',
+        // Mask 7 - absoluto último recurso sin metadata
         'name,title,profile',
         'name,title',
     );
@@ -1937,13 +1952,25 @@ public static function sync_location_data( $business_id, $location_name ) {
      * - Probamos cadena de masks desde el más completo al más seguro.
      * - Solo hacemos fallback si el error "parece" de field mask.
      * - Ahora la detección usa self::is_field_mask_error() (lee raw_body + details.fieldViolations)
+     *
+     * NOTA: metadata se incluye en TODOS los masks porque contiene mapsUri (URL de Google Maps).
+     * openInfo y locationState son campos deprecated que pueden causar rechazo; se eliminan en
+     * el fallback pero metadata se preserva siempre para garantizar location_map_url.
      */
     $read_masks = array(
+        // Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode,profile',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode,profile',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,profile',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,profile',
+        // Mask 2 - sin campos deprecated pero con metadata + latlng
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,attributes,languageCode,profile',
+        // Mask 3 - reducido pero manteniendo metadata + latlng
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,attributes,languageCode,profile',
+        // Mask 4 - más reducido, todavía con metadata + latlng
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
+        // Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
+        // Mask 6 - solo metadata esencial
+        'name,title,metadata,profile',
+        // Mask 7 - absoluto último recurso sin metadata
         'name,title,profile',
         'name,title',
     );
