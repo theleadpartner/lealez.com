@@ -47,6 +47,15 @@ class Lealez_GMB_API {
  */
 private static $mybusiness_v4_base = 'https://mybusiness.googleapis.com/v4';
 
+    /**
+     * My Business Place Actions API base URL
+     * Gestiona PlaceActionLinks: booking (APPOINTMENT), menu (MENU), order (FOOD_ORDERING), etc.
+     * Doc: https://developers.google.com/my-business/reference/placeactions/rpc/google.mybusiness.placeactions.v1
+     *
+     * @var string
+     */
+    private static $place_actions_api_base = 'https://mybusinessplaceactions.googleapis.com/v1';
+
     
     /**
      * Max retry attempts (solo para errores de red, NO para rate limits)
@@ -2157,6 +2166,119 @@ public static function get_location_attributes( $business_id, $location_name, $u
 }
 
 
+
+
+    /**
+     * Obtiene los PlaceActionLinks de una ubicación desde My Business Place Actions API v1.
+     *
+     * Esta es la fuente oficial y correcta para las URLs configuradas en el Perfil de Negocio:
+     *   → "Editar perfil → Reserva"       → placeActionType: APPOINTMENT, ONLINE_APPOINTMENT, DINING_RESERVATION
+     *   → "Editar perfil → Menú"           → placeActionType: MENU
+     *   → "Editar perfil → Ordenar en línea" → placeActionType: FOOD_ORDERING, ORDER_AHEAD, FOOD_DELIVERY, FOOD_TAKEOUT
+     *
+     * Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
+     *
+     * Respuesta esperada:
+     * {
+     *   "placeActionLinks": [
+     *     {
+     *       "name":            "locations/{id}/placeActionLinks/{linkId}",
+     *       "uri":             "https://example.com/reservas",
+     *       "placeActionType": "APPOINTMENT",
+     *       "providerType":    "MERCHANT",
+     *       "isEditable":      true,
+     *       "isPreferred":     true
+     *     }
+     *   ]
+     * }
+     *
+     * NOTA: Solo procesamos links con providerType = MERCHANT (configurados por el dueño del negocio).
+     * Los links de Google Aggregators (providerType = AGGREGATOR_3P) se ignoran.
+     *
+     * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
+     * @param string $location_name Resource name de la ubicación (cualquier formato).
+     * @param bool   $use_cache     Si true, usa caché del rate limiter.
+     * @return array|WP_Error Array de PlaceActionLink objects, o WP_Error en caso de fallo.
+     */
+    public static function get_location_place_action_links( $business_id, $location_name, $use_cache = true ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name', 'lealez' ) );
+        }
+
+        // Normalizar al formato corto 'locations/{id}' requerido por Place Actions API v1
+        // Puede llegar como 'accounts/{acc}/locations/{id}', 'locations/{id}', o solo el ID
+        $normalized_location = $location_name;
+        if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+            $parts = explode( '/locations/', $location_name, 2 );
+            if ( ! empty( $parts[1] ) ) {
+                $normalized_location = 'locations/' . $parts[1];
+            }
+        } elseif ( is_numeric( trim( $location_name, '/' ) ) ) {
+            $normalized_location = 'locations/' . trim( $location_name, '/' );
+        }
+
+        // Asegurar que empieza con locations/ y no tiene trailing slash
+        $normalized_location = rtrim( $normalized_location, '/' );
+
+        // Endpoint: /locations/{id}/placeActionLinks
+        $endpoint = '/' . $normalized_location . '/placeActionLinks';
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Fetching PlaceActionLinks (booking / menu / order URLs) via Place Actions API v1.',
+                array(
+                    'original_location'   => $location_name,
+                    'normalized_location' => $normalized_location,
+                    'endpoint'            => self::$place_actions_api_base . $endpoint,
+                )
+            );
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$place_actions_api_base,
+            'GET',
+            array(),
+            $use_cache,
+            array()
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'get_location_place_action_links failed: ' . $result->get_error_message(),
+                    array( 'location' => $location_name )
+                );
+            }
+            // No es crítico: retornamos array vacío para que el proceso de sync continúe
+            return array();
+        }
+
+        // La respuesta tiene la forma: { "placeActionLinks": [ {...}, {...} ] }
+        $links = array();
+        if ( ! empty( $result['placeActionLinks'] ) && is_array( $result['placeActionLinks'] ) ) {
+            $links = $result['placeActionLinks'];
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'PlaceActionLinks fetched: %d link(s) found.', count( $links ) ),
+                array( 'location' => $location_name )
+            );
+        }
+
+        return $links;
+    }
 
 
     /**
