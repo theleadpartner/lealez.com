@@ -1446,9 +1446,10 @@ public static function get_locations( $business_id, $account_name, $force_refres
     $read_masks = array(
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode,profile',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode,profile',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,profile',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,profile',
+        'name,title,profile',
         'name,title',
     );
 
@@ -1940,9 +1941,10 @@ public static function sync_location_data( $business_id, $location_name ) {
     $read_masks = array(
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode,profile',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng',
-        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode,profile',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,profile',
+        'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,profile',
+        'name,title,profile',
         'name,title',
     );
 
@@ -1975,6 +1977,32 @@ public static function sync_location_data( $business_id, $location_name ) {
                         'readMask' => $mask,
                     )
                 );
+            }
+
+            // ✅ Si la mask exitosa no incluyó profile (o Google no lo retornó),
+            // hacemos una llamada dedicada ultraliviana solo para profile.description.
+            if ( empty( $result['profile'] ) ) {
+                $profile_query = array( 'readMask' => 'name,profile' );
+                $profile_result = self::make_request(
+                    $business_id,
+                    $endpoint,
+                    self::$business_api_base,
+                    'GET',
+                    array(),
+                    false, // no cache: necesitamos dato fresco
+                    $profile_query
+                );
+                if ( ! is_wp_error( $profile_result ) && ! empty( $profile_result['profile'] ) ) {
+                    $result['profile'] = $profile_result['profile'];
+                    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                        Lealez_GMB_Logger::log(
+                            $business_id,
+                            'info',
+                            'Profile fetched via dedicated call (readMask=name,profile).',
+                            array( 'location' => $location_name )
+                        );
+                    }
+                }
             }
 
             return $result;
