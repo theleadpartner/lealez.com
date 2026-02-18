@@ -981,6 +981,11 @@ public function render_address_meta_box( $post ) {
 
     /**
      * Render Business Hours meta box
+     *
+     * UI alineada con Google My Business:
+     * - Radio para estado del negocio (abierto con horarios, abierto sin horarios, cerrado temp., cerrado perm.)
+     * - Checkbox "Cerrada" por día
+     * - Select de horario con incrementos de 30 min + opción "24 horas"
      */
     public function render_hours_meta_box( $post ) {
         $days = array(
@@ -993,21 +998,43 @@ public function render_address_meta_box( $post ) {
             'sunday'    => __( 'Domingo', 'lealez' ),
         );
 
-        $timezone = get_post_meta( $post->ID, 'location_hours_timezone', true );
+        $timezone     = get_post_meta( $post->ID, 'location_hours_timezone', true );
+        $hours_status = get_post_meta( $post->ID, 'location_hours_status', true );
+
         if ( empty( $timezone ) ) {
             $timezone = 'America/Bogota';
         }
+        if ( empty( $hours_status ) ) {
+            $hours_status = 'open_with_hours';
+        }
+
+        // Genera opciones de horario: "24 horas" + intervalos de 30 min (00:00 → 23:30)
+        $time_options = array();
+        $time_options['24_hours'] = __( '24 horas', 'lealez' );
+        for ( $h = 0; $h < 24; $h++ ) {
+            foreach ( array( 0, 30 ) as $m ) {
+                $hh = sprintf( '%02d', $h );
+                $mm = sprintf( '%02d', $m );
+                // Formato display: 12:00 a.m. / 12:30 p.m.
+                $period  = $h < 12 ? 'a.m.' : 'p.m.';
+                $h12     = $h % 12;
+                if ( $h12 === 0 ) $h12 = 12;
+                $display = sprintf( '%d:%s %s', $h12, $mm, $period );
+                $time_options[ $hh . ':' . $mm ] = $display;
+            }
+        }
         ?>
-        <table class="form-table">
+
+        <?php /* ── ZONA HORARIA ── */ ?>
+        <table class="form-table" style="margin-bottom:0;">
             <tr>
-                <th scope="row">
+                <th scope="row" style="width:160px;">
                     <label for="location_hours_timezone"><?php _e( 'Zona Horaria', 'lealez' ); ?></label>
                 </th>
                 <td>
                     <select name="location_hours_timezone" id="location_hours_timezone" class="regular-text">
                         <?php
-                        $timezones = timezone_identifiers_list();
-                        foreach ( $timezones as $tz ) {
+                        foreach ( timezone_identifiers_list() as $tz ) {
                             printf(
                                 '<option value="%s" %s>%s</option>',
                                 esc_attr( $tz ),
@@ -1017,67 +1044,157 @@ public function render_address_meta_box( $post ) {
                         }
                         ?>
                     </select>
-                    <p class="description"><?php _e( '⚙️ Solo manual — Google no retorna timezone en Business Information API.', 'lealez' ); ?></p>
+                    <p class="description">⚙️ <?php _e( 'Solo manual — Google no retorna timezone en Business Information API.', 'lealez' ); ?></p>
                 </td>
             </tr>
         </table>
 
-        <h4><?php _e( 'Horarios por Día', 'lealez' ); ?></h4>
-        <p class="description">
-            <?php _e( 'Importado desde GMB: <code>regularHours.periods</code>. Puedes editar manualmente también.', 'lealez' ); ?>
-        </p>
-        <table class="widefat striped">
-            <thead>
-                <tr>
-                    <th><?php _e( 'Día', 'lealez' ); ?></th>
-                    <th><?php _e( 'Cerrado', 'lealez' ); ?></th>
-                    <th><?php _e( 'Hora Apertura', 'lealez' ); ?></th>
-                    <th><?php _e( 'Hora Cierre', 'lealez' ); ?></th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ( $days as $day_key => $day_label ) :
-                    $hours = get_post_meta( $post->ID, 'location_hours_' . $day_key, true );
-                    if ( ! is_array( $hours ) ) {
-                        $hours = array( 'closed' => false, 'open' => '09:00', 'close' => '18:00' );
-                    }
-                    ?>
-                    <tr>
-                        <td><strong><?php echo esc_html( $day_label ); ?></strong></td>
-                        <td>
-                            <input type="checkbox"
-                                   name="location_hours_<?php echo esc_attr( $day_key ); ?>[closed]"
-                                   value="1"
-                                   <?php checked( ! empty( $hours['closed'] ), true ); ?>
-                                   class="hours-closed-checkbox"
-                                   data-day="<?php echo esc_attr( $day_key ); ?>">
-                        </td>
-                        <td>
-                            <input type="time"
-                                   name="location_hours_<?php echo esc_attr( $day_key ); ?>[open]"
-                                   value="<?php echo esc_attr( $hours['open'] ?? '09:00' ); ?>"
-                                   class="hours-time-input hours-open-<?php echo esc_attr( $day_key ); ?>"
-                                   <?php echo ! empty( $hours['closed'] ) ? 'disabled' : ''; ?>>
-                        </td>
-                        <td>
-                            <input type="time"
-                                   name="location_hours_<?php echo esc_attr( $day_key ); ?>[close]"
-                                   value="<?php echo esc_attr( $hours['close'] ?? '18:00' ); ?>"
-                                   class="hours-time-input hours-close-<?php echo esc_attr( $day_key ); ?>"
-                                   <?php echo ! empty( $hours['closed'] ) ? 'disabled' : ''; ?>>
-                        </td>
+        <hr style="margin:12px 0;">
+
+        <?php /* ── ESTADO DEL HORARIO (radio buttons, igual que GMB) ── */ ?>
+        <div id="oy-hours-status-wrap" style="margin-bottom:16px;">
+            <h4 style="margin:0 0 8px;"><?php _e( 'Horario de atención', 'lealez' ); ?></h4>
+            <p class="description" style="margin-bottom:10px;"><?php _e( 'Establece el horario de atención principal o marca tu negocio como cerrado.', 'lealez' ); ?></p>
+
+            <?php
+            $status_options = array(
+                'open_with_hours'    => array(
+                    'label' => __( 'Abierto, con horarios de atención', 'lealez' ),
+                    'desc'  => __( 'Mostrar cuándo tu negocio está abierto', 'lealez' ),
+                ),
+                'open_without_hours' => array(
+                    'label' => __( 'Abierto, sin horarios de atención', 'lealez' ),
+                    'desc'  => __( 'No mostrar ningún horario de atención', 'lealez' ),
+                ),
+                'temporarily_closed' => array(
+                    'label' => __( 'Cerrado temporalmente', 'lealez' ),
+                    'desc'  => __( 'Indicar si tu empresa o negocio abrirán de nuevo en el futuro', 'lealez' ),
+                ),
+                'permanently_closed' => array(
+                    'label' => __( 'Cerrado permanentemente', 'lealez' ),
+                    'desc'  => __( 'Mostrar que tu empresa o negocio ya no existen', 'lealez' ),
+                ),
+            );
+            foreach ( $status_options as $val => $info ) : ?>
+                <label style="display:flex; align-items:flex-start; gap:10px; margin-bottom:8px; cursor:pointer;">
+                    <input type="radio"
+                           name="location_hours_status"
+                           value="<?php echo esc_attr( $val ); ?>"
+                           <?php checked( $hours_status, $val ); ?>
+                           class="oy-hours-status-radio"
+                           style="margin-top:3px; flex-shrink:0;">
+                    <span>
+                        <strong><?php echo esc_html( $info['label'] ); ?></strong><br>
+                        <span class="description"><?php echo esc_html( $info['desc'] ); ?></span>
+                    </span>
+                </label>
+            <?php endforeach; ?>
+        </div>
+
+        <?php /* ── TABLA DE HORARIOS POR DÍA (visible sólo si open_with_hours) ── */ ?>
+        <div id="oy-hours-grid-wrap" <?php echo ( $hours_status !== 'open_with_hours' ) ? 'style="display:none;"' : ''; ?>>
+            <p class="description" style="margin-bottom:8px;">
+                <?php _e( 'Importado desde GMB: <code>regularHours.periods</code>. Puedes editar manualmente también.', 'lealez' ); ?>
+            </p>
+            <table class="widefat" style="max-width:680px;">
+                <thead>
+                    <tr style="background:#f9f9f9;">
+                        <th style="width:120px;"><?php _e( 'Día', 'lealez' ); ?></th>
+                        <th style="width:100px; text-align:center;"><?php _e( 'Cerrada', 'lealez' ); ?></th>
+                        <th><?php _e( 'Abre a la(s)', 'lealez' ); ?></th>
+                        <th><?php _e( 'Cierra a la(s)', 'lealez' ); ?></th>
                     </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    <?php foreach ( $days as $day_key => $day_label ) :
+                        $hours = get_post_meta( $post->ID, 'location_hours_' . $day_key, true );
+                        if ( ! is_array( $hours ) ) {
+                            $hours = array( 'closed' => false, 'open' => '09:00', 'close' => '18:00', 'all_day' => false );
+                        }
+                        $is_closed  = ! empty( $hours['closed'] );
+                        $is_all_day = ! empty( $hours['all_day'] ) || ( isset( $hours['open'] ) && $hours['open'] === '24_hours' );
+                        $open_val   = $is_all_day ? '24_hours' : ( $hours['open'] ?? '09:00' );
+                        $close_val  = $hours['close'] ?? '18:00';
+                        $row_style  = $is_closed ? 'opacity:0.5;' : '';
+                        ?>
+                        <tr style="<?php echo esc_attr( $row_style ); ?>">
+                            <td style="vertical-align:middle;"><strong><?php echo esc_html( $day_label ); ?></strong></td>
+                            <td style="text-align:center; vertical-align:middle;">
+                                <input type="checkbox"
+                                       name="location_hours_<?php echo esc_attr( $day_key ); ?>[closed]"
+                                       value="1"
+                                       <?php checked( $is_closed, true ); ?>
+                                       class="oy-hours-closed-cb"
+                                       data-day="<?php echo esc_attr( $day_key ); ?>"
+                                       style="width:16px;height:16px;">
+                            </td>
+                            <td style="vertical-align:middle; padding:6px 8px;">
+                                <select name="location_hours_<?php echo esc_attr( $day_key ); ?>[open]"
+                                        class="oy-hours-open-sel oy-hours-open-<?php echo esc_attr( $day_key ); ?>"
+                                        data-day="<?php echo esc_attr( $day_key ); ?>"
+                                        style="min-width:140px;"
+                                        <?php echo $is_closed ? 'disabled' : ''; ?>>
+                                    <?php foreach ( $time_options as $tval => $tlabel ) : ?>
+                                        <option value="<?php echo esc_attr( $tval ); ?>"
+                                                <?php selected( $open_val, $tval ); ?>>
+                                            <?php echo esc_html( $tlabel ); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                            <td style="vertical-align:middle; padding:6px 8px;">
+                                <select name="location_hours_<?php echo esc_attr( $day_key ); ?>[close]"
+                                        class="oy-hours-close-sel oy-hours-close-<?php echo esc_attr( $day_key ); ?>"
+                                        style="min-width:140px;"
+                                        <?php echo ( $is_closed || $is_all_day ) ? 'disabled' : ''; ?>>
+                                    <?php
+                                    // Close select: sin opción "24 horas"
+                                    foreach ( $time_options as $tval => $tlabel ) :
+                                        if ( $tval === '24_hours' ) continue;
+                                    ?>
+                                        <option value="<?php echo esc_attr( $tval ); ?>"
+                                                <?php selected( $close_val, $tval ); ?>>
+                                            <?php echo esc_html( $tlabel ); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
 
         <script type="text/javascript">
         jQuery(document).ready(function($) {
-            $('.hours-closed-checkbox').on('change', function() {
-                var day = $(this).data('day');
-                var isClosed = $(this).is(':checked');
-                $('.hours-open-' + day + ', .hours-close-' + day).prop('disabled', isClosed);
+
+            // ── Radio: mostrar/ocultar grilla de horarios ──
+            $('.oy-hours-status-radio').on('change', function() {
+                if ( $(this).val() === 'open_with_hours' ) {
+                    $('#oy-hours-grid-wrap').slideDown(150);
+                } else {
+                    $('#oy-hours-grid-wrap').slideUp(150);
+                }
             });
+
+            // ── Checkbox "Cerrada": deshabilita selects del día ──
+            $('.oy-hours-closed-cb').on('change', function() {
+                var day = $(this).data('day');
+                var closed = $(this).is(':checked');
+                $(this).closest('tr').css('opacity', closed ? 0.5 : 1);
+                $('.oy-hours-open-' + day + ', .oy-hours-close-' + day).prop('disabled', closed);
+            });
+
+            // ── Select "Abre a la(s)": si elige "24 horas", deshabilita cierre ──
+            $('.oy-hours-open-sel').on('change', function() {
+                var day    = $(this).data('day');
+                var allDay = $(this).val() === '24_hours';
+                $('.oy-hours-close-' + day).prop('disabled', allDay);
+                if ( allDay ) {
+                    $('.oy-hours-close-' + day).val('');
+                }
+            });
+
         });
         </script>
 
@@ -2689,6 +2806,7 @@ private function humanize_attribute_id( $attr_id ) {
 
             // Hours
             'location_hours_timezone'         => 'sanitize_text_field',
+            'location_hours_status'           => 'sanitize_text_field',
 
             // GMB (existing)
             'gmb_location_id'                 => 'sanitize_text_field',
@@ -2802,15 +2920,27 @@ private function humanize_attribute_id( $attr_id ) {
             update_post_meta( $post_id, 'social_instagram_local', $social_profiles_manual['instagram'] );
         }
 
-        // Save hours (per day) arrays
+        // Save hours status (alineado con GMB: open_with_hours, open_without_hours, temporarily_closed, permanently_closed)
+        $valid_hours_statuses = array( 'open_with_hours', 'open_without_hours', 'temporarily_closed', 'permanently_closed' );
+        if ( isset( $_POST['location_hours_status'] ) ) {
+            $hours_status_raw = sanitize_text_field( wp_unslash( $_POST['location_hours_status'] ) );
+            if ( in_array( $hours_status_raw, $valid_hours_statuses, true ) ) {
+                update_post_meta( $post_id, 'location_hours_status', $hours_status_raw );
+            }
+        }
+
+        // Save hours (per day) arrays — soporte para '24_hours' (all_day)
         $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
         foreach ( $days as $day ) {
             if ( isset( $_POST[ 'location_hours_' . $day ] ) ) {
-                $raw = wp_unslash( $_POST[ 'location_hours_' . $day ] );
+                $raw     = wp_unslash( $_POST[ 'location_hours_' . $day ] );
+                $open    = sanitize_text_field( $raw['open'] ?? '09:00' );
+                $all_day = ( $open === '24_hours' );
                 $hours_data = array(
-                    'closed' => ! empty( $raw['closed'] ),
-                    'open'   => sanitize_text_field( $raw['open'] ?? '09:00' ),
-                    'close'  => sanitize_text_field( $raw['close'] ?? '18:00' ),
+                    'closed'  => ! empty( $raw['closed'] ),
+                    'open'    => $all_day ? '24_hours' : $open,
+                    'close'   => $all_day ? '' : sanitize_text_field( $raw['close'] ?? '18:00' ),
+                    'all_day' => $all_day,
                 );
                 update_post_meta( $post_id, 'location_hours_' . $day, $hours_data );
             }
@@ -3179,6 +3309,19 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 // openInfo (RAW — guardamos independientemente)
         if ( ! empty( $data['openInfo'] ) && is_array( $data['openInfo'] ) ) {
             update_post_meta( $post_id, 'gmb_open_info_raw', $data['openInfo'] );
+
+            // ✅ Mapear openInfo.status → location_hours_status (alineado con UI GMB)
+            $open_status = strtoupper( (string) ( $data['openInfo']['status'] ?? '' ) );
+            $regular_hours_present = ! empty( $data['regularHours']['periods'] );
+
+            if ( $open_status === 'CLOSED_TEMPORARILY' ) {
+                update_post_meta( $post_id, 'location_hours_status', 'temporarily_closed' );
+            } elseif ( $open_status === 'CLOSED_PERMANENTLY' ) {
+                update_post_meta( $post_id, 'location_hours_status', 'permanently_closed' );
+            } elseif ( $open_status === 'OPEN' || $open_status === '' ) {
+                // Si está abierto: distinguir si tiene horarios o no
+                update_post_meta( $post_id, 'location_hours_status', $regular_hours_present ? 'open_with_hours' : 'open_without_hours' );
+            }
         }
 
         // ── Detección de "Sin ubicación física" (service_area_only) ──────────────
@@ -3674,7 +3817,6 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             'SUNDAY'    => 'sunday',
         );
 
-        // default all closed false with fallback times (only if a period exists)
         $out = array();
 
         foreach ( $periods as $p ) {
@@ -3689,7 +3831,7 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
 
             $day_key = $day_map[ $open_day ];
 
-            // If already mapped a period for this day, skip (simple model)
+            // Si ya hay un período mapeado para este día, saltarlo (modelo simple 1 período/día)
             if ( isset( $out[ $day_key ] ) ) {
                 continue;
             }
@@ -3703,18 +3845,59 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             $close_h = isset( $close_time['hours'] ) ? (int) $close_time['hours'] : 18;
             $close_m = isset( $close_time['minutes'] ) ? (int) $close_time['minutes'] : 0;
 
-            $open_str  = sprintf( '%02d:%02d', $open_h, $open_m );
-            $close_str = sprintf( '%02d:%02d', $close_h, $close_m );
+            // Detección de 24 horas:
+            // GMB representa 24h como openDay == closeDay (o closeDay = siguiente día),
+            // openTime = 00:00, closeTime = 00:00.
+            // También puede venir sin closeTime cuando es 24h.
+            $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day;
+            $close_day_key = isset( $day_map[ $close_day_raw ] ) ? $day_map[ $close_day_raw ] : $day_key;
 
-            $out[ $day_key ] = array(
-                'closed' => false,
-                'open'   => $open_str,
-                'close'  => $close_str,
-            );
+            $is_24h = false;
+
+            // Caso 1: abre 00:00, cierra 00:00 (mismo día o siguiente) → 24h
+            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 ) {
+                $is_24h = true;
+            }
+
+            // Caso 2: no hay closeTime → 24h (Google lo omite en períodos all-day)
+            if ( empty( $close_time ) && $open_h === 0 && $open_m === 0 ) {
+                $is_24h = true;
+            }
+
+            if ( $is_24h ) {
+                $out[ $day_key ] = array(
+                    'closed'  => false,
+                    'open'    => '24_hours',
+                    'close'   => '',
+                    'all_day' => true,
+                );
+            } else {
+                $open_str  = sprintf( '%02d:%02d', $open_h, $open_m );
+                $close_str = sprintf( '%02d:%02d', $close_h, $close_m );
+
+                $out[ $day_key ] = array(
+                    'closed'  => false,
+                    'open'    => $open_str,
+                    'close'   => $close_str,
+                    'all_day' => false,
+                );
+            }
         }
 
-        // For days not present in periods, we do NOT forcibly set closed=true (Google may omit closed days).
-        // If you want that behavior later, lo podemos endurecer.
+        // Los días ausentes en los períodos de GMB los marcamos como cerrados
+        // (Google omite los días cerrados en regularHours.periods)
+        $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        foreach ( $all_days as $dk ) {
+            if ( ! isset( $out[ $dk ] ) ) {
+                $out[ $dk ] = array(
+                    'closed'  => true,
+                    'open'    => '09:00',
+                    'close'   => '18:00',
+                    'all_day' => false,
+                );
+            }
+        }
+
         return $out;
     }
 
