@@ -2876,12 +2876,26 @@ private function humanize_attribute_id( $attr_id ) {
         }
 
         // ✅ Map profile.description → location_short_description (GMB description, max 750 chars)
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] Profile field in API response: ' . ( isset( $data['profile'] ) ? wp_json_encode( $data['profile'] ) : 'NOT PRESENT' ) );
+        }
         if ( ! empty( $data['profile'] ) && is_array( $data['profile'] ) ) {
             update_post_meta( $post_id, 'gmb_profile_raw', $data['profile'] );
             if ( ! empty( $data['profile']['description'] ) ) {
                 $gmb_description = sanitize_textarea_field( (string) $data['profile']['description'] );
                 $gmb_description = mb_substr( $gmb_description, 0, 750 );
                 update_post_meta( $post_id, 'location_short_description', $gmb_description );
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Profile description saved (' . mb_strlen( $gmb_description ) . ' chars): ' . mb_substr( $gmb_description, 0, 80 ) . '...' );
+                }
+            } else {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Profile present but description is empty in API response.' );
+                }
+            }
+        } else {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] Profile NOT in API response – description field will remain empty.' );
             }
         }
 
@@ -3226,9 +3240,10 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             }
         }
 
-        // ✅ Si la entrada cacheada NO tiene 'profile', forzar re-fetch fresco desde API
-        // Esto ocurre cuando la caché fue generada antes de agregar 'profile' al readMask.
-        if ( null !== $found && ! isset( $found['profile'] ) ) {
+        // ✅ Si la entrada cacheada NO tiene 'profile' o tiene 'profile' vacío, forzar re-fetch fresco desde API.
+        // Esto ocurre cuando la caché fue generada con una readMask de fallback que no incluía 'profile'
+        // (el array queda guardado como [] o la key no existe). isset() no detecta este caso, empty() sí.
+        if ( null !== $found && empty( $found['profile'] ) ) {
             $found = null; // Forzar re-fetch
         }
 
