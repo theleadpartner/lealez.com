@@ -787,8 +787,7 @@ public function render_address_meta_box( $post ) {
                            value="<?php echo esc_attr( $chat_url ); ?>"
                            class="large-text"
                            placeholder="https://wa.me/573001234567">
-<p class=\"description\"><?php _e( 'Permite que los clientes chateen con tu empresa por SMS o a través de otras apps (ej: WhatsApp click-to-chat). 🔄 Se importa desde GMB si existe el atributo <code>url_message</code> — o puedes ingresarlo manualmente.', 'lealez' ); ?></p>        </table>
-
+<p class=\"description\"><?php _e( 'Permite que los clientes chateen con tu empresa vía WhatsApp o SMS. 🔄 Se importa automáticamente desde GMB (<code>url_whatsapp</code> / <code>url_text_messaging</code>) — o puedes ingresarlo manualmente.', 'lealez' ); ?></p>
         <hr style="margin:16px 0;">
 
         <h4><?php _e( '📧 Contacto Web', 'lealez' ); ?></h4>
@@ -1738,43 +1737,73 @@ function applyLocationToForm(loc){
             }
         }
 
-        // ✅ NUEVO: Atributos GMB → Usuario de chat (location_chat_url)
-        // Busca atributos de tipo URL relacionados con mensajería/chat.
+// ✅ Atributos GMB → Usuario de chat (location_chat_url)
+        // IDs oficiales según Google Business Profile API:
+        //   url_whatsapp       → WhatsApp click-to-chat
+        //   url_text_messaging → SMS / texto
+        // https://developers.google.com/my-business/content/whatsapp-text
+        //
+        // La API puede devolver el atributo con:
+        //   - attr.attributeId = 'url_whatsapp'  (formato corto)
+        //   - attr.name = 'attributes/url_whatsapp'  (formato resource name)
+        //   - attr.name = 'locations/123/attributes/url_whatsapp'  (formato completo)
         if(loc.attributes && Array.isArray(loc.attributes)){
-            var chatAttrPatterns = ['url_message','url_messaging','url_chat','conversation_uri','uri_message'];
-            var gmb_chat_url = '';
+            var chatOfficialIds = ['url_whatsapp', 'url_text_messaging', 'url_text_messaging3'];
+            var gmbChatUrl = '';
 
             for(var ai = 0; ai < loc.attributes.length; ai++){
                 var attr = loc.attributes[ai];
-                if(!attr || !attr.attributeId){ continue; }
-                var attrIdLower = attr.attributeId.toLowerCase();
+                if(!attr){ continue; }
 
+                // ── Normalizar el ID del atributo (igual que en PHP) ──────────
+                var attrIdRaw = '';
+                if(attr.attributeId){
+                    attrIdRaw = attr.attributeId;
+                } else if(attr.name){
+                    // Extraer la parte después del último 'attributes/'
+                    var nameParts = attr.name.split('/attributes/');
+                    attrIdRaw = nameParts[nameParts.length - 1] || '';
+                }
+                if(!attrIdRaw){ continue; }
+                var attrIdLower = attrIdRaw.toLowerCase();
+
+                // ── Verificar si es atributo de chat oficial ──────────────────
                 var isChatAttr = false;
-                for(var pi = 0; pi < chatAttrPatterns.length; pi++){
-                    if(attrIdLower === chatAttrPatterns[pi] || attrIdLower.indexOf(chatAttrPatterns[pi]) !== -1){
+                for(var ci = 0; ci < chatOfficialIds.length; ci++){
+                    if(attrIdLower === chatOfficialIds[ci]){
                         isChatAttr = true;
                         break;
                     }
                 }
-                // Fallback: cualquier attr que contenga "message" o "chat" y tenga uriValues
-                if(!isChatAttr && (attrIdLower.indexOf('message') !== -1 || attrIdLower.indexOf('chat') !== -1)){
-                    if(attr.uriValues && attr.uriValues.length){ isChatAttr = true; }
+                // Fallback: cualquier atributo con 'whatsapp' en el nombre y uriValues
+                if(!isChatAttr && attrIdLower.indexOf('whatsapp') !== -1 && attr.uriValues && attr.uriValues.length){
+                    isChatAttr = true;
                 }
 
-                if(isChatAttr && attr.uriValues && attr.uriValues.length && attr.uriValues[0].uri){
-                    gmb_chat_url = attr.uriValues[0].uri;
+                if(!isChatAttr){ continue; }
+
+                // ── Extraer el URI ────────────────────────────────────────────
+                if(attr.uriValues && attr.uriValues.length && attr.uriValues[0] && attr.uriValues[0].uri){
+                    gmbChatUrl = attr.uriValues[0].uri;
                     break;
                 }
             }
 
-            if(gmb_chat_url){
+            if(gmbChatUrl){
                 var $chatField = $('#location_chat_url');
-                if($chatField.length && !$chatField.val()){
-                    // Solo poblar si el campo está vacío (no sobreescribir entrada manual)
-                    $chatField.val(gmb_chat_url);
+                if($chatField.length){
+                    // Siempre actualizar desde GMB (es la fuente de verdad para este campo)
+                    $chatField.val(gmbChatUrl);
                 }
                 if(window.console && window.console.log){
-                    console.log('[OY Location] GMB chat URL aplicado:', gmb_chat_url);
+                    console.log('[OY Location] GMB chat URL aplicado desde atributo oficial:', gmbChatUrl);
+                }
+            } else {
+                if(window.console && window.console.log){
+                    console.log('[OY Location] GMB chat URL: no se encontró url_whatsapp ni url_text_messaging en loc.attributes');
+                    if(window.location.search.indexOf('debug=1') !== -1){
+                        console.log('[OY Location] Atributos disponibles:', loc.attributes);
+                    }
                 }
             }
         }
@@ -3154,71 +3183,102 @@ if ( ! empty( $gmb_social_profiles ) ) {
                 }
             }
 
-            // ✅ NUEVO: Extraer URL de chat/mensajería desde atributos GMB
-            // Google Business Profile almacena el "Usuario de chat" como un atributo URI.
-            // AttributeIDs conocidos: url_message, url_messaging, url_chat, conversation_uri,
-            // url_appointment (fallback), o cualquier attr que contenga "message" con uriValues.
-            $chat_uri_attr_patterns = array(
-                'url_message',
-                'url_messaging',
-                'url_chat',
-                'conversation_uri',
-                'uri_message',
+// ✅ Extraer URL de chat (WhatsApp / SMS) desde atributos GMB
+            // ─────────────────────────────────────────────────────────────────────
+            // Según la documentación oficial de Google Business Profile API:
+            //   - Atributo WhatsApp : url_whatsapp
+            //   - Atributo SMS/texto: url_text_messaging
+            // https://developers.google.com/my-business/content/whatsapp-text
+            //
+            // La API puede devolver el atributo con el campo 'attributeId' (solo el ID)
+            // O con el campo 'name' con formato 'attributes/url_whatsapp'
+            // o 'locations/{id}/attributes/url_whatsapp'. Ambos formatos se normalizan.
+            // ─────────────────────────────────────────────────────────────────────
+
+            // IDs oficiales de Google para chat, en orden de prioridad
+            $chat_official_ids = array(
+                'url_whatsapp',       // WhatsApp — ID oficial
+                'url_text_messaging', // SMS/texto — ID oficial
+                'url_text_messaging3',// Variante documentada en ejemplos de Google
             );
-            $gmb_chat_url = '';
+
+            $gmb_chat_url     = '';
+            $gmb_chat_type    = ''; // 'whatsapp' | 'sms' | ''
 
             foreach ( $data['attributes'] as $attr ) {
-                if ( ! is_array( $attr ) || empty( $attr['attributeId'] ) ) {
+                if ( ! is_array( $attr ) ) {
                     continue;
                 }
-                $attr_id_lower = strtolower( (string) $attr['attributeId'] );
 
+                // ── Normalizar el ID del atributo ──────────────────────────────
+                // La API puede devolver 'attributeId' directamente (ej: "url_whatsapp")
+                // o 'name' con prefijo (ej: "attributes/url_whatsapp" o
+                // "locations/123456/attributes/url_whatsapp").
+                $attr_id_raw = '';
+                if ( ! empty( $attr['attributeId'] ) ) {
+                    $attr_id_raw = (string) $attr['attributeId'];
+                } elseif ( ! empty( $attr['name'] ) ) {
+                    // Extraer solo la parte después del último 'attributes/'
+                    $name_str    = (string) $attr['name'];
+                    $parts       = explode( '/attributes/', $name_str );
+                    $attr_id_raw = trim( end( $parts ), '/' );
+                }
+
+                if ( '' === $attr_id_raw ) {
+                    continue;
+                }
+
+                $attr_id_lower = strtolower( $attr_id_raw );
+
+                // ── Verificar si es un atributo de chat conocido ───────────────
                 $is_chat_attr = false;
-                foreach ( $chat_uri_attr_patterns as $pattern ) {
-                    if ( $attr_id_lower === $pattern || strpos( $attr_id_lower, $pattern ) !== false ) {
+                foreach ( $chat_official_ids as $official_id ) {
+                    if ( $attr_id_lower === $official_id ) {
                         $is_chat_attr = true;
                         break;
                     }
                 }
 
-                // Fallback: cualquier atributo que contenga "message" o "chat" y tenga uriValues
-                if ( ! $is_chat_attr ) {
-                    if (
-                        ( strpos( $attr_id_lower, 'message' ) !== false || strpos( $attr_id_lower, 'chat' ) !== false )
-                        && ! empty( $attr['uriValues'] )
-                    ) {
-                        $is_chat_attr = true;
-                    }
+                // ── Fallback robusto: cualquier attr con 'whatsapp' en el nombre y uriValues
+                if ( ! $is_chat_attr && strpos( $attr_id_lower, 'whatsapp' ) !== false && ! empty( $attr['uriValues'] ) ) {
+                    $is_chat_attr = true;
                 }
 
-                if ( $is_chat_attr && ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                if ( ! $is_chat_attr ) {
+                    continue;
+                }
+
+                // ── Extraer el URI del atributo ────────────────────────────────
+                if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
                     $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
                     if ( $uri ) {
-                        $gmb_chat_url = $uri;
-                        break; // Usamos el primero encontrado
+                        $gmb_chat_url  = $uri;
+                        $gmb_chat_type = ( strpos( $attr_id_lower, 'whatsapp' ) !== false ) ? 'whatsapp' : 'sms';
+                        break; // Tomamos el primero válido (WhatsApp tiene prioridad por orden del array)
                     }
                 }
             }
 
+            // ── Guardar y mapear el chat URL ───────────────────────────────────
             if ( $gmb_chat_url ) {
-                // Guardar raw para auditoría
+                // Guardar raw para auditoría/debug
                 update_post_meta( $post_id, 'gmb_chat_url_raw', $gmb_chat_url );
-                // Mapear al campo de usuario — solo si el campo está vacío (no sobreescribir manual)
-                $existing_chat = (string) get_post_meta( $post_id, 'location_chat_url', true );
-                if ( '' === $existing_chat ) {
-                    update_post_meta( $post_id, 'location_chat_url', $gmb_chat_url );
-                    // Backward compat: también actualizar el antiguo campo whatsapp si aplica
-                    if ( strpos( $gmb_chat_url, 'wa.me' ) !== false || strpos( $gmb_chat_url, 'whatsapp' ) !== false ) {
-                        update_post_meta( $post_id, 'location_whatsapp', $gmb_chat_url );
-                    }
+                update_post_meta( $post_id, 'gmb_chat_type', $gmb_chat_type );
+
+                // Siempre actualizar location_chat_url desde GMB (es la fuente de verdad)
+                update_post_meta( $post_id, 'location_chat_url', $gmb_chat_url );
+
+                // Backward compat: también llenar el campo legacy location_whatsapp
+                if ( 'whatsapp' === $gmb_chat_type ) {
+                    update_post_meta( $post_id, 'location_whatsapp', $gmb_chat_url );
                 }
 
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] GMB chat URL found and saved: ' . $gmb_chat_url );
+                    error_log( '[OY Location] GMB chat URL (' . $gmb_chat_type . ') guardada: ' . $gmb_chat_url );
                 }
             } else {
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] GMB chat URL: no matching attribute found in response.' );
+                    error_log( '[OY Location] GMB chat URL: ningún atributo url_whatsapp / url_text_messaging encontrado en la respuesta.' );
                 }
             }
         }
