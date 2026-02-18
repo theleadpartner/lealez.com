@@ -1444,8 +1444,8 @@ public static function get_locations( $business_id, $account_name, $force_refres
      * - usamos self::is_field_mask_error($err) para decidir el fallback correctamente
      */
     $read_masks = array(
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode,profile',
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode',
         'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng',
         'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
@@ -1935,8 +1935,8 @@ public static function sync_location_data( $business_id, $location_name ) {
      * - Ahora la detección usa self::is_field_mask_error() (lee raw_body + details.fieldViolations)
      */
     $read_masks = array(
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode',
-        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,attributes,languageCode,profile',
+        'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,attributes,languageCode,profile',
         'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,attributes,languageCode',
         'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng',
         'name,title,storefrontAddress,phoneNumbers,websiteUri,categories',
