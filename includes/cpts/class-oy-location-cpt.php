@@ -834,7 +834,7 @@ public function render_address_meta_box( $post ) {
                            id="location_booking_url"
                            value="<?php echo esc_attr( $booking_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: atributo <code>url_appointment</code> (si el negocio tiene reservas configuradas en Google).', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>APPOINTMENT</code> configurado en "Editar perfil → Reserva" de Google Business Profile.', 'lealez' ); ?></p>
                 </td>
             </tr>
             <tr>
@@ -847,7 +847,7 @@ public function render_address_meta_box( $post ) {
                            id="location_menu_url"
                            value="<?php echo esc_attr( $menu_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: atributo <code>url_menu</code> (para restaurantes y negocios con menú en Google).', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>MENU</code> configurado en "Editar perfil → Menú" de Google Business Profile.', 'lealez' ); ?></p>
                 </td>
             </tr>
             <tr>
@@ -860,7 +860,7 @@ public function render_address_meta_box( $post ) {
                            id="location_order_url"
                            value="<?php echo esc_attr( $order_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: atributo <code>url_order_ahead</code> (pedidos online configurados en Google).', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>FOOD_ORDERING</code> configurado en "Editar perfil → Ordenar en línea" de Google Business Profile.', 'lealez' ); ?></p>
                 </td>
             </tr>
         </table>
@@ -2870,6 +2870,114 @@ if ( ! isset( $data['attributes'] ) || empty( $data['attributes'] ) ) {
     }
 }
 
+// ✅ PLACE ACTIONS API: Cargar URLs de Reservas, Menú y Pedidos Online
+// ─────────────────────────────────────────────────────────────────────────────────────
+// La My Business Place Actions API v1 es la fuente oficial de los "vínculos de acción"
+// que el negocio configura en su Perfil de Negocio de Google:
+//   • "Editar perfil → Reserva"           → placeActionType APPOINTMENT / ONLINE_APPOINTMENT / DINING_RESERVATION
+//   • "Editar perfil → Menú"              → placeActionType MENU
+//   • "Editar perfil → Ordenar en línea"  → placeActionType FOOD_ORDERING / ORDER_AHEAD / FOOD_DELIVERY / FOOD_TAKEOUT
+//
+// Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
+// Respuesta: { "placeActionLinks": [ { "uri": "...", "placeActionType": "APPOINTMENT", "providerType": "MERCHANT" } ] }
+//
+// IMPORTANTE: Estos links NO están en Business Information API v1 ni en el endpoint de atributos.
+// Deben obtenerse con get_location_place_action_links() que usa $place_actions_api_base.
+// ─────────────────────────────────────────────────────────────────────────────────────
+if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
+
+    $place_action_links = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, false );
+
+    if ( ! is_wp_error( $place_action_links ) && is_array( $place_action_links ) && ! empty( $place_action_links ) ) {
+
+        // Guardar RAW de Place Action Links para debugging y auditoría
+        update_post_meta( $post_id, 'gmb_place_action_links_raw', $place_action_links );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] Place Actions API: ' . count( $place_action_links ) . ' link(s) encontrado(s).' );
+        }
+
+        // Mapa placeActionType → meta_key WordPress
+        // Múltiples tipos pueden mapear al mismo campo; se usa el primero válido encontrado (prioridad por orden).
+        // Tipos confirmados en Google Business Profile UI según documentación oficial:
+        $action_type_to_meta = array(
+            // ── Reservas / Citas ─────────────────────────────────────────────────────────
+            'APPOINTMENT'         => 'location_booking_url',
+            'ONLINE_APPOINTMENT'  => 'location_booking_url',
+            'DINING_RESERVATION'  => 'location_booking_url',
+            // ── Menú ─────────────────────────────────────────────────────────────────────
+            'MENU'                => 'location_menu_url',
+            // ── Ordenar Online ───────────────────────────────────────────────────────────
+            'FOOD_ORDERING'       => 'location_order_url',
+            'ORDER_AHEAD'         => 'location_order_url',
+            'FOOD_DELIVERY'       => 'location_order_url',
+            'FOOD_TAKEOUT'        => 'location_order_url',
+        );
+
+        // Rastrear qué meta_keys ya guardamos para evitar sobreescribir
+        // con un tipo de menor prioridad si el principal ya se guardó.
+        $saved_meta_keys = array();
+
+        foreach ( $place_action_links as $link ) {
+            if ( ! is_array( $link ) ) {
+                continue;
+            }
+
+            $uri         = ! empty( $link['uri'] ) ? esc_url_raw( (string) $link['uri'] ) : '';
+            $action_type = ! empty( $link['placeActionType'] ) ? strtoupper( trim( (string) $link['placeActionType'] ) ) : '';
+
+            // Saltar links sin URI válida o tipo no mapeado
+            if ( ! $uri || ! $action_type ) {
+                continue;
+            }
+            if ( ! isset( $action_type_to_meta[ $action_type ] ) ) {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Place Actions API — tipo no mapeado: ' . $action_type . ' (' . $uri . ')' );
+                }
+                continue;
+            }
+
+            $meta_key = $action_type_to_meta[ $action_type ];
+
+            // Si ya guardamos este meta_key (tipo de mayor prioridad), saltar
+            if ( isset( $saved_meta_keys[ $meta_key ] ) ) {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Place Actions API — ' . $action_type . ' ignorado: ' . $meta_key . ' ya guardado con ' . $saved_meta_keys[ $meta_key ] );
+                }
+                continue;
+            }
+
+            update_post_meta( $post_id, $meta_key, $uri );
+            $saved_meta_keys[ $meta_key ] = $action_type;
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] Place Actions API — guardado: ' . $action_type . ' → ' . $meta_key . ' = ' . $uri );
+            }
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            if ( empty( $saved_meta_keys ) ) {
+                error_log( '[OY Location] Place Actions API — no se encontraron links de tipo APPOINTMENT / MENU / FOOD_ORDERING / ORDER_AHEAD.' );
+            }
+        }
+
+    } else {
+        // Sin links o error: puede ser que el negocio no tenga URLs configuradas en Google
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            if ( is_wp_error( $place_action_links ) ) {
+                error_log( '[OY Location] Place Actions API error: ' . $place_action_links->get_error_message() );
+            } else {
+                error_log( '[OY Location] Place Actions API — respuesta vacía (sin links de acción configurados en este negocio).' );
+            }
+        }
+    }
+
+} else {
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY Location] AVISO: Lealez_GMB_API::get_location_place_action_links() no disponible. Actualiza class-lealez-gmb-api.php.' );
+    }
+}
+
 // ✅ Guardar RAW completo
 update_post_meta( $post_id, 'gmb_location_raw', $data );
         // Extract locationId (último segmento)
@@ -3308,17 +3416,15 @@ if ( ! empty( $gmb_social_profiles ) ) {
                 }
             }
 
-            // ✅ Extraer URLs de Reservas, Menú y Pedidos Online desde atributos GMB
-            // ─────────────────────────────────────────────────────────────────────
-            // En Business Information API v1, estos URLs NO están en metadata.
-            // Se obtienen vía GET /v1/locations/{id}/attributes con IDs oficiales:
-            //   - url_appointment  → URL de reservas / citas
-            //   - url_menu         → URL del menú (restaurantes y cafeterías)
-            //   - url_order_ahead  → URL para ordenar online / pedidos anticipados
+            // ✅ FALLBACK: Extraer URLs de acción desde atributos GMB (Business Information API v1)
+            // ─────────────────────────────────────────────────────────────────────────────────────────
+            // NOTA: La fuente PRINCIPAL de estas URLs es la Place Actions API (bloque ejecutado antes,
+            // en la sección de gmb_location_raw). Este bloque de atributos actúa como FALLBACK:
+            // solo guarda el valor si el campo aún está vacío (la Place Actions API no lo entregó).
             //
-            // Referencia: Business Information API v1 — Attributes
-            // https://developers.google.com/my-business/reference/businessinformation/rpc/google.mybusiness.businessinformation.v1
-            // ─────────────────────────────────────────────────────────────────────
+            // Algunos negocios pueden tener url_appointment como atributo en Business Info API,
+            // aunque Google está migrando estos datos a Place Actions API progresivamente.
+            // ─────────────────────────────────────────────────────────────────────────────────────────
 
             // Mapa: attribute_id => meta_key destino
             $url_attr_map = array(
@@ -3354,6 +3460,15 @@ if ( ! empty( $gmb_social_profiles ) ) {
                         continue;
                     }
 
+                    // ✅ FALLBACK: solo guardar si Place Actions API no lo entregó (meta vacío)
+                    $current_val = (string) get_post_meta( $post_id, $meta_key, true );
+                    if ( '' !== $current_val ) {
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[OY Location] Atributo fallback ' . $gmb_id . ' ignorado: ' . $meta_key . ' ya tiene valor de Place Actions API.' );
+                        }
+                        break;
+                    }
+
                     // Extraer el URI desde uriValues
                     $uri = '';
                     if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
@@ -3363,7 +3478,7 @@ if ( ! empty( $gmb_social_profiles ) ) {
                     if ( $uri ) {
                         update_post_meta( $post_id, $meta_key, $uri );
                         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                            error_log( sprintf( '[OY Location] GMB attribute %s → %s: %s', $gmb_id, $meta_key, $uri ) );
+                            error_log( sprintf( '[OY Location] Fallback atributo %s → %s: %s', $gmb_id, $meta_key, $uri ) );
                         }
                     }
 
@@ -3372,7 +3487,7 @@ if ( ! empty( $gmb_social_profiles ) ) {
             }
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                // Log resumen de URLs de acción encontradas
+                // Log resumen final de URLs de acción (todas las fuentes combinadas)
                 $found_action_urls = array();
                 foreach ( $url_attr_map as $gmb_id => $meta_key ) {
                     $val = (string) get_post_meta( $post_id, $meta_key, true );
@@ -3381,9 +3496,9 @@ if ( ! empty( $gmb_social_profiles ) ) {
                     }
                 }
                 if ( ! empty( $found_action_urls ) ) {
-                    error_log( '[OY Location] GMB action URLs guardadas: ' . implode( ', ', $found_action_urls ) );
+                    error_log( '[OY Location] URLs de acción finales guardadas (Place Actions + fallback atributos): ' . implode( ', ', $found_action_urls ) );
                 } else {
-                    error_log( '[OY Location] GMB action URLs: ningún atributo url_appointment / url_menu / url_order_ahead encontrado en la respuesta.' );
+                    error_log( '[OY Location] Sin URLs de acción: no encontradas en Place Actions API ni en atributos GMB.' );
                 }
             }
         }
