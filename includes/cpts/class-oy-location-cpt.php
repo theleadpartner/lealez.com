@@ -834,7 +834,7 @@ public function render_address_meta_box( $post ) {
                            id="location_booking_url"
                            value="<?php echo esc_attr( $booking_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: <code>metadata.bookingLinks</code> (si el negocio lo tiene configurado).', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB: atributo <code>url_appointment</code> (si el negocio tiene reservas configuradas en Google).', 'lealez' ); ?></p>
                 </td>
             </tr>
             <tr>
@@ -847,7 +847,7 @@ public function render_address_meta_box( $post ) {
                            id="location_menu_url"
                            value="<?php echo esc_attr( $menu_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: <code>metadata.menuUri</code> (para restaurantes y cafeterías).', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB: atributo <code>url_menu</code> (para restaurantes y negocios con menú en Google).', 'lealez' ); ?></p>
                 </td>
             </tr>
             <tr>
@@ -860,7 +860,7 @@ public function render_address_meta_box( $post ) {
                            id="location_order_url"
                            value="<?php echo esc_attr( $order_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: <code>metadata.orderUri</code>', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB: atributo <code>url_order_ahead</code> (pedidos online configurados en Google).', 'lealez' ); ?></p>
                 </td>
             </tr>
         </table>
@@ -3305,6 +3305,85 @@ if ( ! empty( $gmb_social_profiles ) ) {
             } else {
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                     error_log( '[OY Location] GMB chat URL: ningún atributo url_whatsapp / url_text_messaging encontrado en la respuesta.' );
+                }
+            }
+
+            // ✅ Extraer URLs de Reservas, Menú y Pedidos Online desde atributos GMB
+            // ─────────────────────────────────────────────────────────────────────
+            // En Business Information API v1, estos URLs NO están en metadata.
+            // Se obtienen vía GET /v1/locations/{id}/attributes con IDs oficiales:
+            //   - url_appointment  → URL de reservas / citas
+            //   - url_menu         → URL del menú (restaurantes y cafeterías)
+            //   - url_order_ahead  → URL para ordenar online / pedidos anticipados
+            //
+            // Referencia: Business Information API v1 — Attributes
+            // https://developers.google.com/my-business/reference/businessinformation/rpc/google.mybusiness.businessinformation.v1
+            // ─────────────────────────────────────────────────────────────────────
+
+            // Mapa: attribute_id => meta_key destino
+            $url_attr_map = array(
+                'url_appointment'  => 'location_booking_url',
+                'url_menu'         => 'location_menu_url',
+                'url_order_ahead'  => 'location_order_url',
+            );
+
+            foreach ( $data['attributes'] as $attr ) {
+                if ( ! is_array( $attr ) ) {
+                    continue;
+                }
+
+                // Normalizar el ID del atributo (puede venir como 'attributeId' o extraído de 'name')
+                $attr_id_raw = '';
+                if ( ! empty( $attr['attributeId'] ) ) {
+                    $attr_id_raw = (string) $attr['attributeId'];
+                } elseif ( ! empty( $attr['name'] ) ) {
+                    $name_str    = (string) $attr['name'];
+                    $parts       = explode( '/attributes/', $name_str );
+                    $attr_id_raw = trim( end( $parts ), '/' );
+                }
+
+                if ( '' === $attr_id_raw ) {
+                    continue;
+                }
+
+                $attr_id_lower = strtolower( $attr_id_raw );
+
+                // Verificar si corresponde a alguno de nuestros IDs de interés
+                foreach ( $url_attr_map as $gmb_id => $meta_key ) {
+                    if ( $attr_id_lower !== $gmb_id ) {
+                        continue;
+                    }
+
+                    // Extraer el URI desde uriValues
+                    $uri = '';
+                    if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                        $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+                    }
+
+                    if ( $uri ) {
+                        update_post_meta( $post_id, $meta_key, $uri );
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( sprintf( '[OY Location] GMB attribute %s → %s: %s', $gmb_id, $meta_key, $uri ) );
+                        }
+                    }
+
+                    break; // Atributo encontrado, siguiente iteración del foreach externo
+                }
+            }
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                // Log resumen de URLs de acción encontradas
+                $found_action_urls = array();
+                foreach ( $url_attr_map as $gmb_id => $meta_key ) {
+                    $val = (string) get_post_meta( $post_id, $meta_key, true );
+                    if ( $val ) {
+                        $found_action_urls[] = $gmb_id . '=' . $val;
+                    }
+                }
+                if ( ! empty( $found_action_urls ) ) {
+                    error_log( '[OY Location] GMB action URLs guardadas: ' . implode( ', ', $found_action_urls ) );
+                } else {
+                    error_log( '[OY Location] GMB action URLs: ningún atributo url_appointment / url_menu / url_order_ahead encontrado en la respuesta.' );
                 }
             }
         }
