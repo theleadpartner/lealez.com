@@ -1001,28 +1001,33 @@ public function render_address_meta_box( $post ) {
         $timezone     = get_post_meta( $post->ID, 'location_hours_timezone', true );
         $hours_status = get_post_meta( $post->ID, 'location_hours_status', true );
 
-        if ( empty( $timezone ) ) {
-            $timezone = 'America/Bogota';
-        }
-        if ( empty( $hours_status ) ) {
-            $hours_status = 'open_with_hours';
-        }
+        if ( empty( $timezone ) )     { $timezone     = 'America/Bogota'; }
+        if ( empty( $hours_status ) ) { $hours_status = 'open_with_hours'; }
 
-        // Genera opciones de horario: "24 horas" + intervalos de 30 min (00:00 → 23:30)
+        // ── Genera opciones de horario: "24 horas" + intervalos de 30 min ──────
         $time_options = array();
         $time_options['24_hours'] = __( '24 horas', 'lealez' );
         for ( $h = 0; $h < 24; $h++ ) {
             foreach ( array( 0, 30 ) as $m ) {
-                $hh = sprintf( '%02d', $h );
-                $mm = sprintf( '%02d', $m );
-                // Formato display: 12:00 a.m. / 12:30 p.m.
-                $period  = $h < 12 ? 'a.m.' : 'p.m.';
-                $h12     = $h % 12;
-                if ( $h12 === 0 ) $h12 = 12;
-                $display = sprintf( '%d:%s %s', $h12, $mm, $period );
-                $time_options[ $hh . ':' . $mm ] = $display;
+                $hh     = sprintf( '%02d', $h );
+                $mm     = sprintf( '%02d', $m );
+                $period = $h < 12 ? 'a.m.' : 'p.m.';
+                $h12    = $h % 12;
+                if ( $h12 === 0 ) { $h12 = 12; }
+                $time_options[ $hh . ':' . $mm ] = sprintf( '%d:%s %s', $h12, $mm, $period );
             }
         }
+
+        // ── Helper: render un <select> de hora ────────────────────────────────
+        $render_select = function( $name, $selected_val, $include_all_day, $disabled = false, $extra_class = '' ) use ( $time_options ) {
+            $out = '<select name="' . esc_attr( $name ) . '" class="oy-hours-sel' . ( $extra_class ? ' ' . esc_attr( $extra_class ) : '' ) . '" style="min-width:130px;"' . ( $disabled ? ' disabled' : '' ) . '>';
+            foreach ( $time_options as $tval => $tlabel ) {
+                if ( ! $include_all_day && $tval === '24_hours' ) { continue; }
+                $out .= '<option value="' . esc_attr( $tval ) . '"' . selected( $selected_val, $tval, false ) . '>' . esc_html( $tlabel ) . '</option>';
+            }
+            $out .= '</select>';
+            return $out;
+        };
         ?>
 
         <?php /* ── ZONA HORARIA ── */ ?>
@@ -1033,16 +1038,9 @@ public function render_address_meta_box( $post ) {
                 </th>
                 <td>
                     <select name="location_hours_timezone" id="location_hours_timezone" class="regular-text">
-                        <?php
-                        foreach ( timezone_identifiers_list() as $tz ) {
-                            printf(
-                                '<option value="%s" %s>%s</option>',
-                                esc_attr( $tz ),
-                                selected( $timezone, $tz, false ),
-                                esc_html( $tz )
-                            );
-                        }
-                        ?>
+                        <?php foreach ( timezone_identifiers_list() as $tz ) {
+                            printf( '<option value="%s" %s>%s</option>', esc_attr( $tz ), selected( $timezone, $tz, false ), esc_html( $tz ) );
+                        } ?>
                     </select>
                     <p class="description">⚙️ <?php _e( 'Solo manual — Google no retorna timezone en Business Information API.', 'lealez' ); ?></p>
                 </td>
@@ -1051,38 +1049,21 @@ public function render_address_meta_box( $post ) {
 
         <hr style="margin:12px 0;">
 
-        <?php /* ── ESTADO DEL HORARIO (radio buttons, igual que GMB) ── */ ?>
+        <?php /* ── ESTADO DEL HORARIO ── */ ?>
         <div id="oy-hours-status-wrap" style="margin-bottom:16px;">
             <h4 style="margin:0 0 8px;"><?php _e( 'Horario de atención', 'lealez' ); ?></h4>
             <p class="description" style="margin-bottom:10px;"><?php _e( 'Establece el horario de atención principal o marca tu negocio como cerrado.', 'lealez' ); ?></p>
-
             <?php
             $status_options = array(
-                'open_with_hours'    => array(
-                    'label' => __( 'Abierto, con horarios de atención', 'lealez' ),
-                    'desc'  => __( 'Mostrar cuándo tu negocio está abierto', 'lealez' ),
-                ),
-                'open_without_hours' => array(
-                    'label' => __( 'Abierto, sin horarios de atención', 'lealez' ),
-                    'desc'  => __( 'No mostrar ningún horario de atención', 'lealez' ),
-                ),
-                'temporarily_closed' => array(
-                    'label' => __( 'Cerrado temporalmente', 'lealez' ),
-                    'desc'  => __( 'Indicar si tu empresa o negocio abrirán de nuevo en el futuro', 'lealez' ),
-                ),
-                'permanently_closed' => array(
-                    'label' => __( 'Cerrado permanentemente', 'lealez' ),
-                    'desc'  => __( 'Mostrar que tu empresa o negocio ya no existen', 'lealez' ),
-                ),
+                'open_with_hours'    => array( 'label' => __( 'Abierto, con horarios de atención', 'lealez' ),   'desc' => __( 'Mostrar cuándo tu negocio está abierto', 'lealez' ) ),
+                'open_without_hours' => array( 'label' => __( 'Abierto, sin horarios de atención', 'lealez' ),   'desc' => __( 'No mostrar ningún horario de atención', 'lealez' ) ),
+                'temporarily_closed' => array( 'label' => __( 'Cerrado temporalmente', 'lealez' ),               'desc' => __( 'Indicar si tu empresa o negocio abrirán de nuevo en el futuro', 'lealez' ) ),
+                'permanently_closed' => array( 'label' => __( 'Cerrado permanentemente', 'lealez' ),             'desc' => __( 'Mostrar que tu empresa o negocio ya no existen', 'lealez' ) ),
             );
             foreach ( $status_options as $val => $info ) : ?>
                 <label style="display:flex; align-items:flex-start; gap:10px; margin-bottom:8px; cursor:pointer;">
-                    <input type="radio"
-                           name="location_hours_status"
-                           value="<?php echo esc_attr( $val ); ?>"
-                           <?php checked( $hours_status, $val ); ?>
-                           class="oy-hours-status-radio"
-                           style="margin-top:3px; flex-shrink:0;">
+                    <input type="radio" name="location_hours_status" value="<?php echo esc_attr( $val ); ?>"
+                           <?php checked( $hours_status, $val ); ?> class="oy-hours-status-radio" style="margin-top:3px; flex-shrink:0;">
                     <span>
                         <strong><?php echo esc_html( $info['label'] ); ?></strong><br>
                         <span class="description"><?php echo esc_html( $info['desc'] ); ?></span>
@@ -1091,253 +1072,201 @@ public function render_address_meta_box( $post ) {
             <?php endforeach; ?>
         </div>
 
-        <?php /* ── TABLA DE HORARIOS POR DÍA (visible sólo si open_with_hours) ── */ ?>
+        <?php /* ── GRILLA DE HORARIOS POR DÍA — multi período ── */ ?>
         <div id="oy-hours-grid-wrap" <?php echo ( $hours_status !== 'open_with_hours' ) ? 'style="display:none;"' : ''; ?>>
             <p class="description" style="margin-bottom:8px;">
                 <?php _e( 'Importado desde GMB: <code>regularHours.periods</code>. Puedes editar manualmente también.', 'lealez' ); ?>
             </p>
-            <table class="widefat" style="max-width:680px;">
-                <thead>
-                    <tr style="background:#f9f9f9;">
-                        <th style="width:120px;"><?php _e( 'Día', 'lealez' ); ?></th>
-                        <th style="width:100px; text-align:center;"><?php _e( 'Cerrada', 'lealez' ); ?></th>
-                        <th><?php _e( 'Abre a la(s)', 'lealez' ); ?></th>
-                        <th><?php _e( 'Cierra a la(s)', 'lealez' ); ?></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ( $days as $day_key => $day_label ) :
-                        $hours = get_post_meta( $post->ID, 'location_hours_' . $day_key, true );
-                        if ( ! is_array( $hours ) ) {
-                            $hours = array( 'closed' => false, 'open' => '09:00', 'close' => '18:00', 'all_day' => false );
-                        }
-                        $is_closed  = ! empty( $hours['closed'] );
-                        $is_all_day = ! empty( $hours['all_day'] ) || ( isset( $hours['open'] ) && $hours['open'] === '24_hours' );
-                        $open_val   = $is_all_day ? '24_hours' : ( $hours['open'] ?? '09:00' );
-                        $close_val  = $hours['close'] ?? '18:00';
-                        $row_style  = $is_closed ? 'opacity:0.5;' : '';
-                        ?>
-                        <tr style="<?php echo esc_attr( $row_style ); ?>">
-                            <td style="vertical-align:middle;"><strong><?php echo esc_html( $day_label ); ?></strong></td>
-                            <td style="text-align:center; vertical-align:middle;">
-                                <input type="checkbox"
-                                       name="location_hours_<?php echo esc_attr( $day_key ); ?>[closed]"
-                                       value="1"
-                                       <?php checked( $is_closed, true ); ?>
-                                       class="oy-hours-closed-cb"
-                                       data-day="<?php echo esc_attr( $day_key ); ?>"
-                                       style="width:16px;height:16px;">
-                            </td>
-                            <td style="vertical-align:middle; padding:6px 8px;">
-                                <select name="location_hours_<?php echo esc_attr( $day_key ); ?>[open]"
-                                        class="oy-hours-open-sel oy-hours-open-<?php echo esc_attr( $day_key ); ?>"
-                                        data-day="<?php echo esc_attr( $day_key ); ?>"
-                                        style="min-width:140px;"
-                                        <?php echo $is_closed ? 'disabled' : ''; ?>>
-                                    <?php foreach ( $time_options as $tval => $tlabel ) : ?>
-                                        <option value="<?php echo esc_attr( $tval ); ?>"
-                                                <?php selected( $open_val, $tval ); ?>>
-                                            <?php echo esc_html( $tlabel ); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </td>
-                            <td style="vertical-align:middle; padding:6px 8px;">
-                                <select name="location_hours_<?php echo esc_attr( $day_key ); ?>[close]"
-                                        class="oy-hours-close-sel oy-hours-close-<?php echo esc_attr( $day_key ); ?>"
-                                        style="min-width:140px;"
-                                        <?php echo ( $is_closed || $is_all_day ) ? 'disabled' : ''; ?>>
-                                    <?php
-                                    // Close select: sin opción "24 horas"
-                                    foreach ( $time_options as $tval => $tlabel ) :
-                                        if ( $tval === '24_hours' ) continue;
-                                    ?>
-                                        <option value="<?php echo esc_attr( $tval ); ?>"
-                                                <?php selected( $close_val, $tval ); ?>>
-                                            <?php echo esc_html( $tlabel ); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
+
+            <script type="text/javascript">
+            var oyHoursTimeOptions = <?php
+                $js_opts = array();
+                foreach ( $time_options as $tv => $tl ) { $js_opts[] = array( 'value' => $tv, 'label' => $tl ); }
+                echo wp_json_encode( $js_opts );
+            ?>;
+            var oyHoursI18n = {
+                addPeriod:    '<?php echo esc_js( __( 'Agregar otro turno', 'lealez' ) ); ?>',
+                removePeriod: '<?php echo esc_js( __( 'Eliminar turno', 'lealez' ) ); ?>',
+                opensAt:      '<?php echo esc_js( __( 'Abre a la(s)', 'lealez' ) ); ?>',
+                closesAt:     '<?php echo esc_js( __( 'Cierra a la(s)', 'lealez' ) ); ?>',
+            };
+            </script>
+
+            <div id="oy-hours-days-container">
+            <?php foreach ( $days as $day_key => $day_label ) :
+                $hours = get_post_meta( $post->ID, 'location_hours_' . $day_key, true );
+
+                // Normalizar: si no existe o es v1 (open/close al nivel raíz), migrar a v2 (periods[])
+                if ( ! is_array( $hours ) ) {
+                    $hours = array( 'closed' => false, 'all_day' => false, 'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ) );
+                }
+                if ( ! isset( $hours['periods'] ) || ! is_array( $hours['periods'] ) || empty( $hours['periods'] ) ) {
+                    $old_open  = $hours['open']  ?? '09:00';
+                    $old_close = $hours['close'] ?? '18:00';
+                    if ( $old_open === '24_hours' ) {
+                        $hours['all_day'] = true;
+                        $hours['periods'] = array( array( 'open' => '24_hours', 'close' => '' ) );
+                    } else {
+                        $hours['all_day'] = false;
+                        $hours['periods'] = array( array( 'open' => $old_open, 'close' => $old_close ) );
+                    }
+                }
+
+                $is_closed     = ! empty( $hours['closed'] );
+                $is_all_day    = ! empty( $hours['all_day'] );
+                $periods       = is_array( $hours['periods'] ) ? $hours['periods'] : array( array( 'open' => '09:00', 'close' => '18:00' ) );
+                if ( $is_all_day ) { $periods = array( array( 'open' => '24_hours', 'close' => '' ) ); }
+                $periods_total = count( $periods );
+                ?>
+                <div class="oy-day-section" data-day="<?php echo esc_attr( $day_key ); ?>"
+                     style="display:flex; align-items:flex-start; gap:0; margin-bottom:4px; padding:6px 0; border-bottom:1px solid #f0f0f0;">
+
+                    <div style="width:130px; flex-shrink:0; padding-top:8px;">
+                        <strong><?php echo esc_html( $day_label ); ?></strong>
+                    </div>
+
+                    <div style="width:80px; flex-shrink:0; text-align:center; padding-top:6px;">
+                        <input type="checkbox"
+                               name="location_hours_<?php echo esc_attr( $day_key ); ?>[closed]"
+                               value="1"
+                               <?php checked( $is_closed, true ); ?>
+                               class="oy-hours-closed-cb"
+                               data-day="<?php echo esc_attr( $day_key ); ?>"
+                               style="width:16px;height:16px;">
+                        <?php if ( $is_closed ) : ?>
+                            <br><small style="color:#999;"><?php _e( 'Cerrada', 'lealez' ); ?></small>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="oy-day-periods" data-day="<?php echo esc_attr( $day_key ); ?>"
+                         style="flex:1; <?php echo $is_closed ? 'opacity:0.5;' : ''; ?>">
+                        <?php foreach ( $periods as $pidx => $period ) :
+                            $popen   = $period['open']  ?? '09:00';
+                            $pclose  = $period['close'] ?? '18:00';
+                            $p24h    = ( $popen === '24_hours' );
+                            $is_first = ( $pidx === 0 );
+                            ?>
+                            <div class="oy-period-row" style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                <div>
+                                    <?php if ( $is_first ) : ?><div style="font-size:10px;color:#888;margin-bottom:2px;"><?php _e( 'Abre a la(s)', 'lealez' ); ?></div><?php endif; ?>
+                                    <?php echo $render_select(
+                                        'location_hours_' . $day_key . '[periods][' . $pidx . '][open]',
+                                        $popen, true, $is_closed, 'oy-period-open'
+                                    ); ?>
+                                </div>
+                                <div>
+                                    <?php if ( $is_first ) : ?><div style="font-size:10px;color:#888;margin-bottom:2px;"><?php _e( 'Cierra a la(s)', 'lealez' ); ?></div><?php endif; ?>
+                                    <?php echo $render_select(
+                                        'location_hours_' . $day_key . '[periods][' . $pidx . '][close]',
+                                        $pclose, false, ( $is_closed || $p24h ), 'oy-period-close'
+                                    ); ?>
+                                </div>
+                                <div style="<?php echo $is_first ? 'margin-top:18px;' : ''; ?>">
+                                    <?php if ( ! $is_all_day ) : ?>
+                                        <?php if ( $pidx === 0 ) : ?>
+                                            <button type="button" class="button oy-add-period" data-day="<?php echo esc_attr( $day_key ); ?>"
+                                                    title="<?php esc_attr_e( 'Agregar otro turno', 'lealez' ); ?>" style="padding:2px 8px;min-height:28px;">＋</button>
+                                        <?php endif; ?>
+                                        <?php if ( $pidx > 0 ) : ?>
+                                            <button type="button" class="button oy-remove-period" data-day="<?php echo esc_attr( $day_key ); ?>"
+                                                    title="<?php esc_attr_e( 'Eliminar turno', 'lealez' ); ?>" style="padding:2px 8px;min-height:28px;color:#dc3232;">🗑</button>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+            </div><!-- #oy-hours-days-container -->
+        </div><!-- #oy-hours-grid-wrap -->
 
         <script type="text/javascript">
         jQuery(document).ready(function($) {
 
-            // ── Radio: mostrar/ocultar grilla de horarios ──
+            // ── Radio: mostrar/ocultar grilla ───────────────────────────────
             $('.oy-hours-status-radio').on('change', function() {
-                if ( $(this).val() === 'open_with_hours' ) {
-                    $('#oy-hours-grid-wrap').slideDown(150);
-                } else {
-                    $('#oy-hours-grid-wrap').slideUp(150);
+                $('#oy-hours-grid-wrap')[ $(this).val() === 'open_with_hours' ? 'slideDown' : 'slideUp' ](150);
+            });
+
+            // ── Helper: generar <option> HTML para selects ──────────────────
+            function buildOptions(selectedVal, includeAllDay) {
+                var html = '';
+                for (var i = 0; i < oyHoursTimeOptions.length; i++) {
+                    var opt = oyHoursTimeOptions[i];
+                    if (!includeAllDay && opt.value === '24_hours') continue;
+                    html += '<option value="' + opt.value + '"' + (opt.value === selectedVal ? ' selected' : '') + '>' + opt.label + '</option>';
                 }
-            });
+                return html;
+            }
 
-            // ── Checkbox "Cerrada": deshabilita selects del día ──
-            $('.oy-hours-closed-cb').on('change', function() {
-                var day = $(this).data('day');
-                var closed = $(this).is(':checked');
-                $(this).closest('tr').css('opacity', closed ? 0.5 : 1);
-                $('.oy-hours-open-' + day + ', .oy-hours-close-' + day).prop('disabled', closed);
-            });
+            // ── Helper: construir un nuevo row de período ───────────────────
+            function buildPeriodRow(dayKey, idx, openVal, closeVal, isFirst) {
+                var marginTop = isFirst ? 'margin-top:18px;' : '';
+                var labelO = isFirst ? '<div style="font-size:10px;color:#888;margin-bottom:2px;">' + oyHoursI18n.opensAt  + '</div>' : '';
+                var labelC = isFirst ? '<div style="font-size:10px;color:#888;margin-bottom:2px;">' + oyHoursI18n.closesAt + '</div>' : '';
+                return '<div class="oy-period-row" style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">' +
+                    '<div>' + labelO + '<select name="location_hours_' + dayKey + '[periods][' + idx + '][open]" class="oy-hours-sel oy-period-open" style="min-width:130px;">' + buildOptions(openVal, true)  + '</select></div>' +
+                    '<div>' + labelC + '<select name="location_hours_' + dayKey + '[periods][' + idx + '][close]" class="oy-hours-sel oy-period-close" style="min-width:130px;">' + buildOptions(closeVal, false) + '</select></div>' +
+                    '<div style="' + marginTop + '"><button type="button" class="button oy-add-period" data-day="' + dayKey + '" title="' + oyHoursI18n.addPeriod + '" style="padding:2px 8px;min-height:28px;">＋</button></div>' +
+                '</div>';
+            }
 
-            // ── Select "Abre a la(s)": si elige "24 horas", deshabilita cierre ──
-            $('.oy-hours-open-sel').on('change', function() {
+            // ── Helper: reindexar names y botones tras add/remove ───────────
+            function reindexPeriods(dayKey) {
+                var $rows = $('.oy-day-periods[data-day="' + dayKey + '"] .oy-period-row');
+                $rows.each(function(idx) {
+                    $(this).find('.oy-period-open' ).attr('name', 'location_hours_' + dayKey + '[periods][' + idx + '][open]');
+                    $(this).find('.oy-period-close').attr('name', 'location_hours_' + dayKey + '[periods][' + idx + '][close]');
+                    // Botón de acción del row: primer row → solo +; resto → 🗑 (+ en el último)
+                    var $btnWrap = $(this).find('div:last-child');
+                    $btnWrap.find('.oy-add-period, .oy-remove-period').remove();
+                    if (idx === 0) {
+                        $btnWrap.append('<button type="button" class="button oy-add-period" data-day="' + dayKey + '" title="' + oyHoursI18n.addPeriod + '" style="padding:2px 8px;min-height:28px;">＋</button>');
+                    } else {
+                        $btnWrap.append('<button type="button" class="button oy-remove-period" data-day="' + dayKey + '" title="' + oyHoursI18n.removePeriod + '" style="padding:2px 8px;min-height:28px;color:#dc3232;">🗑</button>');
+                    }
+                });
+            }
+
+            // ── Checkbox "Cerrada" ───────────────────────────────────────────
+            $(document).on('change', '.oy-hours-closed-cb', function() {
                 var day    = $(this).data('day');
-                var allDay = $(this).val() === '24_hours';
-                $('.oy-hours-close-' + day).prop('disabled', allDay);
-                if ( allDay ) {
-                    $('.oy-hours-close-' + day).val('');
-                }
+                var closed = $(this).is(':checked');
+                $('.oy-day-periods[data-day="' + day + '"]'). css('opacity', closed ? 0.5 : 1).find('select').prop('disabled', closed);
             });
+
+            // ── Agregar período ──────────────────────────────────────────────
+            $(document).on('click', '.oy-add-period', function() {
+                var dayKey   = $(this).data('day');
+                var $periods = $('.oy-day-periods[data-day="' + dayKey + '"]');
+                var newIdx   = $periods.find('.oy-period-row').length;
+                $periods.append(buildPeriodRow(dayKey, newIdx, '09:00', '18:00', false));
+                reindexPeriods(dayKey);
+            });
+
+            // ── Eliminar período ─────────────────────────────────────────────
+            $(document).on('click', '.oy-remove-period', function() {
+                var dayKey = $(this).data('day');
+                $(this).closest('.oy-period-row').remove();
+                reindexPeriods(dayKey);
+            });
+
+            // ── Select "Abre a la(s)" = 24h → deshabilitar cierre ───────────
+            $(document).on('change', '.oy-period-open', function() {
+                var isAllDay = $(this).val() === '24_hours';
+                var $row = $(this).closest('.oy-period-row');
+                $row.find('.oy-period-close').prop('disabled', isAllDay).val(isAllDay ? '' : undefined);
+                $row.find('.oy-add-period')[ isAllDay ? 'hide' : 'show' ]();
+            });
+
+            // ── Exponer helpers a window para uso desde applyLocationToForm ──
+            window.oyHours_buildOptions  = buildOptions;
+            window.oyHours_buildRow      = buildPeriodRow;
+            window.oyHours_reindex       = reindexPeriods;
 
         });
         </script>
-
-        <?php
-        // Horarios especiales (feriados, etc.) desde GMB — mostrar como tabla legible
-        $gmb_special_hours_raw = get_post_meta( $post->ID, 'gmb_special_hours_raw', true );
-        if ( ! empty( $gmb_special_hours_raw ) ) :
-            $special_periods = isset( $gmb_special_hours_raw['specialHourPeriods'] )
-                ? $gmb_special_hours_raw['specialHourPeriods']
-                : ( is_array( $gmb_special_hours_raw ) ? $gmb_special_hours_raw : array() );
-            if ( ! empty( $special_periods ) ) : ?>
-                <hr>
-                <h4 style="margin-top:10px;"><?php _e( 'Horarios Especiales (desde GMB)', 'lealez' ); ?></h4>
-                <p class="description"><?php _e( 'Importados desde GMB: <code>specialHours</code>. Solo lectura — para editarlos usa Google Business Profile directamente.', 'lealez' ); ?></p>
-                <table class="widefat striped" style="max-width:600px;">
-                    <thead><tr>
-                        <th><?php _e( 'Fecha', 'lealez' ); ?></th>
-                        <th><?php _e( 'Estado', 'lealez' ); ?></th>
-                        <th><?php _e( 'Horario', 'lealez' ); ?></th>
-                    </tr></thead>
-                    <tbody>
-                        <?php foreach ( $special_periods as $period ) :
-                            $start_date = '—';
-                            if ( isset( $period['startDate'] ) ) {
-                                $sd = $period['startDate'];
-                                $start_date = is_array( $sd )
-                                    ? ( ( $sd['year'] ?? '' ) . '-' . str_pad( $sd['month'] ?? 0, 2, '0', STR_PAD_LEFT ) . '-' . str_pad( $sd['day'] ?? 0, 2, '0', STR_PAD_LEFT ) )
-                                    : $sd;
-                            }
-                            $is_closed  = ! empty( $period['closed'] );
-                            $open_time  = '';
-                            $close_time = '';
-                            if ( isset( $period['openTime'] ) ) {
-                                $ot = $period['openTime'];
-                                $open_time = is_array( $ot ) ? ( ( $ot['hours'] ?? 0 ) . ':' . str_pad( $ot['minutes'] ?? 0, 2, '0', STR_PAD_LEFT ) ) : $ot;
-                            }
-                            if ( isset( $period['closeTime'] ) ) {
-                                $ct = $period['closeTime'];
-                                $close_time = is_array( $ct ) ? ( ( $ct['hours'] ?? 0 ) . ':' . str_pad( $ct['minutes'] ?? 0, 2, '0', STR_PAD_LEFT ) ) : $ct;
-                            }
-                            ?>
-                            <tr>
-                                <td><?php echo esc_html( $start_date ); ?></td>
-                                <td><?php echo $is_closed
-                                    ? '<span style="color:#dc3232;">' . esc_html__( 'Cerrado', 'lealez' ) . '</span>'
-                                    : '<span style="color:#46b450;">' . esc_html__( 'Abierto', 'lealez' ) . '</span>'; ?></td>
-                                <td><?php echo $is_closed ? '—' : esc_html( $open_time . ' – ' . $close_time ); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php endif; ?>
-        <?php endif; ?>
-
-        <?php
-        // Horarios adicionales: delivery, pickup, etc.
-        $gmb_more_hours_raw = get_post_meta( $post->ID, 'gmb_more_hours_raw', true );
-        if ( ! empty( $gmb_more_hours_raw ) && is_array( $gmb_more_hours_raw ) ) :
-            // Map GMB hoursTypeId to Spanish labels
-            $more_hours_labels = array(
-                'DELIVERY'              => __( 'Entrega a domicilio', 'lealez' ),
-                'PICKUP'                => __( 'Para llevar / Retiro en tienda', 'lealez' ),
-                'TAKEOUT'               => __( 'Para llevar', 'lealez' ),
-                'DRIVE_THROUGH'         => __( 'Pedidos desde el auto', 'lealez' ),
-                'ONLINE_SERVICE_HOURS'  => __( 'Horario de atención en línea', 'lealez' ),
-                'KITCHEN'               => __( 'Cocina', 'lealez' ),
-                'BREAKFAST'             => __( 'Desayuno', 'lealez' ),
-                'LUNCH'                 => __( 'Almuerzo', 'lealez' ),
-                'BRUNCH'                => __( 'Brunch', 'lealez' ),
-                'DINNER'                => __( 'Cena', 'lealez' ),
-                'HAPPY_HOUR'            => __( 'Hora feliz', 'lealez' ),
-                'ACCESS'                => __( 'Acceso', 'lealez' ),
-                'SENIOR_HOURS'          => __( 'Población en riesgo', 'lealez' ),
-            );
-
-            $day_labels_es = array(
-                'MONDAY'    => __( 'Lunes', 'lealez' ),
-                'TUESDAY'   => __( 'Martes', 'lealez' ),
-                'WEDNESDAY' => __( 'Miércoles', 'lealez' ),
-                'THURSDAY'  => __( 'Jueves', 'lealez' ),
-                'FRIDAY'    => __( 'Viernes', 'lealez' ),
-                'SATURDAY'  => __( 'Sábado', 'lealez' ),
-                'SUNDAY'    => __( 'Domingo', 'lealez' ),
-            );
-            ?>
-            <hr>
-            <h4 style="margin-top:12px;">
-                <?php _e( 'Otros Horarios (desde GMB)', 'lealez' ); ?>
-            </h4>
-            <p class="description">
-                <?php _e( 'Importados desde GMB: <code>moreHours</code>. Solo lectura — editarlos directamente en Google Business Profile.', 'lealez' ); ?>
-            </p>
-            <?php foreach ( $gmb_more_hours_raw as $more ) :
-                if ( ! is_array( $more ) ) continue;
-                $type_id    = isset( $more['hoursTypeId'] ) ? strtoupper( (string) $more['hoursTypeId'] ) : '';
-                $type_label = isset( $more_hours_labels[ $type_id ] )
-                    ? $more_hours_labels[ $type_id ]
-                    : ( $type_id ? ucfirst( strtolower( str_replace( '_', ' ', $type_id ) ) ) : __( 'Tipo desconocido', 'lealez' ) );
-                $periods    = isset( $more['periods'] ) && is_array( $more['periods'] ) ? $more['periods'] : array();
-                ?>
-                <div style="margin-bottom:14px;">
-                    <h5 style="margin:10px 0 4px; font-size:13px; font-weight:600; color:#1d2327; border-bottom:1px solid #e2e4e7; padding-bottom:4px;">
-                        🕐 <?php echo esc_html( $type_label ); ?>
-                        <span style="font-size:11px; font-weight:400; color:#888;"><?php echo esc_html( '(' . $type_id . ')' ); ?></span>
-                    </h5>
-                    <?php if ( ! empty( $periods ) ) : ?>
-                        <table class="widefat striped" style="max-width:480px; margin-top:4px;">
-                            <thead>
-                                <tr>
-                                    <th style="width:30%;"><?php _e( 'Día', 'lealez' ); ?></th>
-                                    <th style="width:35%;"><?php _e( 'Apertura', 'lealez' ); ?></th>
-                                    <th style="width:35%;"><?php _e( 'Cierre', 'lealez' ); ?></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ( $periods as $p ) :
-                                    $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
-                                    $day_label_es = isset( $day_labels_es[ $open_day_raw ] ) ? $day_labels_es[ $open_day_raw ] : esc_html( $open_day_raw );
-
-                                    $ot      = isset( $p['openTime'] ) ? $p['openTime'] : '';
-                                    $ct      = isset( $p['closeTime'] ) ? $p['closeTime'] : '';
-                                    $open_t  = is_array( $ot )
-                                        ? sprintf( '%02d:%02d', $ot['hours'] ?? 0, $ot['minutes'] ?? 0 )
-                                        : (string) $ot;
-                                    $close_t = is_array( $ct )
-                                        ? sprintf( '%02d:%02d', $ct['hours'] ?? 0, $ct['minutes'] ?? 0 )
-                                        : (string) $ct;
-                                    ?>
-                                    <tr>
-                                        <td><?php echo esc_html( $day_label_es ); ?></td>
-                                        <td><?php echo esc_html( $open_t ?: '—' ); ?></td>
-                                        <td><?php echo esc_html( $close_t ?: '—' ); ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php else : ?>
-                        <p class="description" style="margin:4px 0 0;"><?php _e( 'No hay períodos definidos para este tipo de horario.', 'lealez' ); ?></p>
-                    <?php endif; ?>
-                </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-        <?php
     }
 /**
  * Render GMB Integration meta box
@@ -1831,127 +1760,169 @@ function applyLocationToForm(loc){
             }
         }
 
-        // ── Horarios de atención: mapeo desde GMB → UI ───────────────────────────
+        // ── Horarios de atención: mapeo completo GMB → UI (multi-período) ─────────
         //
-        // Google puede retornar los horarios en 3 formas:
-        //   1. openInfo.openingHoursType = 'ALWAYS_OPEN'  → todos los días = 24 horas
-        //   2. regularHours.periods[]                      → horarios por día
-        //   3. openInfo.status = 'CLOSED_TEMPORARILY/PERMANENTLY'
+        // Soporta 3 fuentes de GMB:
+        //   1. openInfo.openingHoursType = 'ALWAYS_OPEN' → todos 24h
+        //   2. regularHours.periods[]                    → n períodos por día
+        //   3. openInfo.status CLOSED_*                  → cerrado temporal/permanente
         //
-        var hoursStatus   = '';
-        var openInfoObj   = loc.openInfo || null;
-        var regularHours  = loc.regularHours || null;
+        // La UI usa la nueva estructura .oy-day-periods / .oy-period-row generada
+        // por render_hours_meta_box. Los helpers buildRow/reindex se expusieron como
+        // window.oyHours_buildRow / window.oyHours_reindex desde ese mismo metabox.
+        // ─────────────────────────────────────────────────────────────────────────
 
-        var openStatus    = openInfoObj  ? String( openInfoObj.status           || '' ).toUpperCase() : '';
-        var hoursType     = openInfoObj  ? String( openInfoObj.openingHoursType || '' ).toUpperCase() : '';
-        var hasPeriods    = !!(regularHours && regularHours.periods && regularHours.periods.length);
-        var isAlwaysOpen  = (hoursType === 'ALWAYS_OPEN');
+        var _openInfoObj  = loc.openInfo    || null;
+        var _regularHours = loc.regularHours || null;
 
-        // Determinar radio de estado
-        if ( openStatus === 'CLOSED_TEMPORARILY' ) {
-            hoursStatus = 'temporarily_closed';
-        } else if ( openStatus === 'CLOSED_PERMANENTLY' ) {
-            hoursStatus = 'permanently_closed';
-        } else {
-            hoursStatus = (hasPeriods || isAlwaysOpen) ? 'open_with_hours' : 'open_without_hours';
-        }
+        var _openStatus  = _openInfoObj ? String(_openInfoObj.status           || '').toUpperCase() : '';
+        var _hoursType   = _openInfoObj ? String(_openInfoObj.openingHoursType || '').toUpperCase() : '';
+        var _hasPeriods  = !!(_regularHours && _regularHours.periods && _regularHours.periods.length);
+        var _isAlwaysOpen = (_hoursType === 'ALWAYS_OPEN');
 
-        // Seleccionar radio correspondiente
-        $('input[name="location_hours_status"][value="' + hoursStatus + '"]').prop('checked', true).trigger('change');
+        // Determinar y aplicar radio de estado
+        var _hoursStatus;
+        if      (_openStatus === 'CLOSED_TEMPORARILY' ) { _hoursStatus = 'temporarily_closed'; }
+        else if (_openStatus === 'CLOSED_PERMANENTLY' ) { _hoursStatus = 'permanently_closed'; }
+        else { _hoursStatus = (_hasPeriods || _isAlwaysOpen) ? 'open_with_hours' : 'open_without_hours'; }
+        $('input[name="location_hours_status"][value="' + _hoursStatus + '"]').prop('checked', true).trigger('change');
 
-        // Función auxiliar: llenar selector de un día
-        function applyDayHours(dayKey, openVal, closeVal, isClosed) {
-            var $row   = $('[name="location_hours_' + dayKey + '[open]"]').closest('tr');
-            var $cb    = $('[name="location_hours_' + dayKey + '[closed]"]');
-            var $open  = $('[name="location_hours_' + dayKey + '[open]"]');
-            var $close = $('[name="location_hours_' + dayKey + '[close]"]');
+        // ── Helper local: reconstruir DOM de períodos para un día ────────────────
+        // Usa window.oyHours_buildRow expuesto desde render_hours_meta_box.
+        // Si aún no está disponible (orden de carga), construye HTML inline.
+        function _rebuildDayPeriods(dayKey, periodsArr, isClosed) {
+            var $pane = $('.oy-day-periods[data-day="' + dayKey + '"]');
+            var $cb   = $('[name="location_hours_' + dayKey + '[closed]"]');
+            if (!$pane.length) return;
 
+            // Actualizar checkbox cerrada
             $cb.prop('checked', !!isClosed);
-            $row.css('opacity', isClosed ? 0.5 : 1);
+            $pane.css('opacity', isClosed ? 0.5 : 1);
 
-            if ( isClosed ) {
-                $open.prop('disabled', true);
-                $close.prop('disabled', true);
-            } else {
-                $open.prop('disabled', false).val(openVal || '09:00');
-                var isAllDay = (openVal === '24_hours');
-                $close.prop('disabled', isAllDay).val(isAllDay ? '' : (closeVal || '18:00'));
+            // Limpiar todos los period-rows actuales
+            $pane.find('.oy-period-row').remove();
+
+            if (isClosed) {
+                // Día cerrado: añadir un row deshabilitado con valores por defecto
+                var closedHtml = _buildRowHtml(dayKey, 0, '09:00', '18:00', true, true);
+                $pane.append(closedHtml);
+                return;
+            }
+
+            // Añadir un row por cada período
+            for (var ri = 0; ri < periodsArr.length; ri++) {
+                var rowHtml = _buildRowHtml(dayKey, ri, periodsArr[ri].open, periodsArr[ri].close, false, false);
+                $pane.append(rowHtml);
+            }
+
+            // Reindexar names y botones
+            if (typeof window.oyHours_reindex === 'function') {
+                window.oyHours_reindex(dayKey);
             }
         }
 
-        var dayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-        var dayGmb  = { monday:'MONDAY', tuesday:'TUESDAY', wednesday:'WEDNESDAY', thursday:'THURSDAY',
-                        friday:'FRIDAY', saturday:'SATURDAY', sunday:'SUNDAY' };
-        var dayOrder = { MONDAY:0, TUESDAY:1, WEDNESDAY:2, THURSDAY:3, FRIDAY:4, SATURDAY:5, SUNDAY:6 };
-
-        if ( isAlwaysOpen ) {
-            // Caso 1: ALWAYS_OPEN → todos los días 24 horas
-            for (var d = 0; d < dayKeys.length; d++) {
-                applyDayHours(dayKeys[d], '24_hours', '', false);
+        // ── Helper: construir HTML de un period-row ──────────────────────────────
+        function _buildRowHtml(dayKey, idx, openVal, closeVal, disabled, showLabels) {
+            // Usar helper expuesto si disponible
+            if (typeof window.oyHours_buildRow === 'function') {
+                return window.oyHours_buildRow(dayKey, idx, openVal, closeVal, (idx === 0));
             }
-
-        } else if ( hasPeriods ) {
-            // Caso 2: regularHours.periods → mapear por día
-            // Primero, construir mapa de períodos indexado por openDay
-            var periodMap = {};
-            for (var pi = 0; pi < regularHours.periods.length; pi++) {
-                var p = regularHours.periods[pi];
-                if (!p || !p.openDay) continue;
-                var od = String(p.openDay).toUpperCase();
-                if (periodMap[od]) continue; // primer período del día gana
-
-                // Extraer horas (pueden venir como objeto vacío {} → 0)
-                var openH  = (p.openTime  && typeof p.openTime.hours  !== 'undefined') ? parseInt(p.openTime.hours,  10) : 0;
-                var openM  = (p.openTime  && typeof p.openTime.minutes !== 'undefined') ? parseInt(p.openTime.minutes, 10) : 0;
-                var closeH = (p.closeTime && typeof p.closeTime.hours  !== 'undefined') ? parseInt(p.closeTime.hours, 10)  : 0;
-                var closeM = (p.closeTime && typeof p.closeTime.minutes !== 'undefined') ? parseInt(p.closeTime.minutes, 10) : 0;
-
-                // Detectar closeTime ausente
-                var closeMissing = !(p.closeTime);
-
-                // Detectar 24h
-                var closeDay = p.closeDay ? String(p.closeDay).toUpperCase() : od;
-                var odIdx    = (typeof dayOrder[od]       !== 'undefined') ? dayOrder[od]       : -1;
-                var cdIdx    = (typeof dayOrder[closeDay] !== 'undefined') ? dayOrder[closeDay] : -1;
-                var isNextDay = (cdIdx >= 0 && odIdx >= 0 && cdIdx === ((odIdx + 1) % 7));
-
-                var is24h = false;
-                // Forma A+D: closeDay = día siguiente, ambos 00:00
-                if (openH === 0 && openM === 0 && closeH === 0 && closeM === 0 && isNextDay) { is24h = true; }
-                // Forma B: closeTime.hours = 24
-                if (!is24h && closeH === 24 && openH === 0 && openM === 0) { is24h = true; }
-                // Forma C: closeTime ausente y openTime = 00:00
-                if (!is24h && closeMissing && openH === 0 && openM === 0) { is24h = true; }
-                // Forma E: mismo día, 00:00 → 00:00
-                if (!is24h && openH === 0 && openM === 0 && closeH === 0 && closeM === 0) { is24h = true; }
-
-                periodMap[od] = {
-                    is24h:  is24h,
-                    openH:  openH,
-                    openM:  openM,
-                    closeH: closeH,
-                    closeM: closeM
-                };
-            }
-
-            // Aplicar a cada día
-            for (var di = 0; di < dayKeys.length; di++) {
-                var dk  = dayKeys[di];
-                var gmb = dayGmb[dk];
-                if (periodMap[gmb]) {
-                    var pd = periodMap[gmb];
-                    if (pd.is24h) {
-                        applyDayHours(dk, '24_hours', '', false);
-                    } else {
-                        var ov = ('0' + pd.openH).slice(-2)  + ':' + ('0' + pd.openM).slice(-2);
-                        var cv = ('0' + pd.closeH).slice(-2) + ':' + ('0' + pd.closeM).slice(-2);
-                        applyDayHours(dk, ov, cv, false);
+            // Fallback inline (usa oyHoursTimeOptions global)
+            var openOpts = '', closeOpts = '';
+            if (typeof oyHoursTimeOptions !== 'undefined') {
+                for (var oi = 0; oi < oyHoursTimeOptions.length; oi++) {
+                    var opt = oyHoursTimeOptions[oi];
+                    openOpts  += '<option value="' + opt.value + '"' + (opt.value === openVal  ? ' selected' : '') + '>' + opt.label + '</option>';
+                    if (opt.value !== '24_hours') {
+                        closeOpts += '<option value="' + opt.value + '"' + (opt.value === closeVal ? ' selected' : '') + '>' + opt.label + '</option>';
                     }
-                } else {
-                    // Día no presente en periods → cerrado
-                    applyDayHours(dk, '09:00', '18:00', true);
                 }
             }
+            var disAttr  = disabled ? ' disabled' : '';
+            var dis24    = (disabled || openVal === '24_hours') ? ' disabled' : '';
+            var lblOpen  = (idx === 0) ? '<div style="font-size:10px;color:#888;margin-bottom:2px;">Abre a la(s)</div>' : '';
+            var lblClose = (idx === 0) ? '<div style="font-size:10px;color:#888;margin-bottom:2px;">Cierra a la(s)</div>' : '';
+            var mTop     = (idx === 0) ? 'margin-top:18px;' : '';
+            return '<div class="oy-period-row" style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">' +
+                '<div>' + lblOpen  + '<select name="location_hours_' + dayKey + '[periods][' + idx + '][open]"  class="oy-hours-sel oy-period-open"  style="min-width:130px;"' + disAttr + '>' + openOpts  + '</select></div>' +
+                '<div>' + lblClose + '<select name="location_hours_' + dayKey + '[periods][' + idx + '][close]" class="oy-hours-sel oy-period-close" style="min-width:130px;"' + dis24  + '>' + closeOpts + '</select></div>' +
+                '<div style="' + mTop + '"><button type="button" class="button oy-add-period" data-day="' + dayKey + '" style="padding:2px 8px;min-height:28px;">＋</button></div>' +
+            '</div>';
+        }
+
+        // ── Normalizar un período de GMB a {open:'HH:MM', close:'HH:MM'} ─────────
+        var _dayOrder = {MONDAY:0,TUESDAY:1,WEDNESDAY:2,THURSDAY:3,FRIDAY:4,SATURDAY:5,SUNDAY:6};
+
+        function _normalizePeriod(p) {
+            var od = p.openDay ? String(p.openDay).toUpperCase() : '';
+            var openH  = (p.openTime  && typeof p.openTime.hours  !== 'undefined') ? parseInt(p.openTime.hours,  10) : 0;
+            var openM  = (p.openTime  && typeof p.openTime.minutes!== 'undefined') ? parseInt(p.openTime.minutes,10) : 0;
+            var closeH = (p.closeTime && typeof p.closeTime.hours !== 'undefined') ? parseInt(p.closeTime.hours, 10) : 0;
+            var closeM = (p.closeTime && typeof p.closeTime.minutes!=='undefined') ? parseInt(p.closeTime.minutes,10): 0;
+            var closeDay    = p.closeDay ? String(p.closeDay).toUpperCase() : od;
+            var closeMissing = !(p.closeTime);
+            var odIdx  = (typeof _dayOrder[od]       !== 'undefined') ? _dayOrder[od]       : -1;
+            var cdIdx  = (typeof _dayOrder[closeDay] !== 'undefined') ? _dayOrder[closeDay] : -1;
+            var isNext = (odIdx >= 0 && cdIdx >= 0 && cdIdx === ((odIdx + 1) % 7));
+            var is24h  = false;
+            if (openH===0 && openM===0 && closeH===0 && closeM===0 && isNext)       { is24h = true; }
+            if (!is24h && closeH===24  && openH===0  && openM===0)                  { is24h = true; }
+            if (!is24h && closeMissing && openH===0  && openM===0)                  { is24h = true; }
+            if (!is24h && openH===0   && openM===0   && closeH===0 && closeM===0)   { is24h = true; }
+            return {
+                is24h:  is24h,
+                open:   is24h ? '24_hours' : (('0'+openH).slice(-2)  + ':' + ('0'+openM).slice(-2)),
+                close:  is24h ? ''         : (('0'+closeH).slice(-2) + ':' + ('0'+closeM).slice(-2))
+            };
+        }
+
+        // ── Construir mapa día → [períodos] acumulando TODOS los turnos ──────────
+        var _dayKeys = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+        var _dayGmb  = {monday:'MONDAY',tuesday:'TUESDAY',wednesday:'WEDNESDAY',thursday:'THURSDAY',
+                        friday:'FRIDAY',saturday:'SATURDAY',sunday:'SUNDAY'};
+
+        // Por defecto todos los días = cerrado (se sobreescribirá si viene en periods)
+        var _dayData = {};
+        for (var _di = 0; _di < _dayKeys.length; _di++) {
+            _dayData[_dayGmb[_dayKeys[_di]]] = { closed: true, periods: [] };
+        }
+
+        if (_isAlwaysOpen) {
+            // Todos los días: 24 horas
+            for (var _ai = 0; _ai < _dayKeys.length; _ai++) {
+                var _gk = _dayGmb[_dayKeys[_ai]];
+                _dayData[_gk] = { closed: false, periods: [{open:'24_hours', close:''}] };
+            }
+
+        } else if (_hasPeriods) {
+            // Procesar TODOS los períodos sin descartar duplicados
+            var _rawPeriods = _regularHours.periods;
+            for (var _pi = 0; _pi < _rawPeriods.length; _pi++) {
+                var _p  = _rawPeriods[_pi];
+                if (!_p || !_p.openDay) continue;
+                var _od = String(_p.openDay).toUpperCase();
+                if (!_dayData[_od]) continue;
+
+                var _norm = _normalizePeriod(_p);
+
+                if (_norm.is24h) {
+                    // 24h: reemplazar todo con un solo período 24h
+                    _dayData[_od] = { closed: false, periods: [{open:'24_hours', close:''}] };
+                } else {
+                    // Si ya estaba marcado como 24h, no agregar más períodos
+                    if (_dayData[_od].periods.length === 1 && _dayData[_od].periods[0].open === '24_hours') continue;
+                    _dayData[_od].closed = false;
+                    _dayData[_od].periods.push({ open: _norm.open, close: _norm.close });
+                }
+            }
+        }
+
+        // ── Aplicar cada día al DOM ───────────────────────────────────────────────
+        for (var _ki = 0; _ki < _dayKeys.length; _ki++) {
+            var _dk  = _dayKeys[_ki];
+            var _gk2 = _dayGmb[_dk];
+            var _dd  = _dayData[_gk2];
+            _rebuildDayPeriods(_dk, _dd.periods.length ? _dd.periods : [{open:'09:00',close:'18:00'}], _dd.closed);
         }
         // ── Fin bloque horarios ──────────────────────────────────────────────────
 
@@ -3050,21 +3021,52 @@ private function humanize_attribute_id( $attr_id ) {
             }
         }
 
-        // Save hours (per day) arrays — soporte para '24_hours' (all_day)
+        // Save hours (per day) — estructura v2 con periods[]
+        // Formato POST: location_hours_{day}[closed]=1, location_hours_{day}[periods][0][open], [0][close], [1][open], etc.
         $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
         foreach ( $days as $day ) {
-            if ( isset( $_POST[ 'location_hours_' . $day ] ) ) {
-                $raw     = wp_unslash( $_POST[ 'location_hours_' . $day ] );
-                $open    = sanitize_text_field( $raw['open'] ?? '09:00' );
-                $all_day = ( $open === '24_hours' );
-                $hours_data = array(
-                    'closed'  => ! empty( $raw['closed'] ),
-                    'open'    => $all_day ? '24_hours' : $open,
-                    'close'   => $all_day ? '' : sanitize_text_field( $raw['close'] ?? '18:00' ),
-                    'all_day' => $all_day,
-                );
-                update_post_meta( $post_id, 'location_hours_' . $day, $hours_data );
+            if ( ! isset( $_POST[ 'location_hours_' . $day ] ) ) {
+                continue;
             }
+            $raw    = wp_unslash( $_POST[ 'location_hours_' . $day ] );
+            $closed = ! empty( $raw['closed'] );
+
+            $periods_raw = isset( $raw['periods'] ) && is_array( $raw['periods'] ) ? $raw['periods'] : array();
+
+            // Normalizar y validar cada período
+            $periods_clean = array();
+            $is_all_day    = false;
+            foreach ( $periods_raw as $praw ) {
+                if ( ! is_array( $praw ) ) { continue; }
+                $popen  = sanitize_text_field( $praw['open']  ?? '09:00' );
+                $pclose = sanitize_text_field( $praw['close'] ?? '18:00' );
+                if ( $popen === '24_hours' ) {
+                    $is_all_day     = true;
+                    $pclose         = '';
+                    $periods_clean  = array( array( 'open' => '24_hours', 'close' => '' ) );
+                    break; // 24h → un solo período, ignorar el resto
+                }
+                if ( empty( $popen ) ) { continue; }
+                $periods_clean[] = array( 'open' => $popen, 'close' => $pclose );
+            }
+
+            if ( empty( $periods_clean ) ) {
+                $periods_clean = array( array( 'open' => '09:00', 'close' => '18:00' ) );
+            }
+
+            // Backward-compat: guardar 'open'/'close' del primer período al nivel raíz
+            $first_open  = $periods_clean[0]['open']  ?? '09:00';
+            $first_close = $periods_clean[0]['close'] ?? '18:00';
+
+            $hours_data = array(
+                'closed'   => $closed,
+                'all_day'  => $is_all_day,
+                'periods'  => $periods_clean,
+                // v1 compat keys:
+                'open'     => $is_all_day ? '24_hours' : $first_open,
+                'close'    => $is_all_day ? '' : $first_close,
+            );
+            update_post_meta( $post_id, 'location_hours_' . $day, $hours_data );
         }
 
         // ✅ CORRECCIÓN: Atributos ahora vienen exclusivamente desde GMB (gmb_attributes_raw)
@@ -3951,131 +3953,102 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             return array();
         }
 
-        // Orden de días de la semana para detectar "día siguiente"
+        // Orden de días para detectar "día siguiente"
         $day_order = array(
-            'MONDAY'    => 0,
-            'TUESDAY'   => 1,
-            'WEDNESDAY' => 2,
-            'THURSDAY'  => 3,
-            'FRIDAY'    => 4,
-            'SATURDAY'  => 5,
-            'SUNDAY'    => 6,
+            'MONDAY'    => 0, 'TUESDAY'  => 1, 'WEDNESDAY' => 2, 'THURSDAY' => 3,
+            'FRIDAY'    => 4, 'SATURDAY' => 5, 'SUNDAY'    => 6,
         );
-
         $day_map = array(
-            'MONDAY'    => 'monday',
-            'TUESDAY'   => 'tuesday',
-            'WEDNESDAY' => 'wednesday',
-            'THURSDAY'  => 'thursday',
-            'FRIDAY'    => 'friday',
-            'SATURDAY'  => 'saturday',
+            'MONDAY'    => 'monday',    'TUESDAY'   => 'tuesday',   'WEDNESDAY' => 'wednesday',
+            'THURSDAY'  => 'thursday',  'FRIDAY'    => 'friday',    'SATURDAY'  => 'saturday',
             'SUNDAY'    => 'sunday',
         );
 
-        $out = array();
+        // ── Acumular TODOS los períodos agrupados por día (no saltamos duplicados) ──
+        $periods_by_day = array();
 
         foreach ( $periods as $p ) {
-            if ( ! is_array( $p ) ) {
-                continue;
-            }
+            if ( ! is_array( $p ) ) { continue; }
 
             $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
-            if ( ! $open_day_raw || ! isset( $day_map[ $open_day_raw ] ) ) {
-                continue;
-            }
+            if ( ! $open_day_raw || ! isset( $day_map[ $open_day_raw ] ) ) { continue; }
 
             $day_key = $day_map[ $open_day_raw ];
 
-            // Si ya hay un período mapeado para este día, saltarlo (modelo simple 1 período/día)
-            if ( isset( $out[ $day_key ] ) ) {
-                continue;
-            }
-
-            // ── Extraer openTime y closeTime ─────────────────────────────────────
-            // openTime/closeTime pueden llegar como:
-            //   a) array con 'hours' y/o 'minutes'  → caso normal
-            //   b) array vacío {}                   → horas en cero (24h start/end)
-            //   c) ausente (null/no key)             → también interpretamos como 00:00
-            // IMPORTANTE: defaults deben ser 0 (no 9/18) para detectar 24h correctamente.
             $open_time  = isset( $p['openTime'] )  && is_array( $p['openTime'] )  ? $p['openTime']  : array();
-            $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null; // null = ausente
+            $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null;
 
-            $open_h = isset( $open_time['hours'] )   ? (int) $open_time['hours']   : 0;
-            $open_m = isset( $open_time['minutes'] )  ? (int) $open_time['minutes'] : 0;
-
-            // close_h/close_m solo se usan si closeTime existe
+            $open_h  = isset( $open_time['hours'] )   ? (int) $open_time['hours']   : 0;
+            $open_m  = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
             $close_h = ( null !== $close_time && isset( $close_time['hours'] ) )   ? (int) $close_time['hours']   : 0;
-            $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) )  ? (int) $close_time['minutes'] : 0;
+            $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
 
-            // ── Detectar 24 horas ────────────────────────────────────────────────
-            // Google Business Profile representa 24h de estas formas:
-            //
-            // Forma A: closeDay = día siguiente, openTime={hours:0}, closeTime={hours:0}
-            //          Ejemplo: {openDay:MONDAY, openTime:{hours:0}, closeDay:TUESDAY, closeTime:{hours:0}}
-            //
-            // Forma B: closeDay = mismo día, openTime={hours:0}, closeTime={hours:24}
-            //          (en algunos endpoints legacy retorna hours:24)
-            //
-            // Forma C: sin closeTime / closeDay → solo openTime={hours:0}
-            //
-            // Forma D: openTime y closeTime ambos vacíos {} con closeDay = día siguiente
-            //
             $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day_raw;
-
-            $is_24h = false;
-
-            // Caso A + D: closeDay = día siguiente Y openTime=00:00 Y closeTime=00:00
-            $open_day_idx  = $day_order[ $open_day_raw ] ?? -1;
-            $close_day_idx = isset( $day_order[ $close_day_raw ] ) ? $day_order[ $close_day_raw ] : -1;
+            $open_day_idx  = $day_order[ $open_day_raw ]  ?? -1;
+            $close_day_idx = $day_order[ $close_day_raw ] ?? -1;
             $is_next_day   = ( $close_day_idx >= 0 && $open_day_idx >= 0 )
                              && ( $close_day_idx === ( ( $open_day_idx + 1 ) % 7 ) );
 
-            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) {
-                $is_24h = true;
-            }
-
-            // Caso B: closeTime.hours = 24 (legacy)
-            if ( null !== $close_time && isset( $close_time['hours'] ) && (int) $close_time['hours'] === 24 && $open_h === 0 && $open_m === 0 ) {
-                $is_24h = true;
-            }
-
-            // Caso C: closeTime ausente y openTime = 00:00
-            if ( null === $close_time && $open_h === 0 && $open_m === 0 ) {
-                $is_24h = true;
-            }
-
-            // Caso E: mismo día, openTime=00:00, closeTime=00:00 (algunos formatos antiguos)
-            if ( ! $is_24h && $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 ) {
-                $is_24h = true;
-            }
+            // ── Detectar 24 horas (5 formas) ────────────────────────────────────
+            $is_24h = false;
+            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) { $is_24h = true; }
+            if ( ! $is_24h && null !== $close_time && isset( $close_time['hours'] ) && (int) $close_time['hours'] === 24 && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
+            if ( ! $is_24h && null === $close_time && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
+            if ( ! $is_24h && $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 ) { $is_24h = true; }
 
             if ( $is_24h ) {
+                // 24h: un solo período, ignorar cualquier otro del mismo día
+                $periods_by_day[ $day_key ] = array( 'is_24h' => true, 'periods' => array() );
+            } else {
+                if ( ! isset( $periods_by_day[ $day_key ] ) ) {
+                    $periods_by_day[ $day_key ] = array( 'is_24h' => false, 'periods' => array() );
+                }
+                // Solo agregar si el día no está marcado como 24h
+                if ( ! $periods_by_day[ $day_key ]['is_24h'] ) {
+                    $periods_by_day[ $day_key ]['periods'][] = array(
+                        'open'  => sprintf( '%02d:%02d', $open_h, $open_m ),
+                        'close' => sprintf( '%02d:%02d', $close_h, $close_m ),
+                    );
+                }
+            }
+        }
+
+        // ── Convertir a estructura de meta por día ───────────────────────────────
+        $out = array();
+
+        foreach ( $periods_by_day as $day_key => $day_data ) {
+            if ( $day_data['is_24h'] ) {
                 $out[ $day_key ] = array(
                     'closed'  => false,
+                    'all_day' => true,
+                    'periods' => array( array( 'open' => '24_hours', 'close' => '' ) ),
                     'open'    => '24_hours',
                     'close'   => '',
-                    'all_day' => true,
                 );
             } else {
+                $day_periods = $day_data['periods'];
+                $first_open  = $day_periods[0]['open']  ?? '09:00';
+                $first_close = $day_periods[0]['close'] ?? '18:00';
                 $out[ $day_key ] = array(
                     'closed'  => false,
-                    'open'    => sprintf( '%02d:%02d', $open_h, $open_m ),
-                    'close'   => sprintf( '%02d:%02d', $close_h, $close_m ),
                     'all_day' => false,
+                    'periods' => $day_periods,
+                    'open'    => $first_open,
+                    'close'   => $first_close,
                 );
             }
         }
 
-        // Los días ausentes en los períodos de GMB los marcamos como cerrados
-        // (Google omite los días cerrados en regularHours.periods)
+        // ── Días ausentes en GMB → marcar como cerrados ──────────────────────────
         $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
         foreach ( $all_days as $dk ) {
             if ( ! isset( $out[ $dk ] ) ) {
                 $out[ $dk ] = array(
                     'closed'  => true,
+                    'all_day' => false,
+                    'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ),
                     'open'    => '09:00',
                     'close'   => '18:00',
-                    'all_day' => false,
                 );
             }
         }
