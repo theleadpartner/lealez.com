@@ -1831,8 +1831,129 @@ function applyLocationToForm(loc){
             }
         }
 
-        // Hours mapping (simple) -> location_hours_* meta UI
-        // We don't directly update the hours UI reliably here (it exists, but mapping is best done server-side on Import).
+        // ── Horarios de atención: mapeo desde GMB → UI ───────────────────────────
+        //
+        // Google puede retornar los horarios en 3 formas:
+        //   1. openInfo.openingHoursType = 'ALWAYS_OPEN'  → todos los días = 24 horas
+        //   2. regularHours.periods[]                      → horarios por día
+        //   3. openInfo.status = 'CLOSED_TEMPORARILY/PERMANENTLY'
+        //
+        var hoursStatus   = '';
+        var openInfoObj   = loc.openInfo || null;
+        var regularHours  = loc.regularHours || null;
+
+        var openStatus    = openInfoObj  ? String( openInfoObj.status           || '' ).toUpperCase() : '';
+        var hoursType     = openInfoObj  ? String( openInfoObj.openingHoursType || '' ).toUpperCase() : '';
+        var hasPeriods    = !!(regularHours && regularHours.periods && regularHours.periods.length);
+        var isAlwaysOpen  = (hoursType === 'ALWAYS_OPEN');
+
+        // Determinar radio de estado
+        if ( openStatus === 'CLOSED_TEMPORARILY' ) {
+            hoursStatus = 'temporarily_closed';
+        } else if ( openStatus === 'CLOSED_PERMANENTLY' ) {
+            hoursStatus = 'permanently_closed';
+        } else {
+            hoursStatus = (hasPeriods || isAlwaysOpen) ? 'open_with_hours' : 'open_without_hours';
+        }
+
+        // Seleccionar radio correspondiente
+        $('input[name="location_hours_status"][value="' + hoursStatus + '"]').prop('checked', true).trigger('change');
+
+        // Función auxiliar: llenar selector de un día
+        function applyDayHours(dayKey, openVal, closeVal, isClosed) {
+            var $row   = $('[name="location_hours_' + dayKey + '[open]"]').closest('tr');
+            var $cb    = $('[name="location_hours_' + dayKey + '[closed]"]');
+            var $open  = $('[name="location_hours_' + dayKey + '[open]"]');
+            var $close = $('[name="location_hours_' + dayKey + '[close]"]');
+
+            $cb.prop('checked', !!isClosed);
+            $row.css('opacity', isClosed ? 0.5 : 1);
+
+            if ( isClosed ) {
+                $open.prop('disabled', true);
+                $close.prop('disabled', true);
+            } else {
+                $open.prop('disabled', false).val(openVal || '09:00');
+                var isAllDay = (openVal === '24_hours');
+                $close.prop('disabled', isAllDay).val(isAllDay ? '' : (closeVal || '18:00'));
+            }
+        }
+
+        var dayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+        var dayGmb  = { monday:'MONDAY', tuesday:'TUESDAY', wednesday:'WEDNESDAY', thursday:'THURSDAY',
+                        friday:'FRIDAY', saturday:'SATURDAY', sunday:'SUNDAY' };
+        var dayOrder = { MONDAY:0, TUESDAY:1, WEDNESDAY:2, THURSDAY:3, FRIDAY:4, SATURDAY:5, SUNDAY:6 };
+
+        if ( isAlwaysOpen ) {
+            // Caso 1: ALWAYS_OPEN → todos los días 24 horas
+            for (var d = 0; d < dayKeys.length; d++) {
+                applyDayHours(dayKeys[d], '24_hours', '', false);
+            }
+
+        } else if ( hasPeriods ) {
+            // Caso 2: regularHours.periods → mapear por día
+            // Primero, construir mapa de períodos indexado por openDay
+            var periodMap = {};
+            for (var pi = 0; pi < regularHours.periods.length; pi++) {
+                var p = regularHours.periods[pi];
+                if (!p || !p.openDay) continue;
+                var od = String(p.openDay).toUpperCase();
+                if (periodMap[od]) continue; // primer período del día gana
+
+                // Extraer horas (pueden venir como objeto vacío {} → 0)
+                var openH  = (p.openTime  && typeof p.openTime.hours  !== 'undefined') ? parseInt(p.openTime.hours,  10) : 0;
+                var openM  = (p.openTime  && typeof p.openTime.minutes !== 'undefined') ? parseInt(p.openTime.minutes, 10) : 0;
+                var closeH = (p.closeTime && typeof p.closeTime.hours  !== 'undefined') ? parseInt(p.closeTime.hours, 10)  : 0;
+                var closeM = (p.closeTime && typeof p.closeTime.minutes !== 'undefined') ? parseInt(p.closeTime.minutes, 10) : 0;
+
+                // Detectar closeTime ausente
+                var closeMissing = !(p.closeTime);
+
+                // Detectar 24h
+                var closeDay = p.closeDay ? String(p.closeDay).toUpperCase() : od;
+                var odIdx    = (typeof dayOrder[od]       !== 'undefined') ? dayOrder[od]       : -1;
+                var cdIdx    = (typeof dayOrder[closeDay] !== 'undefined') ? dayOrder[closeDay] : -1;
+                var isNextDay = (cdIdx >= 0 && odIdx >= 0 && cdIdx === ((odIdx + 1) % 7));
+
+                var is24h = false;
+                // Forma A+D: closeDay = día siguiente, ambos 00:00
+                if (openH === 0 && openM === 0 && closeH === 0 && closeM === 0 && isNextDay) { is24h = true; }
+                // Forma B: closeTime.hours = 24
+                if (!is24h && closeH === 24 && openH === 0 && openM === 0) { is24h = true; }
+                // Forma C: closeTime ausente y openTime = 00:00
+                if (!is24h && closeMissing && openH === 0 && openM === 0) { is24h = true; }
+                // Forma E: mismo día, 00:00 → 00:00
+                if (!is24h && openH === 0 && openM === 0 && closeH === 0 && closeM === 0) { is24h = true; }
+
+                periodMap[od] = {
+                    is24h:  is24h,
+                    openH:  openH,
+                    openM:  openM,
+                    closeH: closeH,
+                    closeM: closeM
+                };
+            }
+
+            // Aplicar a cada día
+            for (var di = 0; di < dayKeys.length; di++) {
+                var dk  = dayKeys[di];
+                var gmb = dayGmb[dk];
+                if (periodMap[gmb]) {
+                    var pd = periodMap[gmb];
+                    if (pd.is24h) {
+                        applyDayHours(dk, '24_hours', '', false);
+                    } else {
+                        var ov = ('0' + pd.openH).slice(-2)  + ':' + ('0' + pd.openM).slice(-2);
+                        var cv = ('0' + pd.closeH).slice(-2) + ':' + ('0' + pd.closeM).slice(-2);
+                        applyDayHours(dk, ov, cv, false);
+                    }
+                } else {
+                    // Día no presente en periods → cerrado
+                    applyDayHours(dk, '09:00', '18:00', true);
+                }
+            }
+        }
+        // ── Fin bloque horarios ──────────────────────────────────────────────────
 
         // ✅ metadata → URL en Google Maps (con fallback placeId y latlng)
         // Intentamos primero metadata.mapsUri; si no existe, construimos desde placeId o latlng.
@@ -3285,7 +3406,45 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
         // regularHours (RAW + map to per day meta)
         $regular = isset( $data['regularHours'] ) && is_array( $data['regularHours'] ) ? $data['regularHours'] : array();
-        if ( ! empty( $regular ) ) {
+
+        // openInfo (RAW + map status + openingHoursType)
+        $open_info_raw = isset( $data['openInfo'] ) && is_array( $data['openInfo'] ) ? $data['openInfo'] : array();
+        $open_status   = strtoupper( (string) ( $open_info_raw['status']           ?? '' ) );
+        $hours_type    = strtoupper( (string) ( $open_info_raw['openingHoursType'] ?? '' ) );
+
+        if ( ! empty( $open_info_raw ) ) {
+            update_post_meta( $post_id, 'gmb_open_info_raw', $open_info_raw );
+        }
+
+        // ── Detectar ALWAYS_OPEN (24/7) desde openInfo.openingHoursType ──────────
+        // Cuando Google tiene configurado "Abierto las 24 horas" para todos los días,
+        // puede retornar openingHoursType = "ALWAYS_OPEN" con regularHours vacío o
+        // con períodos que representan 24h. Manejamos ambos casos.
+        $is_always_open = ( $hours_type === 'ALWAYS_OPEN' );
+
+        // ── Mapear openInfo.status → location_hours_status ────────────────────────
+        if ( $open_status === 'CLOSED_TEMPORARILY' ) {
+            update_post_meta( $post_id, 'location_hours_status', 'temporarily_closed' );
+        } elseif ( $open_status === 'CLOSED_PERMANENTLY' ) {
+            update_post_meta( $post_id, 'location_hours_status', 'permanently_closed' );
+        } else {
+            // OPEN o vacío: distinguir si tiene horarios publicados o no
+            $has_periods = ! empty( $regular['periods'] );
+            update_post_meta( $post_id, 'location_hours_status', ( $has_periods || $is_always_open ) ? 'open_with_hours' : 'open_without_hours' );
+        }
+
+        // ── Guardar y mapear horarios ─────────────────────────────────────────────
+        if ( $is_always_open ) {
+            // Caso ALWAYS_OPEN: todos los días son 24 horas
+            update_post_meta( $post_id, 'gmb_regular_hours_raw', array( 'openingHoursType' => 'ALWAYS_OPEN' ) );
+            $mapped_all_open = $this->build_always_open_daily_meta();
+            foreach ( $mapped_all_open as $day_key => $hours_data ) {
+                update_post_meta( $post_id, 'location_hours_' . $day_key, $hours_data );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ALWAYS_OPEN detectado → todos los días marcados como 24 horas.' );
+            }
+        } elseif ( ! empty( $regular ) ) {
             update_post_meta( $post_id, 'gmb_regular_hours_raw', $regular );
 
             $mapped = $this->map_gmb_regular_hours_to_daily_meta( $regular );
@@ -3293,10 +3452,13 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 foreach ( $mapped as $day_key => $hours_data ) {
                     update_post_meta( $post_id, 'location_hours_' . $day_key, $hours_data );
                 }
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] regularHours mapeados: ' . wp_json_encode( $mapped ) );
+                }
             }
         }
 
-        // specialHours / moreHours (RAW)
+        // specialHours / moreHours (RAW — solo lectura en UI, editar desde Google Business Profile)
         $special = isset( $data['specialHours'] ) && is_array( $data['specialHours'] ) ? $data['specialHours'] : array();
         if ( ! empty( $special ) ) {
             update_post_meta( $post_id, 'gmb_special_hours_raw', $special );
@@ -3304,24 +3466,6 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
         $more = isset( $data['moreHours'] ) && is_array( $data['moreHours'] ) ? $data['moreHours'] : array();
         if ( ! empty( $more ) ) {
             update_post_meta( $post_id, 'gmb_more_hours_raw', $more );
-        }
-
-// openInfo (RAW — guardamos independientemente)
-        if ( ! empty( $data['openInfo'] ) && is_array( $data['openInfo'] ) ) {
-            update_post_meta( $post_id, 'gmb_open_info_raw', $data['openInfo'] );
-
-            // ✅ Mapear openInfo.status → location_hours_status (alineado con UI GMB)
-            $open_status = strtoupper( (string) ( $data['openInfo']['status'] ?? '' ) );
-            $regular_hours_present = ! empty( $data['regularHours']['periods'] );
-
-            if ( $open_status === 'CLOSED_TEMPORARILY' ) {
-                update_post_meta( $post_id, 'location_hours_status', 'temporarily_closed' );
-            } elseif ( $open_status === 'CLOSED_PERMANENTLY' ) {
-                update_post_meta( $post_id, 'location_hours_status', 'permanently_closed' );
-            } elseif ( $open_status === 'OPEN' || $open_status === '' ) {
-                // Si está abierto: distinguir si tiene horarios o no
-                update_post_meta( $post_id, 'location_hours_status', $regular_hours_present ? 'open_with_hours' : 'open_without_hours' );
-            }
         }
 
         // ── Detección de "Sin ubicación física" (service_area_only) ──────────────
@@ -3807,6 +3951,17 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             return array();
         }
 
+        // Orden de días de la semana para detectar "día siguiente"
+        $day_order = array(
+            'MONDAY'    => 0,
+            'TUESDAY'   => 1,
+            'WEDNESDAY' => 2,
+            'THURSDAY'  => 3,
+            'FRIDAY'    => 4,
+            'SATURDAY'  => 5,
+            'SUNDAY'    => 6,
+        );
+
         $day_map = array(
             'MONDAY'    => 'monday',
             'TUESDAY'   => 'tuesday',
@@ -3824,43 +3979,73 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
                 continue;
             }
 
-            $open_day = isset( $p['openDay'] ) ? (string) $p['openDay'] : '';
-            if ( ! $open_day || ! isset( $day_map[ $open_day ] ) ) {
+            $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
+            if ( ! $open_day_raw || ! isset( $day_map[ $open_day_raw ] ) ) {
                 continue;
             }
 
-            $day_key = $day_map[ $open_day ];
+            $day_key = $day_map[ $open_day_raw ];
 
             // Si ya hay un período mapeado para este día, saltarlo (modelo simple 1 período/día)
             if ( isset( $out[ $day_key ] ) ) {
                 continue;
             }
 
-            $open_time  = isset( $p['openTime'] ) && is_array( $p['openTime'] ) ? $p['openTime'] : array();
-            $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : array();
+            // ── Extraer openTime y closeTime ─────────────────────────────────────
+            // openTime/closeTime pueden llegar como:
+            //   a) array con 'hours' y/o 'minutes'  → caso normal
+            //   b) array vacío {}                   → horas en cero (24h start/end)
+            //   c) ausente (null/no key)             → también interpretamos como 00:00
+            // IMPORTANTE: defaults deben ser 0 (no 9/18) para detectar 24h correctamente.
+            $open_time  = isset( $p['openTime'] )  && is_array( $p['openTime'] )  ? $p['openTime']  : array();
+            $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null; // null = ausente
 
-            $open_h = isset( $open_time['hours'] ) ? (int) $open_time['hours'] : 9;
-            $open_m = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
+            $open_h = isset( $open_time['hours'] )   ? (int) $open_time['hours']   : 0;
+            $open_m = isset( $open_time['minutes'] )  ? (int) $open_time['minutes'] : 0;
 
-            $close_h = isset( $close_time['hours'] ) ? (int) $close_time['hours'] : 18;
-            $close_m = isset( $close_time['minutes'] ) ? (int) $close_time['minutes'] : 0;
+            // close_h/close_m solo se usan si closeTime existe
+            $close_h = ( null !== $close_time && isset( $close_time['hours'] ) )   ? (int) $close_time['hours']   : 0;
+            $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) )  ? (int) $close_time['minutes'] : 0;
 
-            // Detección de 24 horas:
-            // GMB representa 24h como openDay == closeDay (o closeDay = siguiente día),
-            // openTime = 00:00, closeTime = 00:00.
-            // También puede venir sin closeTime cuando es 24h.
-            $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day;
-            $close_day_key = isset( $day_map[ $close_day_raw ] ) ? $day_map[ $close_day_raw ] : $day_key;
+            // ── Detectar 24 horas ────────────────────────────────────────────────
+            // Google Business Profile representa 24h de estas formas:
+            //
+            // Forma A: closeDay = día siguiente, openTime={hours:0}, closeTime={hours:0}
+            //          Ejemplo: {openDay:MONDAY, openTime:{hours:0}, closeDay:TUESDAY, closeTime:{hours:0}}
+            //
+            // Forma B: closeDay = mismo día, openTime={hours:0}, closeTime={hours:24}
+            //          (en algunos endpoints legacy retorna hours:24)
+            //
+            // Forma C: sin closeTime / closeDay → solo openTime={hours:0}
+            //
+            // Forma D: openTime y closeTime ambos vacíos {} con closeDay = día siguiente
+            //
+            $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day_raw;
 
             $is_24h = false;
 
-            // Caso 1: abre 00:00, cierra 00:00 (mismo día o siguiente) → 24h
-            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 ) {
+            // Caso A + D: closeDay = día siguiente Y openTime=00:00 Y closeTime=00:00
+            $open_day_idx  = $day_order[ $open_day_raw ] ?? -1;
+            $close_day_idx = isset( $day_order[ $close_day_raw ] ) ? $day_order[ $close_day_raw ] : -1;
+            $is_next_day   = ( $close_day_idx >= 0 && $open_day_idx >= 0 )
+                             && ( $close_day_idx === ( ( $open_day_idx + 1 ) % 7 ) );
+
+            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) {
                 $is_24h = true;
             }
 
-            // Caso 2: no hay closeTime → 24h (Google lo omite en períodos all-day)
-            if ( empty( $close_time ) && $open_h === 0 && $open_m === 0 ) {
+            // Caso B: closeTime.hours = 24 (legacy)
+            if ( null !== $close_time && isset( $close_time['hours'] ) && (int) $close_time['hours'] === 24 && $open_h === 0 && $open_m === 0 ) {
+                $is_24h = true;
+            }
+
+            // Caso C: closeTime ausente y openTime = 00:00
+            if ( null === $close_time && $open_h === 0 && $open_m === 0 ) {
+                $is_24h = true;
+            }
+
+            // Caso E: mismo día, openTime=00:00, closeTime=00:00 (algunos formatos antiguos)
+            if ( ! $is_24h && $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 ) {
                 $is_24h = true;
             }
 
@@ -3872,13 +4057,10 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
                     'all_day' => true,
                 );
             } else {
-                $open_str  = sprintf( '%02d:%02d', $open_h, $open_m );
-                $close_str = sprintf( '%02d:%02d', $close_h, $close_m );
-
                 $out[ $day_key ] = array(
                     'closed'  => false,
-                    'open'    => $open_str,
-                    'close'   => $close_str,
+                    'open'    => sprintf( '%02d:%02d', $open_h, $open_m ),
+                    'close'   => sprintf( '%02d:%02d', $close_h, $close_m ),
                     'all_day' => false,
                 );
             }
@@ -3898,6 +4080,26 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
             }
         }
 
+        return $out;
+    }
+
+    /**
+     * Build a daily meta array with all 7 days set to 24 hours.
+     * Used when openInfo.openingHoursType = ALWAYS_OPEN (24/7).
+     *
+     * @return array
+     */
+    private function build_always_open_daily_meta() {
+        $out  = array();
+        $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        foreach ( $days as $dk ) {
+            $out[ $dk ] = array(
+                'closed'  => false,
+                'open'    => '24_hours',
+                'close'   => '',
+                'all_day' => true,
+            );
+        }
         return $out;
     }
 
