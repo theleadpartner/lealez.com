@@ -1004,19 +1004,20 @@ public function render_address_meta_box( $post ) {
         if ( empty( $timezone ) )     { $timezone     = 'America/Bogota'; }
         if ( empty( $hours_status ) ) { $hours_status = 'open_with_hours'; }
 
-        // ── Genera opciones de horario: "24 horas" + intervalos de 30 min ──────
-        $time_options = array();
-        $time_options['24_hours'] = __( '24 horas', 'lealez' );
-        for ( $h = 0; $h < 24; $h++ ) {
-            foreach ( array( 0, 30 ) as $m ) {
-                $hh     = sprintf( '%02d', $h );
-                $mm     = sprintf( '%02d', $m );
-                $period = $h < 12 ? 'a.m.' : 'p.m.';
-                $h12    = $h % 12;
-                if ( $h12 === 0 ) { $h12 = 12; }
-                $time_options[ $hh . ':' . $mm ] = sprintf( '%d:%s %s', $h12, $mm, $period );
-            }
-        }
+// ── Genera opciones de horario: "24 horas" + intervalos de 15 min ──────
+// Google Business Profile permite horarios en intervalos de 15 min.
+$time_options = array();
+$time_options['24_hours'] = __( '24 horas', 'lealez' );
+for ( $h = 0; $h < 24; $h++ ) {
+    foreach ( array( 0, 15, 30, 45 ) as $m ) {
+        $hh     = sprintf( '%02d', $h );
+        $mm     = sprintf( '%02d', $m );
+        $period = $h < 12 ? 'a.m.' : 'p.m.';
+        $h12    = $h % 12;
+        if ( $h12 === 0 ) { $h12 = 12; }
+        $time_options[ $hh . ':' . $mm ] = sprintf( '%d:%s %s', $h12, $mm, $period );
+    }
+}
 
         // ── Helper: render un <select> de hora ────────────────────────────────
         $render_select = function( $name, $selected_val, $include_all_day, $disabled = false, $extra_class = '' ) use ( $time_options ) {
@@ -1853,7 +1854,7 @@ function applyLocationToForm(loc){
         // ── Normalizar un período de GMB a {open:'HH:MM', close:'HH:MM'} ─────────
         var _dayOrder = {MONDAY:0,TUESDAY:1,WEDNESDAY:2,THURSDAY:3,FRIDAY:4,SATURDAY:5,SUNDAY:6};
 
-        function _normalizePeriod(p) {
+function _normalizePeriod(p) {
             var od = p.openDay ? String(p.openDay).toUpperCase() : '';
             var openH  = (p.openTime  && typeof p.openTime.hours  !== 'undefined') ? parseInt(p.openTime.hours,  10) : 0;
             var openM  = (p.openTime  && typeof p.openTime.minutes!== 'undefined') ? parseInt(p.openTime.minutes,10) : 0;
@@ -1865,10 +1866,20 @@ function applyLocationToForm(loc){
             var cdIdx  = (typeof _dayOrder[closeDay] !== 'undefined') ? _dayOrder[closeDay] : -1;
             var isNext = (odIdx >= 0 && cdIdx >= 0 && cdIdx === ((odIdx + 1) % 7));
             var is24h  = false;
-            if (openH===0 && openM===0 && closeH===0 && closeM===0 && isNext)       { is24h = true; }
-            if (!is24h && closeH===24  && openH===0  && openM===0)                  { is24h = true; }
-            if (!is24h && closeMissing && openH===0  && openM===0)                  { is24h = true; }
-            if (!is24h && openH===0   && openM===0   && closeH===0 && closeM===0)   { is24h = true; }
+            // Regla 1: open=0:0 && close=0:0 && closeDay es el día siguiente (forma estándar de Google para 24h)
+            if (openH===0 && openM===0 && closeH===0 && closeM===0 && isNext)  { is24h = true; }
+            // Regla 2: closeTime.hours===24 (Google usa 24 para fin-de-día/medianoche) y open es medianoche
+            if (!is24h && closeH===24  && openH===0  && openM===0)             { is24h = true; }
+            // Regla 3: closeTime ausente y open es medianoche (Google a veces omite closeTime en 24h)
+            if (!is24h && closeMissing && openH===0  && openM===0)             { is24h = true; }
+            // NOTA: El check "openH===0 && closeH===0 sin isNext" fue ELIMINADO porque
+            // causaba falsos positivos (negocios que cierran a medianoche 00:00).
+
+            // ── Normalizar closeH=24 → 0 cuando NO es 24h ──────────────────────────
+            // Google usa closeTime.hours=24 para medianoche. Si no es 24h (ej. abre 8am,
+            // cierra a medianoche), lo convertimos a "00:00" que sí está en el <select>.
+            if (!is24h && closeH === 24) { closeH = 0; closeM = 0; }
+
             return {
                 is24h:  is24h,
                 open:   is24h ? '24_hours' : (('0'+openH).slice(-2)  + ':' + ('0'+openM).slice(-2)),
@@ -3929,132 +3940,147 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         delete_post_meta( $post_id, 'gmb_last_import_error' );
     }
 
-    /**
-     * ✅ Convert Google's regularHours.periods -> your daily meta fields
-     *
-     * Google regularHours format:
-     *  regularHours: { periods: [ { openDay: 'MONDAY', openTime: { hours: 9, minutes: 0 }, closeDay: 'MONDAY', closeTime: {...} } ] }
-     *
-     * Your meta per day:
-     *  location_hours_monday: { closed: bool, open: '09:00', close: '18:00' }
-     *
-     * We map the FIRST period per day (simple model). If multiple periods exist, we store RAW anyway.
-     *
-     * @param array $regular
-     * @return array
-     */
-    private function map_gmb_regular_hours_to_daily_meta( $regular ) {
-        if ( ! is_array( $regular ) ) {
-            return array();
-        }
-
-        $periods = isset( $regular['periods'] ) && is_array( $regular['periods'] ) ? $regular['periods'] : array();
-        if ( empty( $periods ) ) {
-            return array();
-        }
-
-        // Orden de días para detectar "día siguiente"
-        $day_order = array(
-            'MONDAY'    => 0, 'TUESDAY'  => 1, 'WEDNESDAY' => 2, 'THURSDAY' => 3,
-            'FRIDAY'    => 4, 'SATURDAY' => 5, 'SUNDAY'    => 6,
-        );
-        $day_map = array(
-            'MONDAY'    => 'monday',    'TUESDAY'   => 'tuesday',   'WEDNESDAY' => 'wednesday',
-            'THURSDAY'  => 'thursday',  'FRIDAY'    => 'friday',    'SATURDAY'  => 'saturday',
-            'SUNDAY'    => 'sunday',
-        );
-
-        // ── Acumular TODOS los períodos agrupados por día (no saltamos duplicados) ──
-        $periods_by_day = array();
-
-        foreach ( $periods as $p ) {
-            if ( ! is_array( $p ) ) { continue; }
-
-            $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
-            if ( ! $open_day_raw || ! isset( $day_map[ $open_day_raw ] ) ) { continue; }
-
-            $day_key = $day_map[ $open_day_raw ];
-
-            $open_time  = isset( $p['openTime'] )  && is_array( $p['openTime'] )  ? $p['openTime']  : array();
-            $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null;
-
-            $open_h  = isset( $open_time['hours'] )   ? (int) $open_time['hours']   : 0;
-            $open_m  = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
-            $close_h = ( null !== $close_time && isset( $close_time['hours'] ) )   ? (int) $close_time['hours']   : 0;
-            $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
-
-            $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day_raw;
-            $open_day_idx  = $day_order[ $open_day_raw ]  ?? -1;
-            $close_day_idx = $day_order[ $close_day_raw ] ?? -1;
-            $is_next_day   = ( $close_day_idx >= 0 && $open_day_idx >= 0 )
-                             && ( $close_day_idx === ( ( $open_day_idx + 1 ) % 7 ) );
-
-            // ── Detectar 24 horas (5 formas) ────────────────────────────────────
-            $is_24h = false;
-            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) { $is_24h = true; }
-            if ( ! $is_24h && null !== $close_time && isset( $close_time['hours'] ) && (int) $close_time['hours'] === 24 && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
-            if ( ! $is_24h && null === $close_time && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
-            if ( ! $is_24h && $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 ) { $is_24h = true; }
-
-            if ( $is_24h ) {
-                // 24h: un solo período, ignorar cualquier otro del mismo día
-                $periods_by_day[ $day_key ] = array( 'is_24h' => true, 'periods' => array() );
-            } else {
-                if ( ! isset( $periods_by_day[ $day_key ] ) ) {
-                    $periods_by_day[ $day_key ] = array( 'is_24h' => false, 'periods' => array() );
-                }
-                // Solo agregar si el día no está marcado como 24h
-                if ( ! $periods_by_day[ $day_key ]['is_24h'] ) {
-                    $periods_by_day[ $day_key ]['periods'][] = array(
-                        'open'  => sprintf( '%02d:%02d', $open_h, $open_m ),
-                        'close' => sprintf( '%02d:%02d', $close_h, $close_m ),
-                    );
-                }
-            }
-        }
-
-        // ── Convertir a estructura de meta por día ───────────────────────────────
-        $out = array();
-
-        foreach ( $periods_by_day as $day_key => $day_data ) {
-            if ( $day_data['is_24h'] ) {
-                $out[ $day_key ] = array(
-                    'closed'  => false,
-                    'all_day' => true,
-                    'periods' => array( array( 'open' => '24_hours', 'close' => '' ) ),
-                    'open'    => '24_hours',
-                    'close'   => '',
-                );
-            } else {
-                $day_periods = $day_data['periods'];
-                $first_open  = $day_periods[0]['open']  ?? '09:00';
-                $first_close = $day_periods[0]['close'] ?? '18:00';
-                $out[ $day_key ] = array(
-                    'closed'  => false,
-                    'all_day' => false,
-                    'periods' => $day_periods,
-                    'open'    => $first_open,
-                    'close'   => $first_close,
-                );
-            }
-        }
-
-        // ── Días ausentes en GMB → marcar como cerrados ──────────────────────────
-        $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
-        foreach ( $all_days as $dk ) {
-            if ( ! isset( $out[ $dk ] ) ) {
-                $out[ $dk ] = array(
-                    'closed'  => true,
-                    'all_day' => false,
-                    'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ),
-                    'open'    => '09:00',
-                    'close'   => '18:00',
-                );
-            }
-        }
-
-        return $out;
+/**
+ * ✅ Convert Google's regularHours.periods -> your daily meta fields
+ *
+ * Google regularHours format:
+ *  regularHours: { periods: [ { openDay: 'MONDAY', openTime: { hours: 9, minutes: 0 }, closeDay: 'MONDAY', closeTime: {hours: 21} } ] }
+ *
+ * Notes from Google Business Information API v1:
+ *  - closeTime.hours can be 24 (meaning end-of-day / midnight). Normalize to 0.
+ *  - minutes key may be absent when value is 0.
+ *  - For 24h days: openDay=MONDAY/closeDay=TUESDAY with both times at 0:00.
+ *
+ * @param array $regular
+ * @return array
+ */
+private function map_gmb_regular_hours_to_daily_meta( $regular ) {
+    if ( ! is_array( $regular ) ) {
+        return array();
     }
+
+    $periods = isset( $regular['periods'] ) && is_array( $regular['periods'] ) ? $regular['periods'] : array();
+    if ( empty( $periods ) ) {
+        return array();
+    }
+
+    $day_order = array(
+        'MONDAY'    => 0, 'TUESDAY'  => 1, 'WEDNESDAY' => 2, 'THURSDAY' => 3,
+        'FRIDAY'    => 4, 'SATURDAY' => 5, 'SUNDAY'    => 6,
+    );
+    $day_map = array(
+        'MONDAY'    => 'monday',    'TUESDAY'   => 'tuesday',   'WEDNESDAY' => 'wednesday',
+        'THURSDAY'  => 'thursday',  'FRIDAY'    => 'friday',    'SATURDAY'  => 'saturday',
+        'SUNDAY'    => 'sunday',
+    );
+
+    $periods_by_day = array();
+
+    foreach ( $periods as $p ) {
+        if ( ! is_array( $p ) ) { continue; }
+
+        $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
+        if ( ! $open_day_raw || ! isset( $day_map[ $open_day_raw ] ) ) { continue; }
+
+        $day_key = $day_map[ $open_day_raw ];
+
+        $open_time  = isset( $p['openTime'] )  && is_array( $p['openTime'] )  ? $p['openTime']  : array();
+        $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null;
+
+        $open_h  = isset( $open_time['hours'] )   ? (int) $open_time['hours']   : 0;
+        $open_m  = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
+        $close_h = ( null !== $close_time && isset( $close_time['hours'] ) )   ? (int) $close_time['hours']   : 0;
+        $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
+
+        $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day_raw;
+        $open_day_idx  = $day_order[ $open_day_raw ]  ?? -1;
+        $close_day_idx = $day_order[ $close_day_raw ] ?? -1;
+        $is_next_day   = ( $close_day_idx >= 0 && $open_day_idx >= 0 )
+                         && ( $close_day_idx === ( ( $open_day_idx + 1 ) % 7 ) );
+
+        // ── Detectar 24 horas ────────────────────────────────────────────────────
+        // Regla 1: openTime=0:0, closeTime=0:0 Y closeDay es el día siguiente
+        $is_24h = false;
+        if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) {
+            $is_24h = true;
+        }
+        // Regla 2: closeTime.hours = 24 (formato especial de Google: fin de día) y open es medianoche
+        if ( ! $is_24h && null !== $close_time && $close_h === 24 && $open_h === 0 && $open_m === 0 ) {
+            $is_24h = true;
+        }
+        // Regla 3: closeTime ausente y openTime es medianoche (Google a veces omite closeTime en 24h)
+        if ( ! $is_24h && null === $close_time && $open_h === 0 && $open_m === 0 ) {
+            $is_24h = true;
+        }
+        // NOTA: El check anterior "openH===0 && closeH===0 && closeM===0" sin isNext fue ELIMINADO
+        // porque causaba falsos positivos (ej. negocios que cierran a medianoche 00:00).
+
+        // ── Normalizar closeTime.hours=24 → 0 cuando NO es 24h ──────────────────
+        // Google usa hours:24 para indicar "fin de día / medianoche".
+        // En ese caso el negocio NO es 24h (ej. abre 8am, cierra a medianoche=24:00).
+        // Lo convertimos a "00:00" que sí existe en el <select>.
+        if ( ! $is_24h && $close_h === 24 ) {
+            $close_h = 0;
+            $close_m = 0;
+        }
+
+        if ( $is_24h ) {
+            $periods_by_day[ $day_key ] = array( 'is_24h' => true, 'periods' => array() );
+        } else {
+            if ( ! isset( $periods_by_day[ $day_key ] ) ) {
+                $periods_by_day[ $day_key ] = array( 'is_24h' => false, 'periods' => array() );
+            }
+            if ( ! $periods_by_day[ $day_key ]['is_24h'] ) {
+                $periods_by_day[ $day_key ]['periods'][] = array(
+                    'open'  => sprintf( '%02d:%02d', $open_h, $open_m ),
+                    'close' => sprintf( '%02d:%02d', $close_h, $close_m ),
+                );
+            }
+        }
+    }
+
+    // ── Convertir a estructura de meta por día ───────────────────────────────────
+    $out = array();
+
+    foreach ( $periods_by_day as $day_key => $day_data ) {
+        if ( $day_data['is_24h'] ) {
+            $out[ $day_key ] = array(
+                'closed'  => false,
+                'all_day' => true,
+                'periods' => array( array( 'open' => '24_hours', 'close' => '' ) ),
+                'open'    => '24_hours',
+                'close'   => '',
+            );
+        } else {
+            $day_periods = $day_data['periods'];
+            $first_open  = $day_periods[0]['open']  ?? '09:00';
+            $first_close = $day_periods[0]['close'] ?? '18:00';
+            $out[ $day_key ] = array(
+                'closed'  => false,
+                'all_day' => false,
+                'periods' => $day_periods,
+                'open'    => $first_open,
+                'close'   => $first_close,
+            );
+        }
+    }
+
+    // ── Días ausentes en GMB → marcar como cerrados ──────────────────────────────
+    $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+    foreach ( $all_days as $dk ) {
+        if ( ! isset( $out[ $dk ] ) ) {
+            $out[ $dk ] = array(
+                'closed'  => true,
+                'all_day' => false,
+                'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ),
+                'open'    => '09:00',
+                'close'   => '18:00',
+            );
+        }
+    }
+
+    return $out;
+}
 
     /**
      * Build a daily meta array with all 7 days set to 24 hours.
@@ -4188,94 +4214,112 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         ) );
     }
 
-    /**
-     * ✅ AJAX: get details for one location.
-     * First tries business cached list; if not found, calls Lealez_GMB_API::sync_location_data().
-     */
-    public function ajax_get_gmb_location_details() {
-        $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
-        if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
-            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+public function ajax_get_gmb_location_details() {
+    $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+    }
+
+    $business_id    = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
+    $location_name  = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
+    $account_name   = isset( $_POST['account_name'] ) ? sanitize_text_field( wp_unslash( $_POST['account_name'] ) ) : '';
+
+    if ( ! $business_id || '' === $location_name ) {
+        wp_send_json_error( array( 'message' => __( 'Parámetros inválidos.', 'lealez' ) ) );
+    }
+
+    // 1) Try cached list
+    $locations = get_post_meta( $business_id, '_gmb_locations_available', true );
+    if ( ! is_array( $locations ) ) {
+        $locations = array();
+    }
+
+    $found = null;
+    foreach ( $locations as $loc ) {
+        if ( is_array( $loc ) && ( (string) ( $loc['name'] ?? '' ) === (string) $location_name ) ) {
+            $found = $loc;
+            break;
         }
+    }
 
-        $business_id    = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
-        $location_name  = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
-        $account_name   = isset( $_POST['account_name'] ) ? sanitize_text_field( wp_unslash( $_POST['account_name'] ) ) : '';
+    // ✅ CORRECCIÓN: Forzar re-fetch si la caché NO tiene campos críticos para la UI.
+    // Se verifica 'profile', 'metadata' Y 'regularHours'. Sin regularHours, el JS no
+    // puede poblar el horario y deja los selects en el valor por defecto.
+    if ( null !== $found ) {
+        $missing_profile      = empty( $found['profile'] );
+        $missing_metadata     = empty( $found['metadata'] );
+        // regularHours puede ser un array vacío [] si el negocio no tiene horarios,
+        // pero NO debe ser ausente (clave inexistente). Distinguimos ambos casos.
+        $missing_regular_hours = ! array_key_exists( 'regularHours', (array) $found );
 
-        if ( ! $business_id || '' === $location_name ) {
-            wp_send_json_error( array( 'message' => __( 'Parámetros inválidos.', 'lealez' ) ) );
-        }
-
-        // 1) Try cached list
-        $locations = get_post_meta( $business_id, '_gmb_locations_available', true );
-        if ( ! is_array( $locations ) ) {
-            $locations = array();
-        }
-
-        $found = null;
-        foreach ( $locations as $loc ) {
-            if ( is_array( $loc ) && ( (string) ( $loc['name'] ?? '' ) === (string) $location_name ) ) {
-                $found = $loc;
-                break;
+        if ( $missing_profile || $missing_metadata || $missing_regular_hours ) {
+            $found = null; // Forzar re-fetch desde API
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[OY Location] Cache miss — re-fetching from API. Missing: profile=%s, metadata=%s, regularHours=%s',
+                    $missing_profile      ? 'YES' : 'no',
+                    $missing_metadata     ? 'YES' : 'no',
+                    $missing_regular_hours ? 'YES' : 'no'
+                ) );
             }
         }
+    }
 
-        // ✅ Si la entrada cacheada NO tiene 'profile' o 'metadata', forzar re-fetch fresco desde API.
-        // Ocurre cuando la caché fue generada con un readMask de fallback que no incluía estos campos.
-        // Sin 'metadata', el campo metadata.mapsUri (→ location_map_url) nunca se populará en el formulario.
-        if ( null !== $found && ( empty( $found['profile'] ) || empty( $found['metadata'] ) ) ) {
-            $found = null; // Forzar re-fetch
+    // 2) If not found (or cache missing critical fields), call API get
+    if ( null === $found ) {
+        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
         }
 
-        // 2) If not found (or cache missing profile), call API get
-        if ( null === $found ) {
-            if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-                wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+        $fresh = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
+        if ( is_wp_error( $fresh ) || ! is_array( $fresh ) ) {
+            $msg = is_wp_error( $fresh ) ? $fresh->get_error_message() : __( 'No se pudo obtener la ubicación.', 'lealez' );
+            wp_send_json_error( array( 'message' => $msg ) );
+        }
+
+        // ✅ Obtener verification desde Verifications API
+        $location_id = $this->extract_location_id_from_resource_name( $location_name );
+        if ( ! empty( $location_id ) ) {
+            $verification = Lealez_GMB_API::get_location_verification_state( $business_id, $location_id, true );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] Verification API call for location_id: ' . $location_id );
+                error_log( '[OY Location] Verification result: ' . print_r( $verification, true ) );
             }
 
-            $fresh = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
-            if ( is_wp_error( $fresh ) || ! is_array( $fresh ) ) {
-                $msg = is_wp_error( $fresh ) ? $fresh->get_error_message() : __( 'No se pudo obtener la ubicación.', 'lealez' );
-                wp_send_json_error( array( 'message' => $msg ) );
-            }
-
-            // ✅ CORRECCIÓN: Obtener verification desde Verifications API
-            $location_id = $this->extract_location_id_from_resource_name( $location_name );
-            if ( ! empty( $location_id ) ) {
-                $verification = Lealez_GMB_API::get_location_verification_state( $business_id, $location_id, true );
-                
-                // Debug logging
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] Verification API call for location_id: ' . $location_id );
-                    error_log( '[OY Location] Verification result: ' . print_r( $verification, true ) );
-                }
-                
-                if ( is_array( $verification ) && ! empty( $verification ) ) {
-                    $fresh['verification'] = $verification;
-                } else {
-                    $fresh['verification'] = array();
-                }
+            if ( is_array( $verification ) && ! empty( $verification ) ) {
+                $fresh['verification'] = $verification;
             } else {
                 $fresh['verification'] = array();
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] Could not extract location_id from: ' . $location_name );
-                }
             }
-
-            // Attach some compat fields to mimic cached structure
-            $fresh['account_name'] = $account_name;
-            $found = $fresh;
+        } else {
+            $fresh['verification'] = array();
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] Could not extract location_id from: ' . $location_name );
+            }
         }
 
-        $location_id = $this->extract_location_id_from_resource_name( $location_name );
-        $account_id  = $this->extract_account_name_from_location_name( $location_name );
+        // Attach some compat fields to mimic cached structure
+        $fresh['account_name'] = $account_name;
 
-        wp_send_json_success( array(
-            'location'    => $found,
-            'location_id' => $location_id,
-            'account_id'  => $account_id,
-        ) );
+        // ✅ Garantizar que regularHours siempre esté presente en la respuesta
+        // (puede ser array vacío si el negocio no tiene horarios publicados)
+        if ( ! array_key_exists( 'regularHours', $fresh ) ) {
+            $fresh['regularHours'] = array();
+        }
+
+        $found = $fresh;
     }
+
+    $location_id = $this->extract_location_id_from_resource_name( $location_name );
+    $account_id  = $this->extract_account_name_from_location_name( $location_name );
+
+    wp_send_json_success( array(
+        'location'    => $found,
+        'location_id' => $location_id,
+        'account_id'  => $account_id,
+    ) );
+}
 
     /**
      * Set custom admin columns
