@@ -1268,6 +1268,7 @@ for ( $h = 0; $h < 24; $h++ ) {
 
         });
         </script>
+    <?php
     }
 /**
  * Render GMB Integration meta box
