@@ -2253,13 +2253,25 @@ public static function get_location_attributes( $business_id, $location_name, $u
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log(
                     $business_id,
-                    'warning',
+                    'error',
                     'get_location_place_action_links failed: ' . $result->get_error_message(),
-                    array( 'location' => $location_name )
+                    array(
+                        'location'   => $location_name,
+                        'error_code' => $result->get_error_code(),
+                        'hint'       => 'Verifica que la API "My Business Place Actions API" esté habilitada en Google Cloud Console y que el token tenga scope https://www.googleapis.com/auth/business.manage',
+                    )
                 );
             }
-            // No es crítico: retornamos array vacío para que el proceso de sync continúe
-            return array();
+            // Propagamos el WP_Error para que el caller pueda registrarlo visiblemente.
+            // Añadimos contexto extra para facilitar el diagnóstico.
+            $result->add_data(
+                array(
+                    'location' => $location_name,
+                    'hint'     => 'Habilita "My Business Place Actions API" en Google Cloud Console.',
+                ),
+                $result->get_error_code()
+            );
+            return $result;
         }
 
         // La respuesta tiene la forma: { "placeActionLinks": [ {...}, {...} ] }
