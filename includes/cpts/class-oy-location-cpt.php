@@ -2259,6 +2259,191 @@ function _normalizePeriod(p) {
             }
         }
 
+        // ✅ Place Action Links → Vínculo del Menú / Reservas / Pedidos Online
+        // ─────────────────────────────────────────────────────────────────────────────────
+        // Place Actions API v1 es la única fuente de estos vínculos en el perfil de Google.
+        // El PHP (ajax_get_gmb_location_details) ya los adjunta como loc.placeActionLinks.
+        // Los clasificamos por placeActionType y los aplicamos a los campos correspondientes:
+        //   MENU                                          → #location_menu_url_gmb
+        //   APPOINTMENT / ONLINE_APPOINTMENT / DINING_RESERVATION → #oy-booking-urls-list (DOM dinámico)
+        //   FOOD_ORDERING / FOOD_DELIVERY / FOOD_TAKEOUT / etc.   → #oy-order-urls-list   (DOM dinámico)
+        // ─────────────────────────────────────────────────────────────────────────────────
+        if(loc.placeActionLinks && Array.isArray(loc.placeActionLinks) && loc.placeActionLinks.length){
+
+            var paBookingTypes = ['APPOINTMENT','ONLINE_APPOINTMENT','DINING_RESERVATION'];
+            var paOrderTypes   = ['FOOD_ORDERING','FOOD_DELIVERY','FOOD_TAKEOUT','SHOP_ONLINE','ORDER_AHEAD','ORDER_FOOD'];
+            var paTypeLabelMap = {
+                'APPOINTMENT':        '<?php echo esc_js( __( 'Reservas', 'lealez' ) ); ?>',
+                'ONLINE_APPOINTMENT': '<?php echo esc_js( __( 'Cita online', 'lealez' ) ); ?>',
+                'DINING_RESERVATION': '<?php echo esc_js( __( 'Reserva de mesa', 'lealez' ) ); ?>',
+                'MENU':               '<?php echo esc_js( __( 'Menú', 'lealez' ) ); ?>',
+                'FOOD_ORDERING':      '<?php echo esc_js( __( 'Ordenar en línea', 'lealez' ) ); ?>',
+                'FOOD_DELIVERY':      '<?php echo esc_js( __( 'Domicilio', 'lealez' ) ); ?>',
+                'FOOD_TAKEOUT':       '<?php echo esc_js( __( 'Para llevar', 'lealez' ) ); ?>',
+                'SHOP_ONLINE':        '<?php echo esc_js( __( 'Tienda online', 'lealez' ) ); ?>',
+                'ORDER_AHEAD':        '<?php echo esc_js( __( 'Ordenar anticipado', 'lealez' ) ); ?>',
+                'ORDER_FOOD':         '<?php echo esc_js( __( 'Pedir comida', 'lealez' ) ); ?>'
+            };
+
+            // Acumuladores para evitar duplicados de URL
+            var paBookingUrls = [];
+            var paOrderUrls   = [];
+            var paMenuUrl     = '';
+
+            for(var pli = 0; pli < loc.placeActionLinks.length; pli++){
+                var paLink = loc.placeActionLinks[pli];
+                if(!paLink){ continue; }
+                var paUri  = paLink.uri  ? String(paLink.uri).trim()  : '';
+                var paType = paLink.placeActionType ? String(paLink.placeActionType).toUpperCase().trim() : '';
+                if(!paUri || !paType){ continue; }
+                var paLabel = paTypeLabelMap[paType] || paType;
+
+                if(paType === 'MENU'){
+                    // Solo la primera URL de tipo MENU
+                    if(!paMenuUrl){ paMenuUrl = paUri; }
+
+                } else if(paBookingTypes.indexOf(paType) !== -1){
+                    // Evitar duplicados de URL en booking
+                    var paBAlready = false;
+                    for(var pabi = 0; pabi < paBookingUrls.length; pabi++){
+                        if(paBookingUrls[pabi].url === paUri){ paBAlready = true; break; }
+                    }
+                    if(!paBAlready){
+                        paBookingUrls.push({ url: paUri, label: paLabel, type: paType, from_gmb: 1 });
+                    }
+
+                } else if(paOrderTypes.indexOf(paType) !== -1){
+                    // Evitar duplicados de URL en order
+                    var paOAlready = false;
+                    for(var paoi = 0; paoi < paOrderUrls.length; paoi++){
+                        if(paOrderUrls[paoi].url === paUri){ paOAlready = true; break; }
+                    }
+                    if(!paOAlready){
+                        paOrderUrls.push({ url: paUri, label: paLabel, type: paType, from_gmb: 1 });
+                    }
+                }
+            }
+
+            // ── Aplicar MENU URL → campo #location_menu_url_gmb ──────────────
+            if(paMenuUrl){
+                var $menuField = $('#location_menu_url_gmb');
+                if($menuField.length){
+                    $menuField.val(paMenuUrl);
+                    // Actualizar el enlace de vista previa si existe
+                    var $menuWrap = $('#oy-menu-link-wrap');
+                    if($menuWrap.length){
+                        var $previewLink = $menuWrap.find('a');
+                        if($previewLink.length){
+                            $previewLink.attr('href', paMenuUrl).text(paMenuUrl + ' ↗');
+                        } else {
+                            // Crear enlace de vista previa dinámicamente
+                            $menuWrap.append('<p style="margin:4px 0 0;font-size:12px;"><a href="' +
+                                $('<div>').text(paMenuUrl).html() + '" target="_blank" rel="noopener">' +
+                                $('<div>').text(paMenuUrl).html() + ' ↗</a></p>');
+                        }
+                    }
+                    // Mostrar badge GMB si existe
+                    var $gmbBadge = $menuWrap.find('span');
+                    if($gmbBadge.length){
+                        $gmbBadge.show();
+                    }
+                }
+                if(window.console && window.console.log){
+                    console.log('[OY Location] Place Action MENU aplicado:', paMenuUrl);
+                }
+            }
+
+            // ── Helper: construir HTML de una fila de URL dinámica ───────────────
+            function _buildPlaceActionRow(listSelector, urlsArray, namePrefix, removeBtnClass){
+                var $list = $(listSelector);
+                if(!$list.length || !urlsArray.length){ return; }
+
+                // Obtener el índice máximo actual en el DOM para no sobrescribir manuales
+                var maxIdx = -1;
+                $list.find('input[name^="' + namePrefix + '["]').each(function(){
+                    var m = this.name.match(new RegExp(namePrefix.replace(/[[\]]/g,'\\$&') + '\\[(\\d+)\\]'));
+                    if(m){ var i = parseInt(m[1], 10); if(i > maxIdx){ maxIdx = i; } }
+                });
+
+                for(var rowi = 0; rowi < urlsArray.length; rowi++){
+                    var entry = urlsArray[rowi];
+                    var idx   = maxIdx + 1 + rowi;
+
+                    // Verificar si ya existe una fila con from_gmb=1 y mismo tipo — reemplazar en vez de duplicar
+                    var $existingGmb = $list.find('input[name="' + namePrefix + '[' + idx + '][from_gmb]"]');
+
+                    var rowHtml =
+                        '<div class="' + removeBtnClass.replace('oy-remove-','oy-') + '-row" ' +
+                        'style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
+                        '<input type="url" name="' + namePrefix + '[' + idx + '][url]" ' +
+                        'value="' + $('<div>').text(entry.url).html() + '" class="large-text" ' +
+                        'placeholder="https://..." style="flex:1;min-width:250px;">' +
+                        '<input type="text" name="' + namePrefix + '[' + idx + '][label]" ' +
+                        'value="' + $('<div>').text(entry.label).html() + '" class="regular-text" ' +
+                        'style="max-width:180px;">' +
+                        '<input type="hidden" name="' + namePrefix + '[' + idx + '][type]"     value="' + $('<div>').text(entry.type).html() + '">' +
+                        '<input type="hidden" name="' + namePrefix + '[' + idx + '][from_gmb]" value="1">' +
+                        '<span style="font-size:11px;color:#2271b1;white-space:nowrap;background:#e8f0fe;border:1px solid #b3d4f5;border-radius:3px;padding:2px 6px;">' +
+                        '🔄 GMB · ' + $('<div>').text(entry.type).html() + '</span>' +
+                        '<button type="button" class="button button-small ' + removeBtnClass + '" style="color:#dc3232;">✕</button>' +
+                        '</div>';
+
+                    $list.append(rowHtml);
+                }
+            }
+
+            // ── Aplicar Booking URLs → #oy-booking-urls-list ─────────────────
+            if(paBookingUrls.length){
+                // Primero eliminar las filas GMB existentes para no duplicar
+                $('#oy-booking-urls-list .oy-booking-url-row').filter(function(){
+                    return $(this).find('input[name$="[from_gmb]"]').val() === '1';
+                }).remove();
+                // Reindexar las filas manuales que quedan
+                var paBookIdx = 0;
+                $('#oy-booking-urls-list .oy-booking-url-row').each(function(){
+                    $(this).find('input').each(function(){
+                        this.name = this.name.replace(/location_booking_urls\[\d+\]/, 'location_booking_urls[' + paBookIdx + ']');
+                    });
+                    paBookIdx++;
+                });
+                _buildPlaceActionRow('#oy-booking-urls-list', paBookingUrls, 'location_booking_urls', 'oy-remove-booking-url');
+                if(window.console && window.console.log){
+                    console.log('[OY Location] Place Action Booking URLs aplicados:', paBookingUrls.length);
+                }
+            }
+
+            // ── Aplicar Order URLs → #oy-order-urls-list ─────────────────────
+            if(paOrderUrls.length){
+                // Primero eliminar las filas GMB existentes para no duplicar
+                $('#oy-order-urls-list .oy-order-url-row').filter(function(){
+                    return $(this).find('input[name$="[from_gmb]"]').val() === '1';
+                }).remove();
+                // Reindexar las filas manuales que quedan
+                var paOrderIdx = 0;
+                $('#oy-order-urls-list .oy-order-url-row').each(function(){
+                    $(this).find('input').each(function(){
+                        this.name = this.name.replace(/location_order_urls\[\d+\]/, 'location_order_urls[' + paOrderIdx + ']');
+                    });
+                    paOrderIdx++;
+                });
+                _buildPlaceActionRow('#oy-order-urls-list', paOrderUrls, 'location_order_urls', 'oy-remove-order-url');
+                if(window.console && window.console.log){
+                    console.log('[OY Location] Place Action Order URLs aplicados:', paOrderUrls.length);
+                }
+            }
+
+            if(window.console && window.console.log){
+                console.log('[OY Location] placeActionLinks procesados — menu:', paMenuUrl || 'ninguno',
+                    '| booking:', paBookingUrls.length, '| order:', paOrderUrls.length);
+            }
+
+        } else {
+            if(window.console && window.console.log){
+                console.log('[OY Location] placeActionLinks: no disponibles o vacíos en la respuesta del servidor.');
+            }
+        }
+        // ── Fin bloque Place Action Links ──────────────────────────────────────────────
+
     }catch(e){
         if(window.console && window.console.error){ console.error('[OY Location] applyLocationToForm error:', e); }
     }
@@ -5159,6 +5344,29 @@ public function ajax_get_gmb_location_details() {
 
     $location_id = $this->extract_location_id_from_resource_name( $location_name );
     $account_id  = $this->extract_account_name_from_location_name( $location_name );
+
+    // ✅ Obtener Place Action Links (Reservas / Menú / Pedidos Online) desde Place Actions API v1.
+    // Estos links NO están en Business Information API v1 ni en el endpoint de atributos.
+    // Se incluyen en la respuesta para que applyLocationToForm() los aplique visualmente al formulario.
+    // El JS los procesará en loc.placeActionLinks → poblar #location_menu_url_gmb, booking_urls, order_urls.
+    if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
+        $place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, false );
+        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {
+            $found['placeActionLinks'] = $place_action_links_ajax;
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_get_gmb_location_details — placeActionLinks incluidos: ' . count( $place_action_links_ajax ) . ' link(s).' );
+            }
+        } else {
+            // Si la API falla o no está habilitada, incluimos array vacío para que el JS no rompa
+            $found['placeActionLinks'] = array();
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                $pa_err_msg = is_wp_error( $place_action_links_ajax ) ? $place_action_links_ajax->get_error_message() : 'empty response';
+                error_log( '[OY Location] ajax_get_gmb_location_details — Place Actions API fallo o vacío: ' . $pa_err_msg );
+            }
+        }
+    } else {
+        $found['placeActionLinks'] = array();
+    }
 
     wp_send_json_success( array(
         'location'    => $found,
