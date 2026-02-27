@@ -2294,6 +2294,112 @@ public static function get_location_attributes( $business_id, $location_name, $u
 
 
     /**
+     * Get structured Food Menu for a location (Google My Business API v4)
+     *
+     * Endpoint: GET /v4/accounts/{accountId}/locations/{locationId}/foodMenus
+     *
+     * Este endpoint está disponible en la API v4 para negocios de tipo restaurante/comida.
+     * Devuelve las secciones del menú con sus productos, precios, descripciones e imágenes.
+     *
+     * Respuesta esperada:
+     * {
+     *   "menus": [
+     *     {
+     *       "labels": [{"displayName": "Menú", "languageCode": "es"}],
+     *       "sections": [
+     *         {
+     *           "labels": [{"displayName": "Sopas"}],
+     *           "items": [
+     *             {
+     *               "labels": [{"displayName": "Sopa de Mondongo", "description": "..."}],
+     *               "price": {"currencyCode": "COP", "units": "25000"},
+     *               "itemAttributes": {"dietaryRestriction": "VEGETARIAN", "mediaKeys": [...]}
+     *             }
+     *           ]
+     *         }
+     *       ]
+     *     }
+     *   ]
+     * }
+     *
+     * NOTA: Solo disponible para categorías de negocio tipo restaurante/comida.
+     * Para otros tipos de negocio, la API retorna un objeto vacío o 404.
+     *
+     * @param int    $business_id    WP post ID del oy_business
+     * @param string $account_id     ID numérico de la cuenta GMB (sin prefijo "accounts/")
+     * @param string $location_id    ID numérico de la ubicación (sin prefijo "locations/")
+     * @param bool   $force_refresh  Si forzar refresco ignorando caché. Default false.
+     *
+     * @return array|WP_Error Array con clave 'menus', o WP_Error si falla.
+     */
+    public static function get_location_food_menus( $business_id, $account_id, $location_id, $force_refresh = false ) {
+        $business_id = absint( $business_id );
+        $account_id  = trim( (string) $account_id );
+        $location_id = trim( (string) $location_id );
+
+        if ( ! $business_id || '' === $account_id || '' === $location_id ) {
+            return new WP_Error(
+                'invalid_params',
+                __( 'Missing business_id, account_id or location_id for food menus.', 'lealez' )
+            );
+        }
+
+        // Normalizar: quitar prefijos si llegan con ellos
+        if ( strpos( $account_id, 'accounts/' ) === 0 ) {
+            $account_id = str_replace( 'accounts/', '', $account_id );
+        }
+        if ( strpos( $location_id, 'locations/' ) === 0 ) {
+            $location_id = str_replace( 'locations/', '', $location_id );
+        }
+
+        $endpoint = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/foodMenus';
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'GET',
+            array(),
+            ! $force_refresh // use_cache = inverse of force_refresh
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'Food Menus API: could not retrieve food menus for location.',
+                    array(
+                        'account_id'  => $account_id,
+                        'location_id' => $location_id,
+                        'error'       => $result->get_error_message(),
+                        'error_code'  => $result->get_error_code(),
+                    )
+                );
+            }
+            return $result;
+        }
+
+        // Si la respuesta es vacía (negocio sin menú configurado o no es restaurante), devolvemos array vacío
+        if ( ! is_array( $result ) || empty( $result ) ) {
+            return array( 'menus' => array() );
+        }
+
+        // La API puede retornar el objeto directamente o envuelto en 'menus'
+        if ( isset( $result['menus'] ) ) {
+            return $result;
+        }
+
+        // Algunos wrappers devuelven el array de menus directamente
+        if ( isset( $result[0] ) && is_array( $result[0] ) ) {
+            return array( 'menus' => $result );
+        }
+
+        return array( 'menus' => array() );
+    }
+
+
+    /**
      * Clear cache for a business
      *
      * @param int $business_id Business post ID
