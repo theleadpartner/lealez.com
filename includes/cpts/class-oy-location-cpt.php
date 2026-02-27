@@ -4290,6 +4290,132 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
 
 
 
+        // ✅ FOOD MENUS: Importar menú estructurado (secciones + items) desde API v4
+        // ─────────────────────────────────────────────────────────────────────────────
+        // La API v4 de Google My Business expone el menú estructurado en:
+        // GET /v4/accounts/{accountId}/locations/{locationId}/foodMenus
+        // Solo disponible para negocios de categoría restaurante/comida.
+        // Documenta: secciones, productos, precios, descripciones y restricciones dietarias.
+        // ─────────────────────────────────────────────────────────────────────────────
+        if ( ! empty( $account_id ) && ! empty( $location_id ) && method_exists( 'Lealez_GMB_API', 'get_location_food_menus' ) ) {
+
+            $food_menus_result = Lealez_GMB_API::get_location_food_menus(
+                $business_id,
+                $account_id,
+                $location_id,
+                true // force_refresh: siempre fresco durante el import
+            );
+
+            if ( is_wp_error( $food_menus_result ) ) {
+
+                $fm_error_data = array(
+                    'code'      => $food_menus_result->get_error_code(),
+                    'message'   => $food_menus_result->get_error_message(),
+                    'timestamp' => current_time( 'mysql' ),
+                );
+                update_post_meta( $post_id, 'gmb_food_menus_api_error', $fm_error_data );
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Food Menus API ERROR (' . $food_menus_result->get_error_code() . '): ' . $food_menus_result->get_error_message() );
+                }
+
+            } elseif ( ! empty( $food_menus_result['menus'] ) ) {
+
+                // ── Éxito: hay menú configurado en GMB ─────────────────────────────
+                delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
+                update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+
+                // Mapear a formato interno de secciones
+                $mapped_sections = $this->map_gmb_food_menus_to_sections( $food_menus_result );
+
+                if ( ! empty( $mapped_sections ) ) {
+                    update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] Food menus imported: ' . count( $mapped_sections ) . ' sección(es).' );
+                    }
+                }
+
+            } else {
+
+                // ── Respuesta vacía: negocio sin menú o no es restaurante ───────────
+                delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Food Menus API — respuesta vacía. El negocio no tiene menú configurado en Google o no es de tipo restaurante.' );
+                }
+            }
+
+        } else {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                if ( empty( $account_id ) || empty( $location_id ) ) {
+                    error_log( '[OY Location] Food Menus API — skipped: account_id o location_id vacíos.' );
+                } elseif ( ! method_exists( 'Lealez_GMB_API', 'get_location_food_menus' ) ) {
+                    error_log( '[OY Location] AVISO: Lealez_GMB_API::get_location_food_menus() no disponible. Actualiza class-lealez-gmb-api.php.' );
+                }
+            }
+        }
+
+        // ✅ FOOD PHOTOS: Importar fotos de comida/menú desde Media API v4
+        // ─────────────────────────────────────────────────────────────────────────────
+        // El Media API v4 devuelve todos los items de media de la ubicación.
+        // Filtramos los que tienen locationAssociation.category = FOOD_AND_DRINK o MENU.
+        // Los URLs de Google (googleUrl) se guardan en gmb_menu_photos_raw para mostrarlos
+        // en el metabox de Menú como fotos sincronizadas desde GMB.
+        // NOTA: estos son Google-hosted URLs, no WordPress Media Library IDs.
+        // ─────────────────────────────────────────────────────────────────────────────
+        if ( ! empty( $account_id ) && ! empty( $location_id ) && method_exists( 'Lealez_GMB_API', 'get_location_media_items' ) ) {
+
+            $all_media_result = Lealez_GMB_API::get_location_media_items(
+                $business_id,
+                $account_id,
+                $location_id,
+                true, // force_refresh
+                $location_name // location_resource_name para resolución adicional
+            );
+
+            if ( ! is_wp_error( $all_media_result ) && ! empty( $all_media_result['mediaItems'] ) ) {
+
+                $food_photo_categories = array( 'FOOD_AND_DRINK', 'MENU' );
+                $gmb_food_photos       = array();
+
+                foreach ( $all_media_result['mediaItems'] as $media_item ) {
+                    if ( ! is_array( $media_item ) ) {
+                        continue;
+                    }
+                    $category = '';
+                    if ( ! empty( $media_item['locationAssociation']['category'] ) ) {
+                        $category = strtoupper( (string) $media_item['locationAssociation']['category'] );
+                    }
+                    if ( ! in_array( $category, $food_photo_categories, true ) ) {
+                        continue;
+                    }
+                    $google_url = ! empty( $media_item['googleUrl'] ) ? esc_url_raw( (string) $media_item['googleUrl'] ) : '';
+                    if ( ! $google_url ) {
+                        continue;
+                    }
+                    $gmb_food_photos[] = array(
+                        'googleUrl'  => $google_url,
+                        'mediaKey'   => sanitize_text_field( (string) ( $media_item['name']        ?? '' ) ),
+                        'createTime' => sanitize_text_field( (string) ( $media_item['createTime']  ?? '' ) ),
+                        'category'   => $category,
+                    );
+                }
+
+                if ( ! empty( $gmb_food_photos ) ) {
+                    update_post_meta( $post_id, 'gmb_menu_photos_raw', $gmb_food_photos );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] Food photos imported: ' . count( $gmb_food_photos ) . ' foto(s) de comida.' );
+                    }
+                } else {
+                    // Limpiar si ya no hay fotos de comida
+                    delete_post_meta( $post_id, 'gmb_menu_photos_raw' );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] Food Photos — ningún item con categoría FOOD_AND_DRINK o MENU.' );
+                    }
+                }
+            }
+        }
+
         // Mark last sync timestamp
         update_post_meta( $post_id, 'gmb_last_sync', time() );
         delete_post_meta( $post_id, 'gmb_last_import_error' );
@@ -4456,6 +4582,145 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
         }
         return $out;
     }
+
+
+    /**
+     * Map Google My Business v4 foodMenus response to location_menu_sections format.
+     *
+     * GMB food menus structure (v4):
+     * {
+     *   "menus": [
+     *     {
+     *       "labels": [{"displayName": "Menú", "languageCode": "es"}],
+     *       "sections": [
+     *         {
+     *           "labels": [{"displayName": "Sopas"}],
+     *           "items": [
+     *             {
+     *               "labels": [{"displayName": "Sopa de Mondongo", "description": "Incluye porción de arroz"}],
+     *               "price": {"currencyCode": "COP", "units": "25000"},
+     *               "itemAttributes": {"dietaryRestriction": "VEGETARIAN", "mediaKeys": [...]}
+     *             }
+     *           ]
+     *         }
+     *       ]
+     *     }
+     *   ]
+     * }
+     *
+     * @param array $food_menus_data Respuesta de la API GET /foodMenus
+     * @return array Formato location_menu_sections: [['name'=>'...', 'items'=>[...], 'from_gmb'=>1], ...]
+     */
+    private function map_gmb_food_menus_to_sections( $food_menus_data ) {
+        $sections_output = array();
+
+        if ( ! is_array( $food_menus_data ) ) {
+            return $sections_output;
+        }
+
+        $menus = is_array( $food_menus_data['menus'] ?? null ) ? $food_menus_data['menus'] : array();
+
+        foreach ( $menus as $menu ) {
+            if ( ! is_array( $menu ) ) {
+                continue;
+            }
+
+            $menu_sections = is_array( $menu['sections'] ?? null ) ? $menu['sections'] : array();
+
+            foreach ( $menu_sections as $sec ) {
+                if ( ! is_array( $sec ) ) {
+                    continue;
+                }
+
+                // Extraer nombre de la sección desde labels (primer label con displayName)
+                $sec_name   = '';
+                $sec_labels = is_array( $sec['labels'] ?? null ) ? $sec['labels'] : array();
+                foreach ( $sec_labels as $lbl ) {
+                    if ( ! empty( $lbl['displayName'] ) ) {
+                        $sec_name = sanitize_text_field( (string) $lbl['displayName'] );
+                        break;
+                    }
+                }
+                if ( '' === $sec_name ) {
+                    continue; // Sección sin nombre, omitir
+                }
+
+                $items_output = array();
+                $sec_items    = is_array( $sec['items'] ?? null ) ? $sec['items'] : array();
+
+                foreach ( $sec_items as $item ) {
+                    if ( ! is_array( $item ) ) {
+                        continue;
+                    }
+
+                    // Nombre y descripción del producto
+                    $item_name   = '';
+                    $item_desc   = '';
+                    $item_labels = is_array( $item['labels'] ?? null ) ? $item['labels'] : array();
+                    foreach ( $item_labels as $lbl ) {
+                        if ( ! empty( $lbl['displayName'] ) && '' === $item_name ) {
+                            $item_name = sanitize_text_field( (string) $lbl['displayName'] );
+                        }
+                        if ( ! empty( $lbl['description'] ) && '' === $item_desc ) {
+                            $item_desc = sanitize_textarea_field( (string) $lbl['description'] );
+                        }
+                    }
+                    if ( '' === $item_name ) {
+                        continue; // Producto sin nombre, omitir
+                    }
+
+                    // Precio: "25000 COP" o solo el número si no hay moneda
+                    $price_str  = '';
+                    $price_data = is_array( $item['price'] ?? null ) ? $item['price'] : array();
+                    if ( ! empty( $price_data['units'] ) ) {
+                        $price_str = sanitize_text_field( (string) $price_data['units'] );
+                        if ( ! empty( $price_data['currencyCode'] ) ) {
+                            $price_str .= ' ' . sanitize_text_field( (string) $price_data['currencyCode'] );
+                        }
+                    } elseif ( ! empty( $price_data['nanos'] ) ) {
+                        // nanos = cents/subunits, ignorar aquí y mostrar 0
+                        $price_str = '0';
+                    }
+
+                    // Restricciones dietarias
+                    $dietary_out  = array();
+                    $item_attr    = is_array( $item['itemAttributes'] ?? null ) ? $item['itemAttributes'] : array();
+                    $dr_raw       = strtoupper( (string) ( $item_attr['dietaryRestriction'] ?? '' ) );
+
+                    // GMB usa valores como: VEGETARIAN, VEGAN, GLUTEN_FREE, HALAL
+                    $dietary_map = array(
+                        'VEGETARIAN' => 'vegetarian',
+                        'VEGAN'      => 'vegan',
+                        'GLUTEN_FREE'=> 'gluten_free',
+                        'HALAL'      => 'halal',
+                    );
+                    foreach ( $dietary_map as $gmb_val => $lealez_val ) {
+                        if ( strpos( $dr_raw, $gmb_val ) !== false ) {
+                            $dietary_out[] = $lealez_val;
+                        }
+                    }
+
+                    $items_output[] = array(
+                        'name'        => $item_name,
+                        'price'       => $price_str,
+                        'description' => $item_desc,
+                        'image_id'    => 0,    // Las fotos de GMB se guardan por separado en gmb_menu_photos_raw
+                        'dietary'     => $dietary_out,
+                        'from_gmb'    => 1,    // Marcado como importado de GMB
+                    );
+                }
+
+                $sections_output[] = array(
+                    'name'     => $sec_name,
+                    'items'    => $items_output,
+                    'from_gmb' => 1, // Sección importada de GMB
+                );
+            }
+        }
+
+        return $sections_output;
+    }
+
 
     /**
      * Extract locationId from accounts/.../locations/{id}
