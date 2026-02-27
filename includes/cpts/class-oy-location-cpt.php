@@ -83,6 +83,7 @@ public function __construct() {
     // ✅ AJAX: traer ubicaciones por business y detalles por location_name
     add_action( 'wp_ajax_oy_get_gmb_locations_for_business', array( $this, 'ajax_get_gmb_locations_for_business' ) );
     add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
+    add_action( 'wp_ajax_oy_sync_location_food_menus', array( $this, 'ajax_sync_location_food_menus' ) );
 
     /**
      * ✅ Metabox externo: Fotos del propietario (GBP Media)
@@ -4653,7 +4654,7 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
                         continue;
                     }
 
-                    // Nombre y descripción del producto
+                    // ── Nombre y descripción del producto ───────────────────────
                     $item_name   = '';
                     $item_desc   = '';
                     $item_labels = is_array( $item['labels'] ?? null ) ? $item['labels'] : array();
@@ -4669,51 +4670,86 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
                         continue; // Producto sin nombre, omitir
                     }
 
-                    // Precio: "25000 COP" o solo el número si no hay moneda
+                    // ── Precio ───────────────────────────────────────────────────
+                    // Google v4 foodMenus usa item.price = {currencyCode: "COP", units: "25000"}
+                    // También puede venir en item.attributes.price (formato alternativo).
                     $price_str  = '';
-                    $price_data = is_array( $item['price'] ?? null ) ? $item['price'] : array();
+                    $price_data = array();
+                    if ( ! empty( $item['price'] ) && is_array( $item['price'] ) ) {
+                        $price_data = $item['price'];
+                    } elseif ( ! empty( $item['attributes']['price'] ) && is_array( $item['attributes']['price'] ) ) {
+                        $price_data = $item['attributes']['price'];
+                    }
                     if ( ! empty( $price_data['units'] ) ) {
                         $price_str = sanitize_text_field( (string) $price_data['units'] );
                         if ( ! empty( $price_data['currencyCode'] ) ) {
                             $price_str .= ' ' . sanitize_text_field( (string) $price_data['currencyCode'] );
                         }
-                    } elseif ( ! empty( $price_data['nanos'] ) ) {
-                        // nanos = cents/subunits, ignorar aquí y mostrar 0
-                        $price_str = '0';
                     }
 
-                    // Restricciones dietarias
-                    $dietary_out  = array();
-                    $item_attr    = is_array( $item['itemAttributes'] ?? null ) ? $item['itemAttributes'] : array();
-                    $dr_raw       = strtoupper( (string) ( $item_attr['dietaryRestriction'] ?? '' ) );
+                    // ── Restricciones dietarias ──────────────────────────────────
+                    // Google v4 foodMenus puede enviar dietaryRestriction en DOS formatos:
+                    // Formato A (enum string): item.itemAttributes.dietaryRestriction = "VEGETARIAN"
+                    // Formato B (booleanos):   item.attributes.vegetarian = true, item.attributes.vegan = true
+                    // Ambos se manejan aquí para máxima compatibilidad.
+                    $dietary_out = array();
 
-                    // GMB usa valores como: VEGETARIAN, VEGAN, GLUTEN_FREE, HALAL
-                    $dietary_map = array(
-                        'VEGETARIAN' => 'vegetarian',
-                        'VEGAN'      => 'vegan',
-                        'GLUTEN_FREE'=> 'gluten_free',
-                        'HALAL'      => 'halal',
+                    // Formato A: campo itemAttributes con string enum (documentación oficial v4)
+                    $item_attr_a = is_array( $item['itemAttributes'] ?? null ) ? $item['itemAttributes'] : array();
+                    if ( ! empty( $item_attr_a['dietaryRestriction'] ) ) {
+                        $dr_raw = strtoupper( (string) $item_attr_a['dietaryRestriction'] );
+                        $dietary_enum_map = array(
+                            'VEGETARIAN' => 'vegetarian',
+                            'VEGAN'      => 'vegan',
+                            'GLUTEN_FREE'=> 'gluten_free',
+                            'HALAL'      => 'halal',
+                            'KOSHER'     => 'kosher',
+                        );
+                        foreach ( $dietary_enum_map as $gmb_val => $lealez_val ) {
+                            if ( false !== strpos( $dr_raw, $gmb_val ) ) {
+                                $dietary_out[] = $lealez_val;
+                            }
+                        }
+                    }
+
+                    // Formato B: booleanos en item.attributes (variante observada en produción)
+                    $item_attr_b = is_array( $item['attributes'] ?? null ) ? $item['attributes'] : array();
+                    $dietary_bool_map = array(
+                        'vegetarian' => 'vegetarian',
+                        'vegan'      => 'vegan',
+                        'glutenFree' => 'gluten_free',
+                        'halal'      => 'halal',
+                        'kosher'     => 'kosher',
                     );
-                    foreach ( $dietary_map as $gmb_val => $lealez_val ) {
-                        if ( strpos( $dr_raw, $gmb_val ) !== false ) {
+                    foreach ( $dietary_bool_map as $api_key => $lealez_val ) {
+                        if ( ! empty( $item_attr_b[ $api_key ] ) && ! in_array( $lealez_val, $dietary_out, true ) ) {
                             $dietary_out[] = $lealez_val;
                         }
+                    }
+
+                    // ── mediaKeys (referencia futura para resolver fotos por item) ─
+                    $media_keys = array();
+                    if ( ! empty( $item_attr_a['mediaKeys'] ) && is_array( $item_attr_a['mediaKeys'] ) ) {
+                        $media_keys = array_map( 'sanitize_text_field', $item_attr_a['mediaKeys'] );
+                    } elseif ( ! empty( $item_attr_b['mediaKeys'] ) && is_array( $item_attr_b['mediaKeys'] ) ) {
+                        $media_keys = array_map( 'sanitize_text_field', $item_attr_b['mediaKeys'] );
                     }
 
                     $items_output[] = array(
                         'name'        => $item_name,
                         'price'       => $price_str,
                         'description' => $item_desc,
-                        'image_id'    => 0,    // Las fotos de GMB se guardan por separado en gmb_menu_photos_raw
+                        'image_id'    => 0,          // WP Media ID — no disponible desde API v4
                         'dietary'     => $dietary_out,
-                        'from_gmb'    => 1,    // Marcado como importado de GMB
+                        'media_keys'  => $media_keys, // mediaKeys de GMB para referencia futura
+                        'from_gmb'    => 1,
                     );
                 }
 
                 $sections_output[] = array(
                     'name'     => $sec_name,
                     'items'    => $items_output,
-                    'from_gmb' => 1, // Sección importada de GMB
+                    'from_gmb' => 1,
                 );
             }
         }
@@ -4941,9 +4977,208 @@ public function ajax_get_gmb_location_details() {
     ) );
 }
 
+
     /**
-     * Set custom admin columns
+     * ✅ AJAX: Sincronizar menú estructurado (foodMenus) + fotos de comida desde GMB para un Location post.
+     *
+     * Se llama desde el botón "🔄 Sincronizar desde Google" en el metabox de Menú.
+     * Escribe directamente en la base de datos (post meta), sin requerir guardar el post.
+     *
+     * POST params:
+     *   nonce       string  Nonce 'oy_location_gmb_ajax'
+     *   post_id     int     ID del oy_location post
+     *   business_id int     ID del oy_business post
+     *
+     * @return void  Envía JSON con success|error
      */
+    public function ajax_sync_location_food_menus() {
+        // ── 1. Seguridad ─────────────────────────────────────────────────────
+        $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+        if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
+            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+        }
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Sin permisos suficientes.', 'lealez' ) ) );
+        }
+
+        // ── 2. Parámetros ─────────────────────────────────────────────────────
+        $post_id     = isset( $_POST['post_id'] )     ? absint( wp_unslash( $_POST['post_id'] ) )     : 0;
+        $business_id = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
+
+        if ( ! $post_id || ! $business_id ) {
+            wp_send_json_error( array( 'message' => __( 'Parámetros inválidos (post_id o business_id vacíos).', 'lealez' ) ) );
+        }
+
+        // Verificar que el post existe y es del tipo correcto
+        $post = get_post( $post_id );
+        if ( ! $post || 'oy_location' !== $post->post_type ) {
+            wp_send_json_error( array( 'message' => __( 'La ubicación indicada no existe.', 'lealez' ) ) );
+        }
+
+        // ── 3. Obtener IDs de GMB desde post meta ────────────────────────────
+        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        $account_id    = (string) get_post_meta( $post_id, 'gmb_account_id', true );
+        $location_id   = (string) get_post_meta( $post_id, 'gmb_location_id', true );
+
+        // Si gmb_location_id no está en meta, intentar extraerlo del resource name
+        if ( '' === $location_id && '' !== $location_name ) {
+            $location_id = $this->extract_location_id_from_resource_name( $location_name );
+        }
+        // Si gmb_account_id no está en meta, intentar extraerlo del resource name
+        if ( '' === $account_id && '' !== $location_name ) {
+            $account_id = $this->extract_account_name_from_location_name( $location_name );
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            wp_send_json_error( array(
+                'message' => __( 'No se encontraron los IDs de la ubicación en Google (gmb_account_id / gmb_location_id). Importa primero la ubicación desde el metabox de Configuración GMB.', 'lealez' ),
+            ) );
+        }
+
+        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+        }
+
+        // ── 4. Llamar Food Menus API (v4) ─────────────────────────────────────
+        $food_menus_result = Lealez_GMB_API::get_location_food_menus(
+            $business_id,
+            $account_id,
+            $location_id,
+            true // force_refresh siempre
+        );
+
+        $sections_imported = 0;
+        $items_imported    = 0;
+        $menu_error        = '';
+
+        if ( is_wp_error( $food_menus_result ) ) {
+            $menu_error = $food_menus_result->get_error_message();
+            $fm_error_data = array(
+                'code'      => $food_menus_result->get_error_code(),
+                'message'   => $menu_error,
+                'timestamp' => current_time( 'mysql' ),
+            );
+            update_post_meta( $post_id, 'gmb_food_menus_api_error', $fm_error_data );
+            delete_post_meta( $post_id, 'gmb_food_menus_raw' );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_food_menus ERROR: ' . $menu_error );
+                error_log( '[OY Location] account_id=' . $account_id . ' location_id=' . $location_id );
+            }
+
+        } elseif ( ! empty( $food_menus_result['menus'] ) ) {
+
+            // ── Éxito: hay menú ────────────────────────────────────────────────
+            delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+            update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
+            update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+
+            $mapped_sections = $this->map_gmb_food_menus_to_sections( $food_menus_result );
+            if ( ! empty( $mapped_sections ) ) {
+                update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
+                $sections_imported = count( $mapped_sections );
+                foreach ( $mapped_sections as $sec ) {
+                    $items_imported += count( $sec['items'] ?? array() );
+                }
+            }
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_food_menus OK: ' . $sections_imported . ' secciones, ' . $items_imported . ' items.' );
+            }
+
+        } else {
+            // ── Respuesta vacía ────────────────────────────────────────────────
+            delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+            update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
+            update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+            $menu_error = __( 'El negocio no tiene menú estructurado en Google My Business, o la cuenta no es de tipo restaurante.', 'lealez' );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_food_menus — respuesta vacía. account_id=' . $account_id . ' location_id=' . $location_id );
+            }
+        }
+
+        // ── 5. Llamar Food Photos (Media API v4) ─────────────────────────────
+        $photos_imported = 0;
+        $media_result    = Lealez_GMB_API::get_location_media_items(
+            $business_id,
+            $account_id,
+            $location_id,
+            true // force_refresh
+        );
+
+        if ( ! is_wp_error( $media_result ) && is_array( $media_result ) ) {
+            $media_items = $media_result['mediaItems'] ?? ( isset( $media_result[0] ) ? $media_result : array() );
+            if ( ! is_array( $media_items ) ) {
+                $media_items = array();
+            }
+
+            $food_photo_cats = array( 'FOOD_AND_DRINK', 'MENU' );
+            $gmb_food_photos = array();
+
+            foreach ( $media_items as $mitem ) {
+                if ( ! is_array( $mitem ) ) {
+                    continue;
+                }
+                $category = (string) ( $mitem['locationAssociation']['category'] ?? $mitem['category'] ?? '' );
+                if ( ! in_array( strtoupper( $category ), $food_photo_cats, true ) ) {
+                    continue;
+                }
+                $google_url = (string) ( $mitem['googleUrl'] ?? $mitem['thumbnailUrl'] ?? '' );
+                if ( '' === $google_url ) {
+                    continue;
+                }
+                $gmb_food_photos[] = array(
+                    'googleUrl'    => $google_url,
+                    'thumbnailUrl' => (string) ( $mitem['thumbnailUrl'] ?? $google_url ),
+                    'mediaKey'     => (string) ( $mitem['mediaKey'] ?? '' ),
+                    'createTime'   => (string) ( $mitem['createTime'] ?? '' ),
+                    'category'     => $category,
+                );
+            }
+
+            if ( ! empty( $gmb_food_photos ) ) {
+                update_post_meta( $post_id, 'gmb_menu_photos_raw', $gmb_food_photos );
+                $photos_imported = count( $gmb_food_photos );
+            } else {
+                delete_post_meta( $post_id, 'gmb_menu_photos_raw' );
+            }
+        }
+
+        // ── 6. Respuesta JSON ─────────────────────────────────────────────────
+        if ( '' !== $menu_error && 0 === $sections_imported ) {
+            // No hay menú en GMB (puede ser válido para fotos igual)
+            wp_send_json_success( array(
+                'sections_imported' => $sections_imported,
+                'items_imported'    => $items_imported,
+                'photos_imported'   => $photos_imported,
+                'menu_warning'      => $menu_error,
+                'message'           => sprintf(
+                    /* translators: 1: photos count */
+                    _n(
+                        'No hay menú estructurado en Google. %1$d foto importada.',
+                        'No hay menú estructurado en Google. %1$d fotos importadas.',
+                        $photos_imported,
+                        'lealez'
+                    ),
+                    $photos_imported
+                ),
+            ) );
+        }
+
+        wp_send_json_success( array(
+            'sections_imported' => $sections_imported,
+            'items_imported'    => $items_imported,
+            'photos_imported'   => $photos_imported,
+            'message'           => sprintf(
+                /* translators: 1: sections, 2: items, 3: photos */
+                __( '✅ Sincronizado: %1$d sección(es), %2$d producto(s), %3$d foto(s).', 'lealez' ),
+                $sections_imported,
+                $items_imported,
+                $photos_imported
+            ),
+        ) );
+    }
     public function set_custom_columns( $columns ) {
         $new_columns = array();
 
