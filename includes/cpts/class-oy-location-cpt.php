@@ -96,6 +96,19 @@ public function __construct() {
             new OY_Location_GMB_Media_Metabox();
         }
     }
+
+    /**
+     * ✅ Metabox externo: Menú del Negocio
+     * Archivo: includes/cpts/metaboxes/class-oy-location-menu-metabox.php
+     */
+    $menu_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-menu-metabox.php';
+    if ( file_exists( $menu_metabox_file ) ) {
+        require_once $menu_metabox_file;
+
+        if ( class_exists( 'OY_Location_Menu_Metabox' ) ) {
+            new OY_Location_Menu_Metabox();
+        }
+    }
 }
 
 
@@ -709,7 +722,7 @@ public function render_address_meta_box( $post ) {
         }
         $email               = get_post_meta( $post->ID, 'location_email', true );
         $website             = get_post_meta( $post->ID, 'location_website', true );
-        $menu_url            = get_post_meta( $post->ID, 'location_menu_url', true );
+        // NOTA: location_menu_url se gestiona en el metabox "Menú del Negocio" (class-oy-location-menu-metabox.php)
 
         // ── Arrays dinámicos de URLs de Reservas y Ordenar Online ──────────────────────
         // Estructura de cada entrada: ['url' => '', 'label' => '', 'type' => '', 'from_gmb' => 0]
@@ -873,19 +886,6 @@ public function render_address_meta_box( $post ) {
                            value="<?php echo esc_attr( $website ); ?>"
                            class="large-text">
                     <p class="description"><?php _e( 'Importado desde GMB: <code>websiteUri</code>', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label><?php _e( 'URL del Menú', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="url"
-                           name="location_menu_url"
-                           id="location_menu_url"
-                           value="<?php echo esc_attr( $menu_url ); ?>"
-                           class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>MENU</code> configurado en "Editar perfil → Menú" de Google Business Profile.', 'lealez' ); ?></p>
                 </td>
             </tr>
         </table>
@@ -3069,7 +3069,7 @@ private function humanize_attribute_id( $attr_id ) {
             'location_chat_url'               => 'esc_url_raw',
             'location_email'                  => 'sanitize_email',
             'location_website'                => 'esc_url_raw',
-            'location_menu_url'               => 'esc_url_raw',
+            // NOTA: location_menu_url ya es guardado por OY_Location_Menu_Metabox (hook save_post_oy_location prioridad 15)
             // NOTA: location_booking_url y location_order_url se derivan de los arrays
             // location_booking_urls / location_order_urls (guardados más abajo).
 
