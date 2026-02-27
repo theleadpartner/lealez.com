@@ -797,6 +797,26 @@ public function render_address_meta_box( $post ) {
         <hr style="margin:16px 0;">
 
         <h4><?php _e( '📧 Contacto Web', 'lealez' ); ?></h4>
+        <?php
+        // ── Alerta de error de Place Actions API ─────────────────────────────────────────
+        $pa_api_error = get_post_meta( $post->ID, 'gmb_place_actions_api_error', true );
+        if ( ! empty( $pa_api_error ) && is_array( $pa_api_error ) ) :
+            $pa_err_code    = ! empty( $pa_api_error['code'] ) ? ' [' . esc_html( $pa_api_error['code'] ) . ']' : '';
+            $pa_err_msg     = ! empty( $pa_api_error['message'] ) ? esc_html( $pa_api_error['message'] ) : __( 'Error desconocido', 'lealez' );
+            $pa_err_time    = ! empty( $pa_api_error['timestamp'] ) ? ' — ' . esc_html( $pa_api_error['timestamp'] ) : '';
+            ?>
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;">
+                <strong>⚠️ <?php _e( 'Place Actions API — Error al sincronizar URLs de Reserva / Menú / Ordenar Online', 'lealez' ); ?></strong><?php echo $pa_err_time; ?><br>
+                <em><?php echo $pa_err_code . ' ' . $pa_err_msg; ?></em><br><br>
+                <strong><?php _e( 'Solución:', 'lealez' ); ?></strong>
+                <ol style="margin:6px 0 0 18px;padding:0;">
+                    <li><?php _e( 'Ve a <a href="https://console.cloud.google.com/apis/library/mybusinessplaceactions.googleapis.com" target="_blank" rel="noopener">Google Cloud Console → APIs → My Business Place Actions API</a> y habilítala.', 'lealez' ); ?></li>
+                    <li><?php _e( 'Desconecta y vuelve a conectar tu cuenta Google My Business para renovar el token OAuth.', 'lealez' ); ?></li>
+                    <li><?php _e( 'Guarda o re-importa esta ubicación para que se intente de nuevo.', 'lealez' ); ?></li>
+                </ol>
+                <p style="margin:8px 0 0;color:#666;"><?php _e( 'Los campos "URL de Reservas", "URL del Menú" y "URL para Ordenar Online" deben completarse manualmente hasta que el error se resuelva.', 'lealez' ); ?></p>
+            </div>
+        <?php endif; ?>
         <table class="form-table" style="margin-bottom:0;">
             <tr>
                 <th scope="row">
@@ -860,7 +880,7 @@ public function render_address_meta_box( $post ) {
                            id="location_order_url"
                            value="<?php echo esc_attr( $order_url ); ?>"
                            class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>FOOD_ORDERING</code> configurado en "Editar perfil → Ordenar en línea" de Google Business Profile.', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Manual o desde GMB vía Place Actions API: tipos <code>FOOD_ORDERING</code>, <code>FOOD_DELIVERY</code>, <code>FOOD_TAKEOUT</code>, <code>SHOP_ONLINE</code> configurados en "Editar perfil → Ordenar en línea" de Google Business Profile.', 'lealez' ); ?></p>
                 </td>
             </tr>
         </table>
@@ -3163,19 +3183,47 @@ if ( ! isset( $data['attributes'] ) || empty( $data['attributes'] ) ) {
 // que el negocio configura en su Perfil de Negocio de Google:
 //   • "Editar perfil → Reserva"           → placeActionType APPOINTMENT / ONLINE_APPOINTMENT / DINING_RESERVATION
 //   • "Editar perfil → Menú"              → placeActionType MENU
-//   • "Editar perfil → Ordenar en línea"  → placeActionType FOOD_ORDERING / ORDER_AHEAD / FOOD_DELIVERY / FOOD_TAKEOUT
+//   • "Editar perfil → Ordenar en línea"  → placeActionType FOOD_ORDERING / FOOD_DELIVERY / FOOD_TAKEOUT / SHOP_ONLINE / ORDER_AHEAD
 //
 // Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
-// Respuesta: { "placeActionLinks": [ { "uri": "...", "placeActionType": "APPOINTMENT", "providerType": "MERCHANT" } ] }
+// Respuesta: { "placeActionLinks": [ { "uri": "...", "placeActionType": "FOOD_ORDERING", "providerType": "MERCHANT" } ] }
 //
 // IMPORTANTE: Estos links NO están en Business Information API v1 ni en el endpoint de atributos.
 // Deben obtenerse con get_location_place_action_links() que usa $place_actions_api_base.
+//
+// REQUISITO: La API "My Business Place Actions API" debe estar habilitada en Google Cloud Console.
+// Si no lo está, la llamada falla con 403 y el campo quedará vacío. En ese caso se guarda el error
+// en 'gmb_place_actions_api_error' para diagnóstico visible en el metabox.
 // ─────────────────────────────────────────────────────────────────────────────────────
 if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
 
     $place_action_links = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, false );
 
-    if ( ! is_wp_error( $place_action_links ) && is_array( $place_action_links ) && ! empty( $place_action_links ) ) {
+    if ( is_wp_error( $place_action_links ) ) {
+
+        // ── Error real de API (403, rate limit, red, etc.) ──────────────────────────────
+        $pa_error_msg  = $place_action_links->get_error_message();
+        $pa_error_code = $place_action_links->get_error_code();
+
+        // Guardar el error en meta para mostrarlo en el metabox de administración
+        $pa_error_data = array(
+            'code'      => $pa_error_code,
+            'message'   => $pa_error_msg,
+            'timestamp' => current_time( 'mysql' ),
+            'hint'      => 'Verifica que "My Business Place Actions API" esté habilitada en Google Cloud Console (console.cloud.google.com → APIs y servicios → Biblioteca). También confirma que el token OAuth tenga el scope https://www.googleapis.com/auth/business.manage',
+        );
+        update_post_meta( $post_id, 'gmb_place_actions_api_error', $pa_error_data );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] Place Actions API ERROR (' . $pa_error_code . '): ' . $pa_error_msg );
+            error_log( '[OY Location] Place Actions API HINT: Habilita "My Business Place Actions API" en Google Cloud Console.' );
+        }
+
+    } elseif ( is_array( $place_action_links ) && ! empty( $place_action_links ) ) {
+
+        // ── Éxito: hay links configurados ────────────────────────────────────────────────
+        // Limpiar error previo si ahora funciona bien
+        delete_post_meta( $post_id, 'gmb_place_actions_api_error' );
 
         // Guardar RAW de Place Action Links para debugging y auditoría
         update_post_meta( $post_id, 'gmb_place_action_links_raw', $place_action_links );
@@ -3185,20 +3233,24 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
         }
 
         // Mapa placeActionType → meta_key WordPress
-        // Múltiples tipos pueden mapear al mismo campo; se usa el primero válido encontrado (prioridad por orden).
-        // Tipos confirmados en Google Business Profile UI según documentación oficial:
+        // Tipos oficiales de Google Business Profile API v1 (PlaceActionType enum):
+        // https://developers.google.com/my-business/reference/placeactions/rest/v1/placeActionLinks#PlaceActionType
         $action_type_to_meta = array(
             // ── Reservas / Citas ─────────────────────────────────────────────────────────
-            'APPOINTMENT'         => 'location_booking_url',
-            'ONLINE_APPOINTMENT'  => 'location_booking_url',
-            'DINING_RESERVATION'  => 'location_booking_url',
+            'APPOINTMENT'             => 'location_booking_url',
+            'ONLINE_APPOINTMENT'      => 'location_booking_url',
+            'DINING_RESERVATION'      => 'location_booking_url',
             // ── Menú ─────────────────────────────────────────────────────────────────────
-            'MENU'                => 'location_menu_url',
+            'MENU'                    => 'location_menu_url',
             // ── Ordenar Online ───────────────────────────────────────────────────────────
-            'FOOD_ORDERING'       => 'location_order_url',
-            'ORDER_AHEAD'         => 'location_order_url',
-            'FOOD_DELIVERY'       => 'location_order_url',
-            'FOOD_TAKEOUT'        => 'location_order_url',
+            // Tipos confirmados en el enum oficial de Google Place Actions API v1:
+            'FOOD_ORDERING'           => 'location_order_url',  // "Ordenar en línea" (principal)
+            'FOOD_DELIVERY'           => 'location_order_url',  // Delivery específico
+            'FOOD_TAKEOUT'            => 'location_order_url',  // Para llevar específico
+            'SHOP_ONLINE'             => 'location_order_url',  // Compras online (retail/ecommerce)
+            // Tipos legacy / posibles variantes retornadas por la API:
+            'ORDER_AHEAD'             => 'location_order_url',
+            'ORDER_FOOD'              => 'location_order_url',
         );
 
         // Rastrear qué meta_keys ya guardamos para evitar sobreescribir
@@ -3213,7 +3265,7 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
             $uri         = ! empty( $link['uri'] ) ? esc_url_raw( (string) $link['uri'] ) : '';
             $action_type = ! empty( $link['placeActionType'] ) ? strtoupper( trim( (string) $link['placeActionType'] ) ) : '';
 
-            // Saltar links sin URI válida o tipo no mapeado
+            // Saltar links sin URI válida o tipo desconocido
             if ( ! $uri || ! $action_type ) {
                 continue;
             }
@@ -3226,7 +3278,7 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
 
             $meta_key = $action_type_to_meta[ $action_type ];
 
-            // Si ya guardamos este meta_key (tipo de mayor prioridad), saltar
+            // Si ya guardamos este meta_key con un tipo de mayor prioridad, saltar
             if ( isset( $saved_meta_keys[ $meta_key ] ) ) {
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                     error_log( '[OY Location] Place Actions API — ' . $action_type . ' ignorado: ' . $meta_key . ' ya guardado con ' . $saved_meta_keys[ $meta_key ] );
@@ -3244,18 +3296,18 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             if ( empty( $saved_meta_keys ) ) {
-                error_log( '[OY Location] Place Actions API — no se encontraron links de tipo APPOINTMENT / MENU / FOOD_ORDERING / ORDER_AHEAD.' );
+                error_log( '[OY Location] Place Actions API — links recibidos pero ninguno tiene tipo reconocido (FOOD_ORDERING / MENU / APPOINTMENT / etc.).' );
             }
         }
 
     } else {
-        // Sin links o error: puede ser que el negocio no tenga URLs configuradas en Google
+
+        // ── Respuesta vacía: el negocio no tiene URLs de acción configuradas en Google ──
+        // Limpiar error previo (la API sí respondió, simplemente no hay links)
+        delete_post_meta( $post_id, 'gmb_place_actions_api_error' );
+
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            if ( is_wp_error( $place_action_links ) ) {
-                error_log( '[OY Location] Place Actions API error: ' . $place_action_links->get_error_message() );
-            } else {
-                error_log( '[OY Location] Place Actions API — respuesta vacía (sin links de acción configurados en este negocio).' );
-            }
+            error_log( '[OY Location] Place Actions API — respuesta vacía. El negocio no tiene vínculos de acción configurados (Reserva / Menú / Ordenar en línea) en Google Business Profile.' );
         }
     }
 
