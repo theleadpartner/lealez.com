@@ -4297,7 +4297,13 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         // GET /v4/accounts/{accountId}/locations/{locationId}/foodMenus
         // Solo disponible para negocios de categoría restaurante/comida.
         // Documenta: secciones, productos, precios, descripciones y restricciones dietarias.
+        // NOTA: Las fotos de cada item vienen como mediaKeys (referencias), no URLs.
+        //       Las URLs reales se resuelven en el bloque FOOD PHOTOS cruzando con el Media API.
         // ─────────────────────────────────────────────────────────────────────────────
+
+        // Variable compartida con el bloque FOOD PHOTOS para enriquecer secciones con URLs de foto
+        $fm_mapped_sections_for_photo_resolve = array();
+
         if ( ! empty( $account_id ) && ! empty( $location_id ) && method_exists( 'Lealez_GMB_API', 'get_location_food_menus' ) ) {
 
             $food_menus_result = Lealez_GMB_API::get_location_food_menus(
@@ -4315,6 +4321,7 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
                     'timestamp' => current_time( 'mysql' ),
                 );
                 update_post_meta( $post_id, 'gmb_food_menus_api_error', $fm_error_data );
+                delete_post_meta( $post_id, 'gmb_food_menus_raw' );
 
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                     error_log( '[OY Location] Food Menus API ERROR (' . $food_menus_result->get_error_code() . '): ' . $food_menus_result->get_error_message() );
@@ -4327,13 +4334,15 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
                 update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
                 update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
 
-                // Mapear a formato interno de secciones
+                // Mapear a formato interno de secciones (con media_keys por item, sin URLs aún)
                 $mapped_sections = $this->map_gmb_food_menus_to_sections( $food_menus_result );
 
                 if ( ! empty( $mapped_sections ) ) {
+                    // Guardar provisoriamente sin foto de item (se enriquece tras el bloque Media)
+                    $fm_mapped_sections_for_photo_resolve = $mapped_sections;
                     update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] Food menus imported: ' . count( $mapped_sections ) . ' sección(es).' );
+                        error_log( '[OY Location] Food menus imported: ' . count( $mapped_sections ) . ' sección(es) (fotos de item pendientes de resolución).' );
                     }
                 }
 
@@ -4341,6 +4350,8 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
 
                 // ── Respuesta vacía: negocio sin menú o no es restaurante ───────────
                 delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
+                update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                     error_log( '[OY Location] Food Menus API — respuesta vacía. El negocio no tiene menú configurado en Google o no es de tipo restaurante.' );
                 }
@@ -4359,10 +4370,14 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
         // ✅ FOOD PHOTOS: Importar fotos de comida/menú desde Media API v4
         // ─────────────────────────────────────────────────────────────────────────────
         // El Media API v4 devuelve todos los items de media de la ubicación.
-        // Filtramos los que tienen locationAssociation.category = FOOD_AND_DRINK o MENU.
-        // Los URLs de Google (googleUrl) se guardan en gmb_menu_photos_raw para mostrarlos
-        // en el metabox de Menú como fotos sincronizadas desde GMB.
-        // NOTA: estos son Google-hosted URLs, no WordPress Media Library IDs.
+        // Filtramos los que tienen locationAssociation.category = FOOD_AND_DRINK o MENU
+        // para guardarlos en gmb_menu_photos_raw (galería del metabox de Menú).
+        //
+        // RESOLUCIÓN DE FOTOS POR ITEM: Adicionalmente, cada ítem del foodMenu tiene
+        // mediaKeys (referencias cortas tipo "AF1Qip..."). Este bloque cruza esas keys
+        // con el campo 'name' del Media API ("accounts/.../locations/.../media/AF1Qip...")
+        // para obtener la googleUrl de la foto de cada producto y guardarla como
+        // gmb_image_url en la sección location_menu_sections.
         // ─────────────────────────────────────────────────────────────────────────────
         if ( ! empty( $account_id ) && ! empty( $location_id ) && method_exists( 'Lealez_GMB_API', 'get_location_media_items' ) ) {
 
@@ -4412,6 +4427,21 @@ if ( ! empty( $verification_payload ) && is_array( $verification_payload ) ) {
                     delete_post_meta( $post_id, 'gmb_menu_photos_raw' );
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[OY Location] Food Photos — ningún item con categoría FOOD_AND_DRINK o MENU.' );
+                    }
+                }
+
+                // ── Resolver fotos de productos del menú por mediaKey ─────────────────
+                // Si en el bloque anterior se mapearon secciones con media_keys,
+                // ahora cruzamos esas keys con todos los mediaItems para obtener la googleUrl
+                // de la foto de cada producto y guardarla como gmb_image_url en el meta.
+                if ( ! empty( $fm_mapped_sections_for_photo_resolve ) ) {
+                    $enriched_sections = $this->resolve_item_photos_from_media(
+                        $fm_mapped_sections_for_photo_resolve,
+                        $all_media_result['mediaItems']
+                    );
+                    update_post_meta( $post_id, 'location_menu_sections', $enriched_sections );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] Item photos resolved from Media API (import_from_gmb).' );
                     }
                 }
             }
@@ -4759,6 +4789,109 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
 
 
     /**
+     * Resolver fotos de ítems del menú cruzando mediaKeys con el Media API.
+     *
+     * La foodMenus API v4 devuelve por cada ítem uno o más `mediaKeys` (ej: "AF1Qip...")
+     * que son referencias internas de Google, NO URLs directas. Las URLs reales están en
+     * el Media API v4, donde cada mediaItem tiene:
+     *   - name:       "accounts/{id}/locations/{id}/media/AF1Qip..." (el sufijo es el mediaKey)
+     *   - mediaKey:   campo directo con la key (cuando existe)
+     *   - googleUrl:  la URL pública real de la foto
+     *
+     * Este método construye un lookup mediaKey → googleUrl y enriquece cada ítem con
+     * el campo `gmb_image_url` = URL de la primera foto encontrada para ese ítem.
+     *
+     * @param array $mapped_sections Array de secciones con campo 'media_keys' por item.
+     * @param array $all_media_items Array de mediaItems del Media API v4.
+     * @return array Secciones enriquecidas con 'gmb_image_url' en cada item que tiene foto.
+     */
+    private function resolve_item_photos_from_media( array $mapped_sections, array $all_media_items ) {
+
+        if ( empty( $all_media_items ) || empty( $mapped_sections ) ) {
+            return $mapped_sections;
+        }
+
+        // ── Construir lookup: mediaKey (sufijo corto) → googleUrl ─────────────────
+        // El campo 'name' del media item es: "accounts/123/locations/456/media/AF1Qip..."
+        // El mediaKey del ítem del menú es solo el sufijo: "AF1Qip..."
+        $lookup = array(); // [ 'AF1Qip...' => 'https://lh3.googleusercontent.com/...' ]
+
+        foreach ( $all_media_items as $mitem ) {
+            if ( ! is_array( $mitem ) ) {
+                continue;
+            }
+
+            $google_url = (string) ( $mitem['googleUrl'] ?? $mitem['thumbnailUrl'] ?? '' );
+            if ( '' === $google_url ) {
+                continue;
+            }
+
+            // Formato 1: campo mediaKey directo (algunas versiones de la API lo incluyen)
+            if ( ! empty( $mitem['mediaKey'] ) ) {
+                $lookup[ trim( (string) $mitem['mediaKey'] ) ] = $google_url;
+            }
+
+            // Formato 2: extraer sufijo del campo 'name' después de "/media/"
+            // Ejemplo: "accounts/123/locations/456/media/AF1QipXYZ" → key = "AF1QipXYZ"
+            if ( ! empty( $mitem['name'] ) ) {
+                $name_str = (string) $mitem['name'];
+                if ( strpos( $name_str, '/media/' ) !== false ) {
+                    $parts = explode( '/media/', $name_str );
+                    $key   = trim( (string) end( $parts ) );
+                    if ( '' !== $key ) {
+                        $lookup[ $key ] = $google_url;
+                    }
+                }
+            }
+        }
+
+        if ( empty( $lookup ) ) {
+            return $mapped_sections;
+        }
+
+        // ── Enriquecer secciones e ítems con gmb_image_url ──────────────────────────
+        foreach ( $mapped_sections as $s_idx => $section ) {
+            if ( empty( $section['items'] ) || ! is_array( $section['items'] ) ) {
+                continue;
+            }
+
+            foreach ( $section['items'] as $i_idx => $item ) {
+                $media_keys = is_array( $item['media_keys'] ?? null ) ? $item['media_keys'] : array();
+
+                if ( empty( $media_keys ) ) {
+                    continue;
+                }
+
+                $resolved_url = '';
+                foreach ( $media_keys as $mk ) {
+                    $mk = trim( (string) $mk );
+                    if ( '' === $mk ) {
+                        continue;
+                    }
+                    // Buscar exacto
+                    if ( isset( $lookup[ $mk ] ) ) {
+                        $resolved_url = $lookup[ $mk ];
+                        break;
+                    }
+                    // Buscar solo el sufijo (por si la key viene como path completo)
+                    $parts = explode( '/', $mk );
+                    $short = trim( (string) end( $parts ) );
+                    if ( '' !== $short && isset( $lookup[ $short ] ) ) {
+                        $resolved_url = $lookup[ $short ];
+                        break;
+                    }
+                }
+
+                if ( '' !== $resolved_url ) {
+                    $mapped_sections[ $s_idx ]['items'][ $i_idx ]['gmb_image_url'] = esc_url_raw( $resolved_url );
+                }
+            }
+        }
+
+        return $mapped_sections;
+    }
+
+    /**
      * Extract locationId from accounts/.../locations/{id}
      *
      * @param string $location_name
@@ -5051,6 +5184,9 @@ public function ajax_get_gmb_location_details() {
         $items_imported    = 0;
         $menu_error        = '';
 
+        // Variable compartida con el bloque Media para resolución de fotos por item
+        $ajax_mapped_sections_for_resolve = array();
+
         if ( is_wp_error( $food_menus_result ) ) {
             $menu_error = $food_menus_result->get_error_message();
             $fm_error_data = array(
@@ -5075,6 +5211,8 @@ public function ajax_get_gmb_location_details() {
 
             $mapped_sections = $this->map_gmb_food_menus_to_sections( $food_menus_result );
             if ( ! empty( $mapped_sections ) ) {
+                // Guardar provisionalmente; se enriquece con gmb_image_url tras Media API
+                $ajax_mapped_sections_for_resolve = $mapped_sections;
                 update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
                 $sections_imported = count( $mapped_sections );
                 foreach ( $mapped_sections as $sec ) {
@@ -5083,7 +5221,7 @@ public function ajax_get_gmb_location_details() {
             }
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] ajax_sync_food_menus OK: ' . $sections_imported . ' secciones, ' . $items_imported . ' items.' );
+                error_log( '[OY Location] ajax_sync_food_menus OK: ' . $sections_imported . ' secciones, ' . $items_imported . ' items (fotos de item pendientes de resolución).' );
             }
 
         } else {
@@ -5142,6 +5280,20 @@ public function ajax_get_gmb_location_details() {
                 $photos_imported = count( $gmb_food_photos );
             } else {
                 delete_post_meta( $post_id, 'gmb_menu_photos_raw' );
+            }
+
+            // ── Resolver fotos de productos del menú por mediaKey ─────────────────
+            // Cruzar los media_keys de cada ítem del foodMenu con las URLs reales del Media API.
+            // El resultado se guarda como gmb_image_url en cada ítem de location_menu_sections.
+            if ( ! empty( $ajax_mapped_sections_for_resolve ) && ! empty( $media_items ) ) {
+                $enriched_sections = $this->resolve_item_photos_from_media(
+                    $ajax_mapped_sections_for_resolve,
+                    $media_items
+                );
+                update_post_meta( $post_id, 'location_menu_sections', $enriched_sections );
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Item photos resolved from Media API (ajax_sync).' );
+                }
             }
         }
 
