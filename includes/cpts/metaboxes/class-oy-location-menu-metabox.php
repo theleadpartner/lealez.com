@@ -96,9 +96,15 @@ class OY_Location_Menu_Metabox {
         $menu_sections   = get_post_meta( $post->ID, 'location_menu_sections', true );
         $menu_featured   = get_post_meta( $post->ID, 'location_menu_featured_items', true );
 
-        if ( ! is_array( $menu_photos ) )   $menu_photos   = array();
-        if ( ! is_array( $menu_sections ) ) $menu_sections = array();
-        if ( ! is_array( $menu_featured ) ) $menu_featured = array();
+        // ── Datos sincronizados desde GMB ──────────────────────────────────────
+        $gmb_food_photos       = get_post_meta( $post->ID, 'gmb_menu_photos_raw', true );       // Array de {googleUrl, mediaKey, category}
+        $gmb_food_menus_sync   = get_post_meta( $post->ID, 'gmb_food_menus_last_sync', true );  // Timestamp de última sync
+        $gmb_food_menus_error  = get_post_meta( $post->ID, 'gmb_food_menus_api_error', true );  // Error si no se pudo obtener
+
+        if ( ! is_array( $menu_photos ) )    $menu_photos    = array();
+        if ( ! is_array( $menu_sections ) )  $menu_sections  = array();
+        if ( ! is_array( $menu_featured ) )  $menu_featured  = array();
+        if ( ! is_array( $gmb_food_photos ) ) $gmb_food_photos = array();
 
         $active_tab = isset( $_GET['menu_tab'] ) ? sanitize_key( $_GET['menu_tab'] ) : 'complete';
         ?>
@@ -210,6 +216,46 @@ class OY_Location_Menu_Metabox {
             padding:10px 14px; font-size:13px; margin-bottom:16px;
         }
         .oy-menu-section-count { font-size:11px; color:#888; margin-left:auto; }
+
+        /* ── GMB sync badges ── */
+        .oy-gmb-badge {
+            display:inline-flex; align-items:center; gap:3px;
+            font-size:10px; font-weight:600; padding:2px 7px;
+            border-radius:20px; white-space:nowrap; vertical-align:middle;
+        }
+        .oy-gmb-badge-blue   { background:#e8f0fe; border:1px solid #b3d4f5; color:#1a56a0; }
+        .oy-gmb-badge-green  { background:#edfaee; border:1px solid #a3d6a7; color:#1e6b22; }
+        .oy-gmb-badge-orange { background:#fff3e0; border:1px solid #ffcc80; color:#b45309; }
+
+        /* ── GMB sync notice ── */
+        .oy-gmb-sync-notice {
+            display:flex; align-items:flex-start; gap:10px;
+            background:#e8f4fd; border:1px solid #90caf9; border-radius:5px;
+            padding:10px 14px; margin-bottom:16px; font-size:12px; line-height:1.5;
+        }
+        .oy-gmb-sync-notice-icon { font-size:20px; flex-shrink:0; }
+        .oy-gmb-api-error {
+            background:#fff3cd; border:1px solid #ffc107; border-radius:5px;
+            padding:10px 14px; margin-bottom:16px; font-size:12px; line-height:1.5;
+        }
+
+        /* ── GMB Photos grid ── */
+        .oy-gmb-photos-grid {
+            display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr));
+            gap:10px; margin-bottom:12px;
+        }
+        .oy-gmb-photo-thumb {
+            position:relative; width:100%; padding-top:100%; border-radius:5px;
+            overflow:hidden; border:2px solid #b3d4f5; background:#e8f0fe;
+        }
+        .oy-gmb-photo-thumb img {
+            position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover;
+        }
+        .oy-gmb-photo-label {
+            position:absolute; bottom:0; left:0; right:0;
+            background:rgba(33,113,177,.8); color:#fff; font-size:9px;
+            padding:2px 4px; text-align:center;
+        }
         </style>
 
         <div id="oy-menu-metabox-wrap">
@@ -219,12 +265,45 @@ class OY_Location_Menu_Metabox {
                 <strong>🔗 URL del Menú (GMB Place Actions)</strong>&nbsp;
                 <?php if ( $menu_url ) : ?>
                     <a href="<?php echo esc_url( $menu_url ); ?>" target="_blank" rel="noopener"><?php echo esc_html( $menu_url ); ?></a>
-                    <span style="margin-left:6px;font-size:11px;color:#2271b1;background:#e8f0fe;border:1px solid #b3d4f5;border-radius:3px;padding:1px 6px;">🔄 GMB · MENU</span>
+                    <span class="oy-gmb-badge oy-gmb-badge-blue">🔄 GMB · MENU</span>
                 <?php else : ?>
                     <span style="color:#888;"><?php _e( 'No configurada — se sincroniza desde GMB (Place Actions API → MENU)', 'lealez' ); ?></span>
                 <?php endif; ?>
                 <input type="hidden" name="location_menu_url" value="<?php echo esc_attr( $menu_url ); ?>">
             </div>
+
+            <?php
+            // ── Alerta si la Food Menus API falló ──────────────────────────────────
+            if ( ! empty( $gmb_food_menus_error ) && is_array( $gmb_food_menus_error ) ) :
+                $fm_err_code = ! empty( $gmb_food_menus_error['code'] )    ? ' [' . esc_html( $gmb_food_menus_error['code'] ) . ']'    : '';
+                $fm_err_msg  = ! empty( $gmb_food_menus_error['message'] ) ? esc_html( $gmb_food_menus_error['message'] )              : __( 'Error desconocido', 'lealez' );
+                $fm_err_time = ! empty( $gmb_food_menus_error['timestamp'] ) ? ' — ' . esc_html( $gmb_food_menus_error['timestamp'] ) : '';
+                ?>
+                <div class="oy-gmb-api-error">
+                    <strong>⚠️ <?php _e( 'Food Menus API — No se pudo obtener el menú desde Google', 'lealez' ); ?></strong><?php echo $fm_err_time; ?><br>
+                    <em><?php echo $fm_err_code . ' ' . $fm_err_msg; ?></em><br>
+                    <span style="color:#666;"><?php _e( 'Posibles causas: (1) El negocio no tiene categoría de restaurante en GMB; (2) La "My Business API v4" no está disponible para esta cuenta; (3) Error temporal de red. El menú completo puede editarse manualmente en la pestaña "Menú Completo".', 'lealez' ); ?></span>
+                </div>
+            <?php endif; ?>
+
+            <?php
+            // ── Aviso de última sincronización exitosa ──────────────────────────────
+            if ( $gmb_food_menus_sync && empty( $gmb_food_menus_error ) ) :
+                $sections_from_gmb = array_filter( $menu_sections, fn( $s ) => ! empty( $s['from_gmb'] ) );
+                ?>
+                <div class="oy-gmb-sync-notice">
+                    <div class="oy-gmb-sync-notice-icon">🔄</div>
+                    <div>
+                        <strong><?php _e( 'Menú sincronizado desde Google My Business', 'lealez' ); ?></strong><br>
+                        <?php printf(
+                            /* translators: 1: date, 2: number of sections */
+                            __( 'Última sincronización: %1$s — %2$d sección(es) importada(s). Los cambios hechos aquí se guardan en Lealez y <em>no</em> se sincronizan de vuelta a Google. Para actualizar Google, edita directamente en tu Perfil de Negocio de Google.', 'lealez' ),
+                            esc_html( date_i18n( get_option( 'date_format' ) . ' H:i', $gmb_food_menus_sync ) ),
+                            count( $sections_from_gmb )
+                        ); ?>
+                    </div>
+                </div>
+            <?php endif; ?>
 
             <?php /* ── Tabs ── */ ?>
             <div class="oy-menu-tabs">
@@ -239,15 +318,16 @@ class OY_Location_Menu_Metabox {
             <div class="oy-menu-tab-panel active" id="oy-menu-tab-complete">
 
                 <p class="description" style="margin-bottom:14px;">
-                    <?php _e( 'Agrega secciones (ej: "Sopas", "Entradas", "Bebidas") y dentro de cada sección agrega los productos del menú con nombre, precio, descripción e imagen.', 'lealez' ); ?>
+                    <?php _e( 'Las secciones y productos se importan automáticamente desde Google My Business al sincronizar la ubicación. También puedes agregar o editar secciones manualmente.', 'lealez' ); ?>
                 </p>
 
                 <div id="oy-menu-sections-list">
                     <?php foreach ( $menu_sections as $sec_idx => $section ) :
-                        $sec_name  = sanitize_text_field( $section['name'] ?? '' );
-                        $sec_items = is_array( $section['items'] ?? null ) ? $section['items'] : array();
+                        $sec_name     = sanitize_text_field( $section['name'] ?? '' );
+                        $sec_items    = is_array( $section['items'] ?? null ) ? $section['items'] : array();
+                        $sec_from_gmb = ! empty( $section['from_gmb'] );
                         ?>
-                        <?php $this->render_section_html( $sec_idx, $sec_name, $sec_items ); ?>
+                        <?php $this->render_section_html( $sec_idx, $sec_name, $sec_items, $sec_from_gmb ); ?>
                     <?php endforeach; ?>
                 </div>
 
@@ -268,6 +348,34 @@ class OY_Location_Menu_Metabox {
                 <p class="description" style="margin-bottom:14px;">
                     <?php _e( 'Sube fotos o un PDF de tu menú. Las fotos y el PDF se mostrarán en tu perfil de Google Business. Formatos aceptados: JPG, PNG, PDF.', 'lealez' ); ?>
                 </p>
+
+                <?php /* ── Fotos sincronizadas desde GMB (lectura, solo si hay) ── */ ?>
+                <?php if ( ! empty( $gmb_food_photos ) ) : ?>
+                    <div style="background:#e8f4fd;border:1px solid #90caf9;border-radius:5px;padding:12px 14px;margin-bottom:18px;">
+                        <h4 style="margin:0 0 10px;font-size:13px;">
+                            🔄 <?php _e( 'Fotos de comida sincronizadas desde Google My Business', 'lealez' ); ?>
+                            <span class="oy-gmb-badge oy-gmb-badge-green" style="margin-left:6px;"><?php echo count( $gmb_food_photos ); ?> fotos</span>
+                        </h4>
+                        <p class="description" style="margin:0 0 10px;font-size:12px;">
+                            <?php _e( 'Estas son las fotos de categoría "Comida y bebida / Menú" registradas en tu Perfil de Negocio de Google. Son de solo lectura — para modificarlas hazlo desde Google Business Profile.', 'lealez' ); ?>
+                        </p>
+                        <div class="oy-gmb-photos-grid">
+                            <?php foreach ( $gmb_food_photos as $gphoto ) :
+                                $gurl      = ! empty( $gphoto['googleUrl'] ) ? esc_url( $gphoto['googleUrl'] ) : '';
+                                $gcategory = ! empty( $gphoto['category'] ) ? esc_html( $gphoto['category'] ) : 'FOOD';
+                                if ( ! $gurl ) continue;
+                                ?>
+                                <div class="oy-gmb-photo-thumb">
+                                    <a href="<?php echo $gurl; ?>" target="_blank" rel="noopener" title="<?php _e( 'Ver en tamaño completo', 'lealez' ); ?>">
+                                        <img src="<?php echo $gurl; ?>=w200-h200-c" alt="" loading="lazy"
+                                             onerror="this.src='<?php echo $gurl; ?>';this.onerror=null;">
+                                    </a>
+                                    <div class="oy-gmb-photo-label"><?php echo $gcategory; ?></div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                <?php endif; ?>
 
                 <?php /* PDF del Menú */ ?>
                 <h4 style="margin:0 0 8px;"><?php _e( '📄 PDF del Menú', 'lealez' ); ?></h4>
@@ -299,8 +407,8 @@ class OY_Location_Menu_Metabox {
 
                 <hr style="margin:16px 0;">
 
-                <?php /* Fotos del Menú */ ?>
-                <h4 style="margin:0 0 8px;"><?php _e( '📸 Fotos del Menú', 'lealez' ); ?></h4>
+                <?php /* Fotos del Menú (WordPress Media Library) */ ?>
+                <h4 style="margin:0 0 8px;"><?php _e( '📸 Fotos del Menú (subidas manualmente)', 'lealez' ); ?></h4>
                 <div class="oy-menu-photos-grid" id="oy-menu-photos-grid">
                     <?php foreach ( $menu_photos as $photo_id ) :
                         $photo_url = wp_get_attachment_image_url( $photo_id, 'thumbnail' );
@@ -324,7 +432,7 @@ class OY_Location_Menu_Metabox {
                     </button>
                 </div>
                 <p class="description" style="margin-top:8px;">
-                    <?php _e( 'Las imágenes cargadas aquí se mostrarán en la pestaña "Menú" de tu Perfil de Negocio de Google.', 'lealez' ); ?>
+                    <?php _e( 'Las imágenes cargadas aquí se almacenan en la Biblioteca de Medios de WordPress.', 'lealez' ); ?>
                 </p>
             </div>
 
@@ -576,7 +684,7 @@ class OY_Location_Menu_Metabox {
      * @param string     $name     Nombre de la sección
      * @param array      $items    Array de items
      */
-    private function render_section_html( $sec_idx, $name, $items ) {
+    private function render_section_html( $sec_idx, $name, $items, $from_gmb = false ) {
         $item_count = count( $items );
         ?>
         <div class="oy-menu-section" data-section-idx="<?php echo esc_attr( $sec_idx ); ?>">
@@ -587,6 +695,10 @@ class OY_Location_Menu_Metabox {
                        name="location_menu_sections[<?php echo esc_attr( $sec_idx ); ?>][name]"
                        value="<?php echo esc_attr( $name ); ?>"
                        placeholder="<?php esc_attr_e( 'Nombre de la sección (ej: Sopas, Entradas...)', 'lealez' ); ?>">
+                <?php if ( $from_gmb ) : ?>
+                    <span class="oy-gmb-badge oy-gmb-badge-blue" style="margin-left:4px;">🔄 GMB</span>
+                <?php endif; ?>
+                <input type="hidden" name="location_menu_sections[<?php echo esc_attr( $sec_idx ); ?>][from_gmb]" value="<?php echo $from_gmb ? '1' : '0'; ?>">
                 <span class="oy-menu-section-count">
                     <?php echo sprintf( _n( '%d producto', '%d productos', $item_count, 'lealez' ), $item_count ); ?>
                 </span>
