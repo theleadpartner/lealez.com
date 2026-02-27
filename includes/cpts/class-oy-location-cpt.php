@@ -61,7 +61,9 @@ public function __construct() {
     add_action( 'add_meta_boxes', array( $this, 'add_meta_boxes' ) );
 
     // Save meta data
-    add_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 10, 2 );
+    // Priority 20 ensures this runs AFTER OY_Location_Menu_Metabox::save_meta_box (priority 15)
+    // so that contact-metabox fields (incl. location_menu_url_gmb) win over the menu metabox hidden field.
+    add_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 20, 2 );
 
     // Customize admin columns
     add_filter( 'manage_oy_location_posts_columns', array( $this, 'set_custom_columns' ) );
@@ -979,11 +981,45 @@ public function render_address_meta_box( $post ) {
             </button>
         </div>
 
+        <?php /* ── URL Vínculo del Menú / Servicios (GMB: Place Actions API → MENU) ── */ ?>
+        <div style="margin:12px 0 16px 0;" id="oy-menu-link-wrap">
+            <p style="font-weight:600; margin:0 0 4px; font-size:13px;">
+                <?php _e( 'Vínculo del Menú / Servicios', 'lealez' ); ?>
+                <span style="font-weight:400; color:#777; font-size:12px;">
+                    <?php _e( '(GMB: Place Actions API — <code>MENU</code>)', 'lealez' ); ?>
+                </span>
+            </p>
+            <p class="description" style="margin:0 0 8px;">
+                <?php _e( 'Enlace que Google muestra en tu Perfil de Negocio como "Vínculo del menú o los servicios". Se sincroniza automáticamente desde GMB (Place Actions → MENU) o puedes ingresarlo manualmente aquí.', 'lealez' ); ?>
+            </p>
+            <?php
+            $current_menu_url = (string) get_post_meta( $post->ID, 'location_menu_url', true );
+            $menu_url_from_gmb = (bool) get_post_meta( $post->ID, 'location_menu_url_from_gmb', true );
+            ?>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="url"
+                       name="location_menu_url_gmb"
+                       id="location_menu_url_gmb"
+                       value="<?php echo esc_attr( $current_menu_url ); ?>"
+                       class="large-text"
+                       placeholder="https://tu-restaurante.com/menu"
+                       style="flex:1;min-width:280px;">
+                <?php if ( $menu_url_from_gmb && $current_menu_url ) : ?>
+                    <span style="font-size:11px;color:#2271b1;white-space:nowrap;background:#e8f0fe;border:1px solid #b3d4f5;border-radius:3px;padding:2px 6px;">
+                        🔄 GMB · MENU
+                    </span>
+                <?php endif; ?>
+            </div>
+            <?php if ( $current_menu_url ) : ?>
+                <p style="margin:4px 0 0;font-size:12px;">
+                    <a href="<?php echo esc_url( $current_menu_url ); ?>" target="_blank" rel="noopener">
+                        <?php echo esc_html( $current_menu_url ); ?> ↗
+                    </a>
+                </p>
+            <?php endif; ?>
+        </div>
+
         <hr style="margin:16px 0;">
-
-<hr style="margin:16px 0;">
-
-        <h4><?php _e( '📱 Perfiles de Redes Sociales', 'lealez' ); ?></h4>
         <p class="description" style="margin-bottom:10px;">
             <?php _e( '🔄 Se sincronizan automáticamente desde los atributos de Google My Business (<code>url_facebook</code>, <code>url_instagram</code>, etc.). Puedes editar o agregar perfiles adicionales manualmente.', 'lealez' ); ?>
         </p>
@@ -3070,7 +3106,9 @@ private function humanize_attribute_id( $attr_id ) {
             'location_chat_url'               => 'esc_url_raw',
             'location_email'                  => 'sanitize_email',
             'location_website'                => 'esc_url_raw',
-            // NOTA: location_menu_url ya es guardado por OY_Location_Menu_Metabox (hook save_post_oy_location prioridad 15)
+            // NOTA: location_menu_url se guarda más abajo desde location_menu_url_gmb (POST name distinto
+            // para evitar conflicto con el hidden field del menu metabox que corre en prioridad 15).
+            // save_meta_boxes corre en prioridad 20, por lo que GANA sobre el menu metabox.
             // NOTA: location_booking_url y location_order_url se derivan de los arrays
             // location_booking_urls / location_order_urls (guardados más abajo).
 
@@ -3251,6 +3289,21 @@ private function humanize_attribute_id( $attr_id ) {
             update_post_meta( $post_id, 'location_order_url', $order_urls_clean[0]['url'] );
         } else {
             delete_post_meta( $post_id, 'location_order_url' );
+        }
+
+        // ✅ Save location_menu_url desde el campo editable del contact metabox.
+        // POST name: location_menu_url_gmb (distinto del hidden field del menu metabox que usa
+        // location_menu_url). Al correr en prioridad 20 (después del menu metabox en prioridad 15),
+        // este valor SIEMPRE gana, preservando el control manual del usuario.
+        if ( isset( $_POST['location_menu_url_gmb'] ) ) {
+            $menu_url_val = esc_url_raw( wp_unslash( (string) $_POST['location_menu_url_gmb'] ) );
+            update_post_meta( $post_id, 'location_menu_url', $menu_url_val );
+            // Marcar si fue ingresado manualmente (vs auto-sync de GMB) — se limpia en gmb import
+            if ( '' === $menu_url_val ) {
+                delete_post_meta( $post_id, 'location_menu_url_from_gmb' );
+            }
+            // Nota: location_menu_url_from_gmb solo se escribe a '1' durante el import de GMB.
+            // Si el usuario borra el campo manualmente, se limpia el flag de GMB.
         }
 
         // Save hours status (alineado con GMB: open_with_hours, open_without_hours, temporarily_closed, permanently_closed)
@@ -3546,6 +3599,9 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
         // Guardar menu URL (sigue siendo campo simple — GMB solo permite uno)
         if ( $gmb_menu_url ) {
             update_post_meta( $post_id, 'location_menu_url', $gmb_menu_url );
+            // Marcar como sincronizado desde GMB para que el campo editable del contact metabox
+            // muestre el badge 🔄 GMB junto al enlace
+            update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
         }
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -3589,12 +3645,12 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
         $title = isset( $data['title'] ) ? (string) $data['title'] : '';
         if ( $title ) {
             // Update WP post_title safely
-            remove_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 10 );
+            remove_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 20 );
             wp_update_post( array(
                 'ID'         => $post_id,
                 'post_title' => $title,
             ) );
-            add_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 10, 2 );
+            add_action( 'save_post_oy_location', array( $this, 'save_meta_boxes' ), 20, 2 );
         }
 
         // storeCode
@@ -4144,6 +4200,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                         $current_menu = (string) get_post_meta( $post_id, 'location_menu_url', true );
                         if ( '' === $current_menu ) {
                             update_post_meta( $post_id, 'location_menu_url', $uri );
+                            update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
                             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                                 error_log( sprintf( '[OY Location] Fallback atributo %s → location_menu_url: %s', $gmb_id, $uri ) );
                             }
