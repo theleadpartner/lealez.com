@@ -709,9 +709,40 @@ public function render_address_meta_box( $post ) {
         }
         $email               = get_post_meta( $post->ID, 'location_email', true );
         $website             = get_post_meta( $post->ID, 'location_website', true );
-        $booking_url         = get_post_meta( $post->ID, 'location_booking_url', true );
         $menu_url            = get_post_meta( $post->ID, 'location_menu_url', true );
-        $order_url           = get_post_meta( $post->ID, 'location_order_url', true );
+
+        // ── Arrays dinámicos de URLs de Reservas y Ordenar Online ──────────────────────
+        // Estructura de cada entrada: ['url' => '', 'label' => '', 'type' => '', 'from_gmb' => 0]
+        $booking_urls = get_post_meta( $post->ID, 'location_booking_urls', true );
+        if ( ! is_array( $booking_urls ) || empty( $booking_urls ) ) {
+            // Migración desde campo legacy location_booking_url
+            $legacy_booking = get_post_meta( $post->ID, 'location_booking_url', true );
+            $booking_urls   = $legacy_booking
+                ? array( array( 'url' => $legacy_booking, 'label' => __( 'Reservas', 'lealez' ), 'type' => 'APPOINTMENT', 'from_gmb' => 0 ) )
+                : array();
+        }
+
+        $order_urls = get_post_meta( $post->ID, 'location_order_urls', true );
+        if ( ! is_array( $order_urls ) || empty( $order_urls ) ) {
+            // Migración desde campo legacy location_order_url
+            $legacy_order = get_post_meta( $post->ID, 'location_order_url', true );
+            $order_urls   = $legacy_order
+                ? array( array( 'url' => $legacy_order, 'label' => __( 'Ordenar en línea', 'lealez' ), 'type' => 'FOOD_ORDERING', 'from_gmb' => 0 ) )
+                : array();
+        }
+
+        // Etiquetas legibles para cada placeActionType
+        $action_type_labels = array(
+            'APPOINTMENT'        => __( 'Reservas', 'lealez' ),
+            'ONLINE_APPOINTMENT' => __( 'Cita online', 'lealez' ),
+            'DINING_RESERVATION' => __( 'Reserva de mesa', 'lealez' ),
+            'FOOD_ORDERING'      => __( 'Ordenar en línea', 'lealez' ),
+            'FOOD_DELIVERY'      => __( 'Domicilio', 'lealez' ),
+            'FOOD_TAKEOUT'       => __( 'Para llevar', 'lealez' ),
+            'SHOP_ONLINE'        => __( 'Tienda online', 'lealez' ),
+            'ORDER_AHEAD'        => __( 'Ordenar anticipado', 'lealez' ),
+            'ORDER_FOOD'         => __( 'Pedir comida', 'lealez' ),
+        );
 
         // Social profiles: from GMB attributes (auto) + manual overrides
         $gmb_social_profiles = get_post_meta( $post->ID, 'gmb_social_profiles_raw', true );
@@ -846,20 +877,7 @@ public function render_address_meta_box( $post ) {
             </tr>
             <tr>
                 <th scope="row">
-                    <label for="location_booking_url"><?php _e( 'URL de Reservas', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="url"
-                           name="location_booking_url"
-                           id="location_booking_url"
-                           value="<?php echo esc_attr( $booking_url ); ?>"
-                           class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>APPOINTMENT</code> configurado en "Editar perfil → Reserva" de Google Business Profile.', 'lealez' ); ?></p>
-                </td>
-            </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_menu_url"><?php _e( 'URL del Menú', 'lealez' ); ?></label>
+                    <label><?php _e( 'URL del Menú', 'lealez' ); ?></label>
                 </th>
                 <td>
                     <input type="url"
@@ -870,20 +888,95 @@ public function render_address_meta_box( $post ) {
                     <p class="description"><?php _e( 'Manual o desde GMB: vínculo de acción <code>MENU</code> configurado en "Editar perfil → Menú" de Google Business Profile.', 'lealez' ); ?></p>
                 </td>
             </tr>
-            <tr>
-                <th scope="row">
-                    <label for="location_order_url"><?php _e( 'URL para Ordenar Online', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="url"
-                           name="location_order_url"
-                           id="location_order_url"
-                           value="<?php echo esc_attr( $order_url ); ?>"
-                           class="large-text">
-                    <p class="description"><?php _e( 'Manual o desde GMB vía Place Actions API: tipos <code>FOOD_ORDERING</code>, <code>FOOD_DELIVERY</code>, <code>FOOD_TAKEOUT</code>, <code>SHOP_ONLINE</code> configurados en "Editar perfil → Ordenar en línea" de Google Business Profile.', 'lealez' ); ?></p>
-                </td>
-            </tr>
         </table>
+
+        <?php /* ── URLs de Reservas (dinámica, múltiple) ── */ ?>
+        <div style="margin:12px 0 16px 0;" id="oy-booking-urls-wrap">
+            <p style="font-weight:600; margin:0 0 4px; font-size:13px;">
+                <?php _e( 'URLs de Reservas', 'lealez' ); ?>
+                <span style="font-weight:400; color:#777; font-size:12px;">
+                    <?php _e( '(GMB: Place Actions API — <code>APPOINTMENT</code> / <code>ONLINE_APPOINTMENT</code> / <code>DINING_RESERVATION</code>)', 'lealez' ); ?>
+                </span>
+            </p>
+            <div id="oy-booking-urls-list">
+                <?php foreach ( $booking_urls as $idx => $entry ) :
+                    $burl      = ! empty( $entry['url'] )      ? $entry['url']      : '';
+                    $blabel    = ! empty( $entry['label'] )     ? $entry['label']    : '';
+                    $btype     = ! empty( $entry['type'] )      ? $entry['type']     : '';
+                    $bfromgmb  = ! empty( $entry['from_gmb'] )  ? 1 : 0;
+                ?>
+                <div class="oy-booking-url-row" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
+                    <input type="url"
+                           name="location_booking_urls[<?php echo $idx; ?>][url]"
+                           value="<?php echo esc_attr( $burl ); ?>"
+                           class="large-text"
+                           placeholder="https://..."
+                           style="flex:1;min-width:250px;">
+                    <input type="text"
+                           name="location_booking_urls[<?php echo $idx; ?>][label]"
+                           value="<?php echo esc_attr( $blabel ); ?>"
+                           class="regular-text"
+                           placeholder="<?php esc_attr_e( 'Etiqueta (ej: Reservas)', 'lealez' ); ?>"
+                           style="max-width:180px;">
+                    <input type="hidden" name="location_booking_urls[<?php echo $idx; ?>][type]"     value="<?php echo esc_attr( $btype ); ?>">
+                    <input type="hidden" name="location_booking_urls[<?php echo $idx; ?>][from_gmb]" value="<?php echo $bfromgmb; ?>">
+                    <?php if ( $bfromgmb ) : ?>
+                        <span style="font-size:11px;color:#2271b1;white-space:nowrap;background:#e8f0fe;border:1px solid #b3d4f5;border-radius:3px;padding:2px 6px;">
+                            🔄 GMB<?php if ( $btype ) echo ' · ' . esc_html( $btype ); ?>
+                        </span>
+                    <?php endif; ?>
+                    <button type="button" class="button button-small oy-remove-booking-url" style="color:#dc3232;">✕</button>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <button type="button" id="oy-add-booking-url" class="button button-small">
+                + <?php _e( 'Agregar URL de reservas', 'lealez' ); ?>
+            </button>
+        </div>
+
+        <?php /* ── URLs Ordenar Online (dinámica, múltiple) ── */ ?>
+        <div style="margin:12px 0 16px 0;" id="oy-order-urls-wrap">
+            <p style="font-weight:600; margin:0 0 4px; font-size:13px;">
+                <?php _e( 'URLs para Ordenar Online', 'lealez' ); ?>
+                <span style="font-weight:400; color:#777; font-size:12px;">
+                    <?php _e( '(GMB: Place Actions API — <code>FOOD_ORDERING</code> / <code>FOOD_DELIVERY</code> / <code>FOOD_TAKEOUT</code> / <code>SHOP_ONLINE</code> / etc.)', 'lealez' ); ?>
+                </span>
+            </p>
+            <div id="oy-order-urls-list">
+                <?php foreach ( $order_urls as $idx => $entry ) :
+                    $ourl     = ! empty( $entry['url'] )      ? $entry['url']      : '';
+                    $olabel   = ! empty( $entry['label'] )     ? $entry['label']    : '';
+                    $otype    = ! empty( $entry['type'] )      ? $entry['type']     : '';
+                    $ofromgmb = ! empty( $entry['from_gmb'] )  ? 1 : 0;
+                ?>
+                <div class="oy-order-url-row" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
+                    <input type="url"
+                           name="location_order_urls[<?php echo $idx; ?>][url]"
+                           value="<?php echo esc_attr( $ourl ); ?>"
+                           class="large-text"
+                           placeholder="https://..."
+                           style="flex:1;min-width:250px;">
+                    <input type="text"
+                           name="location_order_urls[<?php echo $idx; ?>][label]"
+                           value="<?php echo esc_attr( $olabel ); ?>"
+                           class="regular-text"
+                           placeholder="<?php esc_attr_e( 'Etiqueta (ej: Domicilio)', 'lealez' ); ?>"
+                           style="max-width:180px;">
+                    <input type="hidden" name="location_order_urls[<?php echo $idx; ?>][type]"     value="<?php echo esc_attr( $otype ); ?>">
+                    <input type="hidden" name="location_order_urls[<?php echo $idx; ?>][from_gmb]" value="<?php echo $ofromgmb; ?>">
+                    <?php if ( $ofromgmb ) : ?>
+                        <span style="font-size:11px;color:#2271b1;white-space:nowrap;background:#e8f0fe;border:1px solid #b3d4f5;border-radius:3px;padding:2px 6px;">
+                            🔄 GMB<?php if ( $otype ) echo ' · ' . esc_html( $otype ); ?>
+                        </span>
+                    <?php endif; ?>
+                    <button type="button" class="button button-small oy-remove-order-url" style="color:#dc3232;">✕</button>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <button type="button" id="oy-add-order-url" class="button button-small">
+                + <?php _e( 'Agregar URL de pedidos', 'lealez' ); ?>
+            </button>
+        </div>
 
         <hr style="margin:16px 0;">
 
@@ -971,6 +1064,58 @@ public function render_address_meta_box( $post ) {
             });
             $(document).on('click', '.oy-remove-phone', function(){
                 $(this).closest('.oy-phone-row').remove();
+            });
+
+            // ── URLs de Reservas (múltiple) ──────────────────────────────────────────
+            function oyBookingUrlNextIdx() {
+                var max = -1;
+                $('#oy-booking-urls-list .oy-booking-url-row').each(function(){
+                    $(this).find('input[name^="location_booking_urls["]').each(function(){
+                        var m = this.name.match(/location_booking_urls\[(\d+)\]/);
+                        if (m) { max = Math.max(max, parseInt(m[1], 10)); }
+                    });
+                });
+                return max + 1;
+            }
+            $('#oy-add-booking-url').on('click', function(){
+                var idx = oyBookingUrlNextIdx();
+                var row = '<div class="oy-booking-url-row" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
+                    '<input type="url" name="location_booking_urls[' + idx + '][url]" class="large-text" placeholder="https://..." style="flex:1;min-width:250px;">' +
+                    '<input type="text" name="location_booking_urls[' + idx + '][label]" class="regular-text" placeholder="<?php echo esc_js( __( 'Etiqueta (ej: Reservas)', 'lealez' ) ); ?>" style="max-width:180px;">' +
+                    '<input type="hidden" name="location_booking_urls[' + idx + '][type]" value="">' +
+                    '<input type="hidden" name="location_booking_urls[' + idx + '][from_gmb]" value="0">' +
+                    '<button type="button" class="button button-small oy-remove-booking-url" style="color:#dc3232;">✕</button>' +
+                    '</div>';
+                $('#oy-booking-urls-list').append(row);
+            });
+            $(document).on('click', '.oy-remove-booking-url', function(){
+                $(this).closest('.oy-booking-url-row').remove();
+            });
+
+            // ── URLs para Ordenar Online (múltiple) ──────────────────────────────────
+            function oyOrderUrlNextIdx() {
+                var max = -1;
+                $('#oy-order-urls-list .oy-order-url-row').each(function(){
+                    $(this).find('input[name^="location_order_urls["]').each(function(){
+                        var m = this.name.match(/location_order_urls\[(\d+)\]/);
+                        if (m) { max = Math.max(max, parseInt(m[1], 10)); }
+                    });
+                });
+                return max + 1;
+            }
+            $('#oy-add-order-url').on('click', function(){
+                var idx = oyOrderUrlNextIdx();
+                var row = '<div class="oy-order-url-row" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
+                    '<input type="url" name="location_order_urls[' + idx + '][url]" class="large-text" placeholder="https://..." style="flex:1;min-width:250px;">' +
+                    '<input type="text" name="location_order_urls[' + idx + '][label]" class="regular-text" placeholder="<?php echo esc_js( __( 'Etiqueta (ej: Domicilio)', 'lealez' ) ); ?>" style="max-width:180px;">' +
+                    '<input type="hidden" name="location_order_urls[' + idx + '][type]" value="">' +
+                    '<input type="hidden" name="location_order_urls[' + idx + '][from_gmb]" value="0">' +
+                    '<button type="button" class="button button-small oy-remove-order-url" style="color:#dc3232;">✕</button>' +
+                    '</div>';
+                $('#oy-order-urls-list').append(row);
+            });
+            $(document).on('click', '.oy-remove-order-url', function(){
+                $(this).closest('.oy-order-url-row').remove();
             });
 
             // ── Redes sociales ──
@@ -2924,9 +3069,9 @@ private function humanize_attribute_id( $attr_id ) {
             'location_chat_url'               => 'esc_url_raw',
             'location_email'                  => 'sanitize_email',
             'location_website'                => 'esc_url_raw',
-            'location_booking_url'            => 'esc_url_raw',
             'location_menu_url'               => 'esc_url_raw',
-            'location_order_url'              => 'esc_url_raw',
+            // NOTA: location_booking_url y location_order_url se derivan de los arrays
+            // location_booking_urls / location_order_urls (guardados más abajo).
 
             // Hours
             'location_hours_timezone'         => 'sanitize_text_field',
@@ -3042,6 +3187,69 @@ private function humanize_attribute_id( $attr_id ) {
         }
         if ( isset( $social_profiles_manual['instagram'] ) ) {
             update_post_meta( $post_id, 'social_instagram_local', $social_profiles_manual['instagram'] );
+        }
+
+        // ✅ Save location_booking_urls (array dinámico de URLs de Reservas)
+        // Estructura: [ ['url'=>'...','label'=>'...','type'=>'...','from_gmb'=>0], ... ]
+        $booking_urls_raw = isset( $_POST['location_booking_urls'] ) && is_array( $_POST['location_booking_urls'] )
+            ? wp_unslash( $_POST['location_booking_urls'] )
+            : array();
+
+        $booking_urls_clean = array();
+        foreach ( $booking_urls_raw as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            $burl  = esc_url_raw( (string) ( $entry['url']      ?? '' ) );
+            $blbl  = sanitize_text_field( (string) ( $entry['label']    ?? '' ) );
+            $btype = sanitize_text_field( (string) ( $entry['type']     ?? '' ) );
+            $bfgmb = absint( $entry['from_gmb'] ?? 0 );
+            if ( $burl ) {
+                $booking_urls_clean[] = array(
+                    'url'      => $burl,
+                    'label'    => $blbl,
+                    'type'     => $btype,
+                    'from_gmb' => $bfgmb,
+                );
+            }
+        }
+        update_post_meta( $post_id, 'location_booking_urls', $booking_urls_clean );
+        // Backward compat: mantener location_booking_url con la primera entrada
+        if ( ! empty( $booking_urls_clean ) ) {
+            update_post_meta( $post_id, 'location_booking_url', $booking_urls_clean[0]['url'] );
+        } else {
+            delete_post_meta( $post_id, 'location_booking_url' );
+        }
+
+        // ✅ Save location_order_urls (array dinámico de URLs para Ordenar Online)
+        $order_urls_raw = isset( $_POST['location_order_urls'] ) && is_array( $_POST['location_order_urls'] )
+            ? wp_unslash( $_POST['location_order_urls'] )
+            : array();
+
+        $order_urls_clean = array();
+        foreach ( $order_urls_raw as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            $ourl  = esc_url_raw( (string) ( $entry['url']      ?? '' ) );
+            $olbl  = sanitize_text_field( (string) ( $entry['label']    ?? '' ) );
+            $otype = sanitize_text_field( (string) ( $entry['type']     ?? '' ) );
+            $ofgmb = absint( $entry['from_gmb'] ?? 0 );
+            if ( $ourl ) {
+                $order_urls_clean[] = array(
+                    'url'      => $ourl,
+                    'label'    => $olbl,
+                    'type'     => $otype,
+                    'from_gmb' => $ofgmb,
+                );
+            }
+        }
+        update_post_meta( $post_id, 'location_order_urls', $order_urls_clean );
+        // Backward compat: mantener location_order_url con la primera entrada
+        if ( ! empty( $order_urls_clean ) ) {
+            update_post_meta( $post_id, 'location_order_url', $order_urls_clean[0]['url'] );
+        } else {
+            delete_post_meta( $post_id, 'location_order_url' );
         }
 
         // Save hours status (alineado con GMB: open_with_hours, open_without_hours, temporarily_closed, permanently_closed)
@@ -3232,30 +3440,28 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
             error_log( '[OY Location] Place Actions API: ' . count( $place_action_links ) . ' link(s) encontrado(s).' );
         }
 
-        // Mapa placeActionType → meta_key WordPress
-        // Tipos oficiales de Google Business Profile API v1 (PlaceActionType enum):
-        // https://developers.google.com/my-business/reference/placeactions/rest/v1/placeActionLinks#PlaceActionType
-        $action_type_to_meta = array(
-            // ── Reservas / Citas ─────────────────────────────────────────────────────────
-            'APPOINTMENT'             => 'location_booking_url',
-            'ONLINE_APPOINTMENT'      => 'location_booking_url',
-            'DINING_RESERVATION'      => 'location_booking_url',
-            // ── Menú ─────────────────────────────────────────────────────────────────────
-            'MENU'                    => 'location_menu_url',
-            // ── Ordenar Online ───────────────────────────────────────────────────────────
-            // Tipos confirmados en el enum oficial de Google Place Actions API v1:
-            'FOOD_ORDERING'           => 'location_order_url',  // "Ordenar en línea" (principal)
-            'FOOD_DELIVERY'           => 'location_order_url',  // Delivery específico
-            'FOOD_TAKEOUT'            => 'location_order_url',  // Para llevar específico
-            'SHOP_ONLINE'             => 'location_order_url',  // Compras online (retail/ecommerce)
-            // Tipos legacy / posibles variantes retornadas por la API:
-            'ORDER_AHEAD'             => 'location_order_url',
-            'ORDER_FOOD'              => 'location_order_url',
+        // Etiquetas legibles por tipo (para guardar en el array junto con la URL)
+        $action_type_label_map = array(
+            'APPOINTMENT'        => __( 'Reservas', 'lealez' ),
+            'ONLINE_APPOINTMENT' => __( 'Cita online', 'lealez' ),
+            'DINING_RESERVATION' => __( 'Reserva de mesa', 'lealez' ),
+            'MENU'               => __( 'Menú', 'lealez' ),
+            'FOOD_ORDERING'      => __( 'Ordenar en línea', 'lealez' ),
+            'FOOD_DELIVERY'      => __( 'Domicilio', 'lealez' ),
+            'FOOD_TAKEOUT'       => __( 'Para llevar', 'lealez' ),
+            'SHOP_ONLINE'        => __( 'Tienda online', 'lealez' ),
+            'ORDER_AHEAD'        => __( 'Ordenar anticipado', 'lealez' ),
+            'ORDER_FOOD'         => __( 'Pedir comida', 'lealez' ),
         );
 
-        // Rastrear qué meta_keys ya guardamos para evitar sobreescribir
-        // con un tipo de menor prioridad si el principal ya se guardó.
-        $saved_meta_keys = array();
+        // Categorías de placeActionType
+        $booking_types = array( 'APPOINTMENT', 'ONLINE_APPOINTMENT', 'DINING_RESERVATION' );
+        $order_types   = array( 'FOOD_ORDERING', 'FOOD_DELIVERY', 'FOOD_TAKEOUT', 'SHOP_ONLINE', 'ORDER_AHEAD', 'ORDER_FOOD' );
+
+        // Acumuladores — recolectamos TODOS los links de cada categoría
+        $gmb_booking_urls = array();
+        $gmb_order_urls   = array();
+        $gmb_menu_url     = '';
 
         foreach ( $place_action_links as $link ) {
             if ( ! is_array( $link ) ) {
@@ -3265,38 +3471,85 @@ if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
             $uri         = ! empty( $link['uri'] ) ? esc_url_raw( (string) $link['uri'] ) : '';
             $action_type = ! empty( $link['placeActionType'] ) ? strtoupper( trim( (string) $link['placeActionType'] ) ) : '';
 
-            // Saltar links sin URI válida o tipo desconocido
             if ( ! $uri || ! $action_type ) {
                 continue;
             }
-            if ( ! isset( $action_type_to_meta[ $action_type ] ) ) {
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] Place Actions API — tipo no mapeado: ' . $action_type . ' (' . $uri . ')' );
+
+            $label = isset( $action_type_label_map[ $action_type ] ) ? $action_type_label_map[ $action_type ] : $action_type;
+
+            if ( in_array( $action_type, $booking_types, true ) ) {
+                // Evitar duplicados de URL dentro del mismo array
+                $already = array_filter( $gmb_booking_urls, fn( $e ) => $e['url'] === $uri );
+                if ( empty( $already ) ) {
+                    $gmb_booking_urls[] = array(
+                        'url'      => $uri,
+                        'label'    => $label,
+                        'type'     => $action_type,
+                        'from_gmb' => 1,
+                    );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] Place Actions API — booking link: ' . $action_type . ' = ' . $uri );
+                    }
                 }
-                continue;
-            }
-
-            $meta_key = $action_type_to_meta[ $action_type ];
-
-            // Si ya guardamos este meta_key con un tipo de mayor prioridad, saltar
-            if ( isset( $saved_meta_keys[ $meta_key ] ) ) {
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] Place Actions API — ' . $action_type . ' ignorado: ' . $meta_key . ' ya guardado con ' . $saved_meta_keys[ $meta_key ] );
+            } elseif ( in_array( $action_type, $order_types, true ) ) {
+                $already = array_filter( $gmb_order_urls, fn( $e ) => $e['url'] === $uri );
+                if ( empty( $already ) ) {
+                    $gmb_order_urls[] = array(
+                        'url'      => $uri,
+                        'label'    => $label,
+                        'type'     => $action_type,
+                        'from_gmb' => 1,
+                    );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] Place Actions API — order link: ' . $action_type . ' = ' . $uri );
+                    }
                 }
-                continue;
-            }
-
-            update_post_meta( $post_id, $meta_key, $uri );
-            $saved_meta_keys[ $meta_key ] = $action_type;
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] Place Actions API — guardado: ' . $action_type . ' → ' . $meta_key . ' = ' . $uri );
+            } elseif ( 'MENU' === $action_type ) {
+                if ( ! $gmb_menu_url ) {
+                    $gmb_menu_url = $uri;
+                }
+            } else {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Place Actions API — tipo no categorizado: ' . $action_type . ' (' . $uri . ')' );
+                }
             }
         }
 
+        // Guardar booking URLs: combinar los de GMB con los manuales existentes (que no son de GMB)
+        if ( ! empty( $gmb_booking_urls ) ) {
+            $existing_booking = get_post_meta( $post_id, 'location_booking_urls', true );
+            if ( ! is_array( $existing_booking ) ) {
+                $existing_booking = array();
+            }
+            // Mantener entradas manuales (from_gmb = 0) y reemplazar las de GMB
+            $manual_booking = array_values( array_filter( $existing_booking, fn( $e ) => empty( $e['from_gmb'] ) ) );
+            $merged_booking = array_merge( $gmb_booking_urls, $manual_booking );
+            update_post_meta( $post_id, 'location_booking_urls', $merged_booking );
+            // Backward compat
+            update_post_meta( $post_id, 'location_booking_url', $merged_booking[0]['url'] );
+        }
+
+        // Guardar order URLs: combinar los de GMB con los manuales existentes
+        if ( ! empty( $gmb_order_urls ) ) {
+            $existing_order = get_post_meta( $post_id, 'location_order_urls', true );
+            if ( ! is_array( $existing_order ) ) {
+                $existing_order = array();
+            }
+            $manual_order = array_values( array_filter( $existing_order, fn( $e ) => empty( $e['from_gmb'] ) ) );
+            $merged_order = array_merge( $gmb_order_urls, $manual_order );
+            update_post_meta( $post_id, 'location_order_urls', $merged_order );
+            // Backward compat
+            update_post_meta( $post_id, 'location_order_url', $merged_order[0]['url'] );
+        }
+
+        // Guardar menu URL (sigue siendo campo simple — GMB solo permite uno)
+        if ( $gmb_menu_url ) {
+            update_post_meta( $post_id, 'location_menu_url', $gmb_menu_url );
+        }
+
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            if ( empty( $saved_meta_keys ) ) {
-                error_log( '[OY Location] Place Actions API — links recibidos pero ninguno tiene tipo reconocido (FOOD_ORDERING / MENU / APPOINTMENT / etc.).' );
+            if ( empty( $gmb_booking_urls ) && empty( $gmb_order_urls ) && ! $gmb_menu_url ) {
+                error_log( '[OY Location] Place Actions API — links recibidos pero ninguno tiene tipo reconocido.' );
             }
         }
 
@@ -3833,19 +4086,20 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
             // ✅ FALLBACK: Extraer URLs de acción desde atributos GMB (Business Information API v1)
             // ─────────────────────────────────────────────────────────────────────────────────────────
-            // NOTA: La fuente PRINCIPAL de estas URLs es la Place Actions API (bloque ejecutado antes,
-            // en la sección de gmb_location_raw). Este bloque de atributos actúa como FALLBACK:
-            // solo guarda el valor si el campo aún está vacío (la Place Actions API no lo entregó).
-            //
-            // Algunos negocios pueden tener url_appointment como atributo en Business Info API,
-            // aunque Google está migrando estos datos a Place Actions API progresivamente.
+            // NOTA: La fuente PRINCIPAL de estas URLs es la Place Actions API (bloque ejecutado antes).
+            // Este bloque actúa como FALLBACK: solo guarda si los arrays aún están vacíos.
             // ─────────────────────────────────────────────────────────────────────────────────────────
 
-            // Mapa: attribute_id => meta_key destino
+            // Mapa: attribute_id => categoría interna
             $url_attr_map = array(
-                'url_appointment'  => 'location_booking_url',
-                'url_menu'         => 'location_menu_url',
-                'url_order_ahead'  => 'location_order_url',
+                'url_appointment' => 'booking',
+                'url_menu'        => 'menu',
+                'url_order_ahead' => 'order',
+            );
+
+            $attr_fallback_labels = array(
+                'url_appointment' => __( 'Reservas', 'lealez' ),
+                'url_order_ahead' => __( 'Ordenar en línea', 'lealez' ),
             );
 
             foreach ( $data['attributes'] as $attr ) {
@@ -3853,7 +4107,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                     continue;
                 }
 
-                // Normalizar el ID del atributo (puede venir como 'attributeId' o extraído de 'name')
+                // Normalizar el ID del atributo
                 $attr_id_raw = '';
                 if ( ! empty( $attr['attributeId'] ) ) {
                     $attr_id_raw = (string) $attr['attributeId'];
@@ -3869,19 +4123,9 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
                 $attr_id_lower = strtolower( $attr_id_raw );
 
-                // Verificar si corresponde a alguno de nuestros IDs de interés
-                foreach ( $url_attr_map as $gmb_id => $meta_key ) {
+                foreach ( $url_attr_map as $gmb_id => $category ) {
                     if ( $attr_id_lower !== $gmb_id ) {
                         continue;
-                    }
-
-                    // ✅ FALLBACK: solo guardar si Place Actions API no lo entregó (meta vacío)
-                    $current_val = (string) get_post_meta( $post_id, $meta_key, true );
-                    if ( '' !== $current_val ) {
-                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                            error_log( '[OY Location] Atributo fallback ' . $gmb_id . ' ignorado: ' . $meta_key . ' ya tiene valor de Place Actions API.' );
-                        }
-                        break;
                     }
 
                     // Extraer el URI desde uriValues
@@ -3890,10 +4134,62 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                         $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
                     }
 
-                    if ( $uri ) {
-                        update_post_meta( $post_id, $meta_key, $uri );
-                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                            error_log( sprintf( '[OY Location] Fallback atributo %s → %s: %s', $gmb_id, $meta_key, $uri ) );
+                    if ( ! $uri ) {
+                        break;
+                    }
+
+                    if ( 'menu' === $category ) {
+                        // Menú sigue siendo campo simple — solo si está vacío
+                        $current_menu = (string) get_post_meta( $post_id, 'location_menu_url', true );
+                        if ( '' === $current_menu ) {
+                            update_post_meta( $post_id, 'location_menu_url', $uri );
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( sprintf( '[OY Location] Fallback atributo %s → location_menu_url: %s', $gmb_id, $uri ) );
+                            }
+                        } else {
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( '[OY Location] Fallback atributo ' . $gmb_id . ' ignorado: location_menu_url ya tiene valor.' );
+                            }
+                        }
+                    } elseif ( 'booking' === $category ) {
+                        // Booking: fallback solo si el array está vacío
+                        $existing = get_post_meta( $post_id, 'location_booking_urls', true );
+                        if ( empty( $existing ) || ! is_array( $existing ) ) {
+                            $fallback_entry = array(
+                                'url'      => $uri,
+                                'label'    => $attr_fallback_labels[ $gmb_id ] ?? __( 'Reservas', 'lealez' ),
+                                'type'     => 'APPOINTMENT',
+                                'from_gmb' => 1,
+                            );
+                            update_post_meta( $post_id, 'location_booking_urls', array( $fallback_entry ) );
+                            update_post_meta( $post_id, 'location_booking_url', $uri );
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( sprintf( '[OY Location] Fallback atributo %s → location_booking_urls: %s', $gmb_id, $uri ) );
+                            }
+                        } else {
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( '[OY Location] Fallback atributo ' . $gmb_id . ' ignorado: location_booking_urls ya tiene entradas de Place Actions API.' );
+                            }
+                        }
+                    } elseif ( 'order' === $category ) {
+                        // Order: fallback solo si el array está vacío
+                        $existing = get_post_meta( $post_id, 'location_order_urls', true );
+                        if ( empty( $existing ) || ! is_array( $existing ) ) {
+                            $fallback_entry = array(
+                                'url'      => $uri,
+                                'label'    => $attr_fallback_labels[ $gmb_id ] ?? __( 'Ordenar en línea', 'lealez' ),
+                                'type'     => 'ORDER_AHEAD',
+                                'from_gmb' => 1,
+                            );
+                            update_post_meta( $post_id, 'location_order_urls', array( $fallback_entry ) );
+                            update_post_meta( $post_id, 'location_order_url', $uri );
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( sprintf( '[OY Location] Fallback atributo %s → location_order_urls: %s', $gmb_id, $uri ) );
+                            }
+                        } else {
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( '[OY Location] Fallback atributo ' . $gmb_id . ' ignorado: location_order_urls ya tiene entradas de Place Actions API.' );
+                            }
                         }
                     }
 
@@ -3903,15 +4199,21 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 // Log resumen final de URLs de acción (todas las fuentes combinadas)
-                $found_action_urls = array();
-                foreach ( $url_attr_map as $gmb_id => $meta_key ) {
-                    $val = (string) get_post_meta( $post_id, $meta_key, true );
-                    if ( $val ) {
-                        $found_action_urls[] = $gmb_id . '=' . $val;
-                    }
+                $found_booking = get_post_meta( $post_id, 'location_booking_urls', true );
+                $found_order   = get_post_meta( $post_id, 'location_order_urls', true );
+                $found_menu    = get_post_meta( $post_id, 'location_menu_url', true );
+                $summary_parts = array();
+                if ( ! empty( $found_booking ) ) {
+                    $summary_parts[] = 'booking_urls=' . count( $found_booking );
                 }
-                if ( ! empty( $found_action_urls ) ) {
-                    error_log( '[OY Location] URLs de acción finales guardadas (Place Actions + fallback atributos): ' . implode( ', ', $found_action_urls ) );
+                if ( ! empty( $found_order ) ) {
+                    $summary_parts[] = 'order_urls=' . count( $found_order );
+                }
+                if ( $found_menu ) {
+                    $summary_parts[] = 'menu_url=1';
+                }
+                if ( ! empty( $summary_parts ) ) {
+                    error_log( '[OY Location] URLs de acción finales (Place Actions + fallback): ' . implode( ', ', $summary_parts ) );
                 } else {
                     error_log( '[OY Location] Sin URLs de acción: no encontradas en Place Actions API ni en atributos GMB.' );
                 }
