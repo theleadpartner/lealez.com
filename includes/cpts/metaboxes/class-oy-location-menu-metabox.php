@@ -101,6 +101,14 @@ class OY_Location_Menu_Metabox {
         $gmb_food_menus_sync   = get_post_meta( $post->ID, 'gmb_food_menus_last_sync', true );  // Timestamp de última sync
         $gmb_food_menus_error  = get_post_meta( $post->ID, 'gmb_food_menus_api_error', true );  // Error si no se pudo obtener
 
+        // ── Datos de conexión GMB (para el botón de sync del menú) ─────────────
+        $parent_business_id = (int) get_post_meta( $post->ID, 'parent_business_id', true );
+        $gmb_account_id     = (string) get_post_meta( $post->ID, 'gmb_account_id', true );
+        $gmb_location_id    = (string) get_post_meta( $post->ID, 'gmb_location_id', true );
+        $gmb_location_name  = (string) get_post_meta( $post->ID, 'gmb_location_name', true );
+        $gmb_sync_nonce     = wp_create_nonce( 'oy_location_gmb_ajax' );
+        $gmb_connected      = ( $parent_business_id > 0 && ( '' !== $gmb_location_id || '' !== $gmb_location_name ) );
+
         if ( ! is_array( $menu_photos ) )    $menu_photos    = array();
         if ( ! is_array( $menu_sections ) )  $menu_sections  = array();
         if ( ! is_array( $menu_featured ) )  $menu_featured  = array();
@@ -320,6 +328,34 @@ class OY_Location_Menu_Metabox {
                 <p class="description" style="margin-bottom:14px;">
                     <?php _e( 'Las secciones y productos se importan automáticamente desde Google My Business al sincronizar la ubicación. También puedes agregar o editar secciones manualmente.', 'lealez' ); ?>
                 </p>
+
+                <?php /* ── Botón de sincronización directa desde GMB ── */ ?>
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:4px;">
+                    <button
+                        type="button"
+                        id="oy-sync-food-menus-btn"
+                        class="button button-secondary"
+                        <?php echo $gmb_connected ? '' : 'disabled'; ?>
+                        data-post-id="<?php echo esc_attr( $post->ID ); ?>"
+                        data-business-id="<?php echo esc_attr( $parent_business_id ); ?>"
+                        data-nonce="<?php echo esc_attr( $gmb_sync_nonce ); ?>"
+                    >
+                        🔄 <?php _e( 'Sincronizar desde Google', 'lealez' ); ?>
+                    </button>
+                    <span id="oy-sync-food-menus-status" style="font-size:12px;color:#666;">
+                        <?php if ( ! $gmb_connected ) : ?>
+                            <em><?php _e( 'Conecta primero la ubicación a Google My Business', 'lealez' ); ?></em>
+                        <?php elseif ( $gmb_food_menus_sync ) : ?>
+                            <?php printf(
+                                /* translators: %s: fecha */
+                                __( 'Última sync: %s', 'lealez' ),
+                                esc_html( date_i18n( 'd/m/Y H:i', $gmb_food_menus_sync ) )
+                            ); ?>
+                        <?php else : ?>
+                            <em><?php _e( 'Sin sincronizar aún — haz clic para traer el menú desde Google', 'lealez' ); ?></em>
+                        <?php endif; ?>
+                    </span>
+                </div>
 
                 <div id="oy-menu-sections-list">
                     <?php foreach ( $menu_sections as $sec_idx => $section ) :
@@ -671,6 +707,49 @@ class OY_Location_Menu_Metabox {
                     stop: function(){ oy_reindex_sections(); }
                 });
             }
+
+            // ── Sincronizar menú desde Google My Business ─────────────
+            $('#oy-sync-food-menus-btn').on('click', function(){
+                var $btn     = $(this);
+                var $status  = $('#oy-sync-food-menus-status');
+                var postId   = $btn.data('post-id');
+                var bizId    = $btn.data('business-id');
+                var nonce    = $btn.data('nonce');
+                var ajaxUrl  = (typeof ajaxurl !== 'undefined') ? ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+
+                if ( ! postId || ! bizId ) {
+                    $status.html('<span style="color:#c0392b;"><?php echo esc_js( __( 'Error: falta post_id o business_id.', 'lealez' ) ); ?></span>');
+                    return;
+                }
+
+                $btn.prop('disabled', true).text('⏳ <?php echo esc_js( __( 'Sincronizando...', 'lealez' ) ); ?>');
+                $status.html('<em style="color:#2271b1;"><?php echo esc_js( __( 'Contactando Google My Business API...', 'lealez' ) ); ?></em>');
+
+                $.post(ajaxUrl, {
+                    action:      'oy_sync_location_food_menus',
+                    nonce:       nonce,
+                    post_id:     postId,
+                    business_id: bizId
+                })
+                .done(function(resp){
+                    if ( resp && resp.success ) {
+                        var d = resp.data || {};
+                        $status.html('<span style="color:#2e7d32;font-weight:600;">' + ( d.message || '<?php echo esc_js( __( 'Sincronizado.', 'lealez' ) ); ?>' ) + '</span>');
+                        // Recargar la página para mostrar las secciones/fotos actualizadas
+                        setTimeout(function(){
+                            window.location.reload();
+                        }, 1200);
+                    } else {
+                        var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'Error al sincronizar.', 'lealez' ) ); ?>';
+                        $status.html('<span style="color:#c0392b;">' + $('<div>').text(msg).html() + '</span>');
+                        $btn.prop('disabled', false).text('🔄 <?php echo esc_js( __( 'Sincronizar desde Google', 'lealez' ) ); ?>');
+                    }
+                })
+                .fail(function(){
+                    $status.html('<span style="color:#c0392b;"><?php echo esc_js( __( 'Error de red. Verifica la conexión e intenta de nuevo.', 'lealez' ) ); ?></span>');
+                    $btn.prop('disabled', false).text('🔄 <?php echo esc_js( __( 'Sincronizar desde Google', 'lealez' ) ); ?>');
+                });
+            });
 
         })(jQuery);
         </script>
