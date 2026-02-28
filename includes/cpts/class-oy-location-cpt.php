@@ -5235,9 +5235,9 @@ public function ajax_get_gmb_location_details() {
         wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
     }
 
-    $business_id    = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
-    $location_name  = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
-    $account_name   = isset( $_POST['account_name'] ) ? sanitize_text_field( wp_unslash( $_POST['account_name'] ) ) : '';
+    $business_id   = isset( $_POST['business_id'] )   ? absint( wp_unslash( $_POST['business_id'] ) )                             : 0;
+    $location_name = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
+    $account_name  = isset( $_POST['account_name'] )  ? sanitize_text_field( wp_unslash( $_POST['account_name'] ) )  : '';
 
     if ( ! $business_id || '' === $location_name ) {
         wp_send_json_error( array( 'message' => __( 'Parámetros inválidos.', 'lealez' ) ) );
@@ -5261,8 +5261,8 @@ public function ajax_get_gmb_location_details() {
     // Se verifica 'profile', 'metadata' Y 'regularHours'. Sin regularHours, el JS no
     // puede poblar el horario y deja los selects en el valor por defecto.
     if ( null !== $found ) {
-        $missing_profile      = empty( $found['profile'] );
-        $missing_metadata     = empty( $found['metadata'] );
+        $missing_profile       = empty( $found['profile'] );
+        $missing_metadata      = empty( $found['metadata'] );
         // regularHours puede ser un array vacío [] si el negocio no tiene horarios,
         // pero NO debe ser ausente (clave inexistente). Distinguimos ambos casos.
         $missing_regular_hours = ! array_key_exists( 'regularHours', (array) $found );
@@ -5334,8 +5334,9 @@ public function ajax_get_gmb_location_details() {
     // Se incluyen en la respuesta para que applyLocationToForm() los aplique visualmente al formulario.
     // El JS los procesará en loc.placeActionLinks → poblar #location_menu_url_gmb, booking_urls, order_urls.
     if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
-$place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, true ); // ✅ usa WP transient cache
-        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {            $found['placeActionLinks'] = $place_action_links_ajax;
+        $place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, true ); // ✅ usa WP transient cache
+        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {
+            $found['placeActionLinks'] = $place_action_links_ajax;
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[OY Location] ajax_get_gmb_location_details — placeActionLinks incluidos: ' . count( $place_action_links_ajax ) . ' link(s).' );
             }
