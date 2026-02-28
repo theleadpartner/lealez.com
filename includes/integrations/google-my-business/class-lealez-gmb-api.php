@@ -2168,235 +2168,141 @@ public static function get_location_attributes( $business_id, $location_name, $u
 
 
 
-    /**
-     * Obtiene los PlaceActionLinks de una ubicación desde My Business Place Actions API v1.
-     *
-     * Esta es la fuente oficial y correcta para las URLs configuradas en el Perfil de Negocio:
-     *   → "Editar perfil → Reserva"       → placeActionType: APPOINTMENT, ONLINE_APPOINTMENT, DINING_RESERVATION
-     *   → "Editar perfil → Menú"           → placeActionType: MENU
-     *   → "Editar perfil → Ordenar en línea" → placeActionType: FOOD_ORDERING, ORDER_AHEAD, FOOD_DELIVERY, FOOD_TAKEOUT
-     *
-     * Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
-     *
-     * Respuesta esperada:
-     * {
-     *   "placeActionLinks": [
-     *     {
-     *       "name":            "locations/{id}/placeActionLinks/{linkId}",
-     *       "uri":             "https://example.com/reservas",
-     *       "placeActionType": "APPOINTMENT",
-     *       "providerType":    "MERCHANT",
-     *       "isEditable":      true,
-     *       "isPreferred":     true
-     *     }
-     *   ]
-     * }
-     *
-     * NOTA: Solo procesamos links con providerType = MERCHANT (configurados por el dueño del negocio).
-     * Los links de Google Aggregators (providerType = AGGREGATOR_3P) se ignoran.
-     *
-     * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
-     * @param string $location_name Resource name de la ubicación (cualquier formato).
-     * @param bool   $use_cache     Si true, usa caché del rate limiter.
-     * @return array|WP_Error Array de PlaceActionLink objects, o WP_Error en caso de fallo.
-     */
-    public static function get_location_place_action_links( $business_id, $location_name, $use_cache = true ) {
-        $business_id   = absint( $business_id );
-        $location_name = trim( (string) $location_name );
+/**
+ * Obtiene los PlaceActionLinks de una ubicación desde My Business Place Actions API v1.
+ *
+ * Esta es la fuente oficial y correcta para las URLs configuradas en el Perfil de Negocio:
+ *   → "Editar perfil → Reserva"       → placeActionType: APPOINTMENT, ONLINE_APPOINTMENT, DINING_RESERVATION
+ *   → "Editar perfil → Menú"           → placeActionType: MENU
+ *   → "Editar perfil → Ordenar en línea" → placeActionType: FOOD_ORDERING, ORDER_AHEAD, FOOD_DELIVERY, FOOD_TAKEOUT
+ *
+ * Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
+ *
+ * ✅ CACHÉ: Usa WP transients (15 min) independientemente del rate limiter de make_request().
+ * Esto garantiza que si el AJAX llamó exitosamente, el flujo de save_post puede usar el cache
+ * sin necesidad de golpear el API nuevamente, evitando bloqueos por rate limiting.
+ *
+ * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
+ * @param string $location_name Resource name de la ubicación (cualquier formato).
+ * @param bool   $use_cache     Si true, usa caché WP transient (15 min). Default true.
+ * @return array|WP_Error Array de PlaceActionLink objects, o WP_Error en caso de fallo.
+ */
+public static function get_location_place_action_links( $business_id, $location_name, $use_cache = true ) {
+    $business_id   = absint( $business_id );
+    $location_name = trim( (string) $location_name );
 
-        if ( ! $business_id || '' === $location_name ) {
-            return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name', 'lealez' ) );
+    if ( ! $business_id || '' === $location_name ) {
+        return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name', 'lealez' ) );
+    }
+
+    // Normalizar al formato corto 'locations/{id}' requerido por Place Actions API v1
+    $normalized_location = $location_name;
+    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+        $parts = explode( '/locations/', $location_name, 2 );
+        if ( ! empty( $parts[1] ) ) {
+            $normalized_location = 'locations/' . $parts[1];
         }
+    } elseif ( is_numeric( trim( $location_name, '/' ) ) ) {
+        $normalized_location = 'locations/' . trim( $location_name, '/' );
+    }
+    $normalized_location = rtrim( $normalized_location, '/' );
 
-        // Normalizar al formato corto 'locations/{id}' requerido por Place Actions API v1
-        // Puede llegar como 'accounts/{acc}/locations/{id}', 'locations/{id}', o solo el ID
-        $normalized_location = $location_name;
-        if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-            $parts = explode( '/locations/', $location_name, 2 );
-            if ( ! empty( $parts[1] ) ) {
-                $normalized_location = 'locations/' . $parts[1];
+    // ✅ WP Transient cache — independiente del rate limiter de make_request().
+    // TTL: 15 minutos. Permite que el flujo AJAX y save_post compartan el resultado
+    // sin golpear el API dos veces en la misma sesión de importación.
+    $transient_key = 'lealez_pal_' . md5( (string) $business_id . '|' . $normalized_location );
+
+    if ( $use_cache ) {
+        $cached_links = get_transient( $transient_key );
+        if ( is_array( $cached_links ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    'PlaceActionLinks servidos desde WP transient cache (15 min).',
+                    array(
+                        'location'   => $normalized_location,
+                        'link_count' => count( $cached_links ),
+                    )
+                );
             }
-        } elseif ( is_numeric( trim( $location_name, '/' ) ) ) {
-            $normalized_location = 'locations/' . trim( $location_name, '/' );
+            return $cached_links;
         }
+    }
 
-        // Asegurar que empieza con locations/ y no tiene trailing slash
-        $normalized_location = rtrim( $normalized_location, '/' );
+    // Endpoint: /locations/{id}/placeActionLinks
+    $endpoint = '/' . $normalized_location . '/placeActionLinks';
 
-        // Endpoint: /locations/{id}/placeActionLinks
-        $endpoint = '/' . $normalized_location . '/placeActionLinks';
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Fetching PlaceActionLinks (booking / menu / order URLs) via Place Actions API v1.',
+            array(
+                'original_location'   => $location_name,
+                'normalized_location' => $normalized_location,
+                'endpoint'            => self::$place_actions_api_base . $endpoint,
+                'use_cache'           => $use_cache ? 'yes' : 'no',
+            )
+        );
+    }
 
+    // Siempre pasamos use_cache=false a make_request() ya que el caché se gestiona
+    // vía WP transients en este método (capa superior).
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$place_actions_api_base,
+        'GET',
+        array(),
+        false, // No caché en make_request; el caché transient se maneja arriba.
+        array()
+    );
+
+    if ( is_wp_error( $result ) ) {
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
-                'info',
-                'Fetching PlaceActionLinks (booking / menu / order URLs) via Place Actions API v1.',
+                'error',
+                'get_location_place_action_links failed: ' . $result->get_error_message(),
                 array(
-                    'original_location'   => $location_name,
-                    'normalized_location' => $normalized_location,
-                    'endpoint'            => self::$place_actions_api_base . $endpoint,
+                    'location'   => $location_name,
+                    'error_code' => $result->get_error_code(),
+                    'hint'       => 'Verifica que la API "My Business Place Actions API" esté habilitada en Google Cloud Console y que el token tenga scope https://www.googleapis.com/auth/business.manage',
                 )
             );
         }
-
-        $result = self::make_request(
-            $business_id,
-            $endpoint,
-            self::$place_actions_api_base,
-            'GET',
-            array(),
-            $use_cache,
-            array()
+        $result->add_data(
+            array(
+                'location' => $location_name,
+                'hint'     => 'Habilita "My Business Place Actions API" en Google Cloud Console.',
+            ),
+            $result->get_error_code()
         );
-
-        if ( is_wp_error( $result ) ) {
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'error',
-                    'get_location_place_action_links failed: ' . $result->get_error_message(),
-                    array(
-                        'location'   => $location_name,
-                        'error_code' => $result->get_error_code(),
-                        'hint'       => 'Verifica que la API "My Business Place Actions API" esté habilitada en Google Cloud Console y que el token tenga scope https://www.googleapis.com/auth/business.manage',
-                    )
-                );
-            }
-            // Propagamos el WP_Error para que el caller pueda registrarlo visiblemente.
-            // Añadimos contexto extra para facilitar el diagnóstico.
-            $result->add_data(
-                array(
-                    'location' => $location_name,
-                    'hint'     => 'Habilita "My Business Place Actions API" en Google Cloud Console.',
-                ),
-                $result->get_error_code()
-            );
-            return $result;
-        }
-
-        // La respuesta tiene la forma: { "placeActionLinks": [ {...}, {...} ] }
-        $links = array();
-        if ( ! empty( $result['placeActionLinks'] ) && is_array( $result['placeActionLinks'] ) ) {
-            $links = $result['placeActionLinks'];
-        }
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'success',
-                sprintf( 'PlaceActionLinks fetched: %d link(s) found.', count( $links ) ),
-                array( 'location' => $location_name )
-            );
-        }
-
-        return $links;
+        return $result;
     }
 
-
-    /**
-     * Get structured Food Menu for a location (Google My Business API v4)
-     *
-     * Endpoint: GET /v4/accounts/{accountId}/locations/{locationId}/foodMenus
-     *
-     * Este endpoint está disponible en la API v4 para negocios de tipo restaurante/comida.
-     * Devuelve las secciones del menú con sus productos, precios, descripciones e imágenes.
-     *
-     * Respuesta esperada:
-     * {
-     *   "menus": [
-     *     {
-     *       "labels": [{"displayName": "Menú", "languageCode": "es"}],
-     *       "sections": [
-     *         {
-     *           "labels": [{"displayName": "Sopas"}],
-     *           "items": [
-     *             {
-     *               "labels": [{"displayName": "Sopa de Mondongo", "description": "..."}],
-     *               "price": {"currencyCode": "COP", "units": "25000"},
-     *               "itemAttributes": {"dietaryRestriction": "VEGETARIAN", "mediaKeys": [...]}
-     *             }
-     *           ]
-     *         }
-     *       ]
-     *     }
-     *   ]
-     * }
-     *
-     * NOTA: Solo disponible para categorías de negocio tipo restaurante/comida.
-     * Para otros tipos de negocio, la API retorna un objeto vacío o 404.
-     *
-     * @param int    $business_id    WP post ID del oy_business
-     * @param string $account_id     ID numérico de la cuenta GMB (sin prefijo "accounts/")
-     * @param string $location_id    ID numérico de la ubicación (sin prefijo "locations/")
-     * @param bool   $force_refresh  Si forzar refresco ignorando caché. Default false.
-     *
-     * @return array|WP_Error Array con clave 'menus', o WP_Error si falla.
-     */
-    public static function get_location_food_menus( $business_id, $account_id, $location_id, $force_refresh = false ) {
-        $business_id = absint( $business_id );
-        $account_id  = trim( (string) $account_id );
-        $location_id = trim( (string) $location_id );
-
-        if ( ! $business_id || '' === $account_id || '' === $location_id ) {
-            return new WP_Error(
-                'invalid_params',
-                __( 'Missing business_id, account_id or location_id for food menus.', 'lealez' )
-            );
-        }
-
-        // Normalizar: quitar prefijos si llegan con ellos
-        if ( strpos( $account_id, 'accounts/' ) === 0 ) {
-            $account_id = str_replace( 'accounts/', '', $account_id );
-        }
-        if ( strpos( $location_id, 'locations/' ) === 0 ) {
-            $location_id = str_replace( 'locations/', '', $location_id );
-        }
-
-        $endpoint = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/foodMenus';
-
-        $result = self::make_request(
-            $business_id,
-            $endpoint,
-            self::$mybusiness_v4_base,
-            'GET',
-            array(),
-            ! $force_refresh // use_cache = inverse of force_refresh
-        );
-
-        if ( is_wp_error( $result ) ) {
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'warning',
-                    'Food Menus API: could not retrieve food menus for location.',
-                    array(
-                        'account_id'  => $account_id,
-                        'location_id' => $location_id,
-                        'error'       => $result->get_error_message(),
-                        'error_code'  => $result->get_error_code(),
-                    )
-                );
-            }
-            return $result;
-        }
-
-        // Si la respuesta es vacía (negocio sin menú configurado o no es restaurante), devolvemos array vacío
-        if ( ! is_array( $result ) || empty( $result ) ) {
-            return array( 'menus' => array() );
-        }
-
-        // La API puede retornar el objeto directamente o envuelto en 'menus'
-        if ( isset( $result['menus'] ) ) {
-            return $result;
-        }
-
-        // Algunos wrappers devuelven el array de menus directamente
-        if ( isset( $result[0] ) && is_array( $result[0] ) ) {
-            return array( 'menus' => $result );
-        }
-
-        return array( 'menus' => array() );
+    // Extraer placeActionLinks del resultado
+    $links = array();
+    if ( ! empty( $result['placeActionLinks'] ) && is_array( $result['placeActionLinks'] ) ) {
+        $links = $result['placeActionLinks'];
     }
+
+    // ✅ Guardar en WP transient (15 min), incluso si el array está vacío
+    // (negocio sin links = respuesta válida que no debe re-consultarse enseguida)
+    set_transient( $transient_key, $links, 15 * MINUTE_IN_SECONDS );
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'PlaceActionLinks fetched: %d link(s) found. Cached for 15 min.', count( $links ) ),
+            array( 'location' => $location_name )
+        );
+    }
+
+    return $links;
+}
 
 
     /**
