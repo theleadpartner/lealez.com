@@ -3775,24 +3775,26 @@ if ( is_wp_error( $data ) || ! is_array( $data ) ) {
     return;
 }
 
-// ✅ Cargar atributos por separado (Business Information API v1 no los incluye en location.get)
-// El endpoint dedicado GET /v1/locations/{id}/attributes devuelve url_whatsapp, url_instagram, etc.
-if ( ! isset( $data['attributes'] ) || empty( $data['attributes'] ) ) {
-    $attributes_result = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, false );
-    if ( ! is_wp_error( $attributes_result ) && is_array( $attributes_result ) && ! empty( $attributes_result ) ) {
-        $data['attributes'] = $attributes_result;
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY Location] Attributes loaded via dedicated endpoint: ' . count( $attributes_result ) . ' attribute(s).' );
-        }
-    } else {
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            $err_msg = is_wp_error( $attributes_result ) ? $attributes_result->get_error_message() : 'empty response';
-            error_log( '[OY Location] get_location_attributes failed or returned empty: ' . $err_msg );
-        }
-        // Garantizar que al menos es array vacío para evitar notices en el código posterior
-        if ( ! isset( $data['attributes'] ) ) {
-            $data['attributes'] = array();
-        }
+// ✅ Cargar atributos desde el endpoint dedicado de Business Information API v1.
+// IMPORTANTE: Siempre se llama, independientemente de si $data['attributes'] ya tiene datos,
+// porque sync_location_data() NO incluye 'attributes' en su readMask. El endpoint
+// GET /v1/locations/{id}/attributes es la fuente oficial para: url_menu, url_whatsapp,
+// url_instagram, url_facebook, etc.
+// Ref: https://developers.google.com/my-business/content/attributes
+// Se usa use_cache=true para aprovechar el transient (15 min) generado por el AJAX previo.
+$attributes_result = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, true );
+if ( ! is_wp_error( $attributes_result ) && is_array( $attributes_result ) && ! empty( $attributes_result ) ) {
+    $data['attributes'] = $attributes_result;
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY Location] Attributes loaded via dedicated endpoint: ' . count( $attributes_result ) . ' attribute(s).' );
+    }
+} else {
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        $err_msg = is_wp_error( $attributes_result ) ? $attributes_result->get_error_message() : 'empty response';
+        error_log( '[OY Location] get_location_attributes failed or returned empty: ' . $err_msg );
+    }
+    if ( ! isset( $data['attributes'] ) ) {
+        $data['attributes'] = array();
     }
 }
 
@@ -4364,15 +4366,14 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                         break;
                     }
 
-                    if ( 'menu' === $category ) {
-                        // Menú sigue siendo campo simple — solo si está vacío
-                        $current_menu = (string) get_post_meta( $post_id, 'location_menu_url', true );
-                        if ( '' === $current_menu ) {
-                            update_post_meta( $post_id, 'location_menu_url', $uri );
-                            update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
-                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                                error_log( sprintf( '[OY Location] Fallback atributo %s → location_menu_url: %s', $gmb_id, $uri ) );
-                            }
+if ( 'menu' === $category ) {
+                        // Durante un import explícito desde GMB siempre se sobreescribe con el
+                        // valor más reciente del atributo url_menu. Esto es correcto porque el
+                        // usuario eligió importar desde GMB; los datos de Google tienen prioridad.
+                        update_post_meta( $post_id, 'location_menu_url', $uri );
+                        update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( sprintf( '[OY Location] ✅ url_menu (atributo GMB) → location_menu_url: %s', $uri ) );
                         } else {
                             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                                 error_log( '[OY Location] Fallback atributo ' . $gmb_id . ' ignorado: location_menu_url ya tiene valor.' );
@@ -5258,17 +5259,13 @@ public function ajax_get_gmb_location_details() {
     }
 
     // ✅ CORRECCIÓN: Forzar re-fetch si la caché NO tiene campos críticos para la UI.
-    // Se verifica 'profile', 'metadata' Y 'regularHours'. Sin regularHours, el JS no
-    // puede poblar el horario y deja los selects en el valor por defecto.
     if ( null !== $found ) {
         $missing_profile       = empty( $found['profile'] );
         $missing_metadata      = empty( $found['metadata'] );
-        // regularHours puede ser un array vacío [] si el negocio no tiene horarios,
-        // pero NO debe ser ausente (clave inexistente). Distinguimos ambos casos.
         $missing_regular_hours = ! array_key_exists( 'regularHours', (array) $found );
 
         if ( $missing_profile || $missing_metadata || $missing_regular_hours ) {
-            $found = null; // Forzar re-fetch desde API
+            $found = null;
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( sprintf(
                     '[OY Location] Cache miss — re-fetching from API. Missing: profile=%s, metadata=%s, regularHours=%s',
@@ -5314,11 +5311,8 @@ public function ajax_get_gmb_location_details() {
             }
         }
 
-        // Attach some compat fields to mimic cached structure
         $fresh['account_name'] = $account_name;
 
-        // ✅ Garantizar que regularHours siempre esté presente en la respuesta
-        // (puede ser array vacío si el negocio no tiene horarios publicados)
         if ( ! array_key_exists( 'regularHours', $fresh ) ) {
             $fresh['regularHours'] = array();
         }
@@ -5341,7 +5335,6 @@ public function ajax_get_gmb_location_details() {
                 error_log( '[OY Location] ajax_get_gmb_location_details — placeActionLinks incluidos: ' . count( $place_action_links_ajax ) . ' link(s).' );
             }
         } else {
-            // Si la API falla o no está habilitada, incluimos array vacío para que el JS no rompa
             $found['placeActionLinks'] = array();
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 $pa_err_msg = is_wp_error( $place_action_links_ajax ) ? $place_action_links_ajax->get_error_message() : 'empty response';
@@ -5350,6 +5343,63 @@ public function ajax_get_gmb_location_details() {
         }
     } else {
         $found['placeActionLinks'] = array();
+    }
+
+    // ✅ FALLBACK: Si Place Actions no devolvió un link MENU, intentar obtener url_menu
+    // desde los atributos de Business Information API v1.
+    // Según la documentación oficial de Google, "Vínculo del menú o los servicios"
+    // se almacena como attributes/url_menu, NO como un Place Action de tipo MENU.
+    // Ref: https://developers.google.com/my-business/content/attributes
+    $has_menu_in_place_actions = false;
+    if ( ! empty( $found['placeActionLinks'] ) && is_array( $found['placeActionLinks'] ) ) {
+        foreach ( $found['placeActionLinks'] as $_pal ) {
+            if ( isset( $_pal['placeActionType'] ) && 'MENU' === strtoupper( (string) $_pal['placeActionType'] ) ) {
+                $has_menu_in_place_actions = true;
+                break;
+            }
+        }
+    }
+
+    if ( ! $has_menu_in_place_actions && class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_attributes' ) ) {
+        $attrs_ajax = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, true ); // usa transient cache
+        if ( ! is_wp_error( $attrs_ajax ) && is_array( $attrs_ajax ) ) {
+            foreach ( $attrs_ajax as $_attr ) {
+                if ( ! is_array( $_attr ) ) {
+                    continue;
+                }
+                // Normalizar el ID del atributo desde 'locations/{id}/attributes/url_menu'
+                $_attr_id = '';
+                if ( ! empty( $_attr['name'] ) ) {
+                    $_parts    = explode( '/attributes/', (string) $_attr['name'], 2 );
+                    $_attr_id  = strtolower( trim( end( $_parts ), '/' ) );
+                } elseif ( ! empty( $_attr['attributeId'] ) ) {
+                    $_attr_id = strtolower( trim( (string) $_attr['attributeId'] ) );
+                }
+
+                if ( 'url_menu' !== $_attr_id ) {
+                    continue;
+                }
+
+                $_menu_uri = '';
+                if ( ! empty( $_attr['uriValues'] ) && is_array( $_attr['uriValues'] ) ) {
+                    $_menu_uri = (string) ( $_attr['uriValues'][0]['uri'] ?? '' );
+                }
+
+                if ( '' !== $_menu_uri ) {
+                    // Inyectar como entrada sintética de tipo MENU en placeActionLinks
+                    // para que el JS existente la procese sin cambios
+                    $found['placeActionLinks'][] = array(
+                        'uri'             => $_menu_uri,
+                        'placeActionType' => 'MENU',
+                        'providerType'    => 'MERCHANT',
+                    );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] ajax_get_gmb_location_details — url_menu desde atributos: ' . $_menu_uri );
+                    }
+                }
+                break;
+            }
+        }
     }
 
     wp_send_json_success( array(
