@@ -2097,18 +2097,36 @@ public static function get_location_attributes( $business_id, $location_name, $u
     }
 
     // Normalizar location_name al formato corto 'locations/{id}'
-    // Puede llegar como 'accounts/{acc}/locations/{id}' o 'locations/{id}'
     $normalized_location = $location_name;
     if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-        // Extraer solo 'locations/{id}' desde 'accounts/{acc}/locations/{id}'
         $parts = explode( '/locations/', $location_name, 2 );
         if ( ! empty( $parts[1] ) ) {
             $normalized_location = 'locations/' . $parts[1];
         }
     }
 
-    // El endpoint de atributos es: /locations/{id}/attributes
-    // Nota: no usamos readMask aquí — getAttributes devuelve todos los atributos configurados.
+    // ✅ WP Transient cache (15 min) — evita llamadas repetidas al API en el mismo
+    // flujo AJAX → save_post, previniendo bloqueos por rate limiting.
+    $transient_key = 'lealez_attrs_' . md5( (string) $business_id . '|' . rtrim( $normalized_location, '/' ) );
+
+    if ( $use_cache ) {
+        $cached = get_transient( $transient_key );
+        if ( is_array( $cached ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    'Location attributes served from WP transient cache (15 min).',
+                    array(
+                        'location'    => $normalized_location,
+                        'attr_count'  => count( $cached ),
+                    )
+                );
+            }
+            return $cached;
+        }
+    }
+
     $endpoint = '/' . rtrim( $normalized_location, '/' ) . '/attributes';
 
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -2117,9 +2135,10 @@ public static function get_location_attributes( $business_id, $location_name, $u
             'info',
             'Fetching location attributes via dedicated endpoint.',
             array(
-                'location'    => $location_name,
-                'endpoint'    => $endpoint,
-                'normalized'  => $normalized_location,
+                'location'   => $location_name,
+                'endpoint'   => $endpoint,
+                'normalized' => $normalized_location,
+                'use_cache'  => $use_cache ? 'yes (transient miss)' : 'no',
             )
         );
     }
@@ -2130,8 +2149,8 @@ public static function get_location_attributes( $business_id, $location_name, $u
         self::$business_api_base,
         'GET',
         array(),
-        $use_cache,
-        array() // getAttributes no requiere readMask
+        false, // El caché se maneja vía WP transient arriba
+        array()
     );
 
     if ( is_wp_error( $result ) ) {
@@ -2146,18 +2165,19 @@ public static function get_location_attributes( $business_id, $location_name, $u
         return $result;
     }
 
-    // La respuesta tiene el formato:
-    // { "name": "locations/{id}/attributes", "attributes": [ { "name": "locations/{id}/attributes/url_whatsapp", "uriValues": [...] }, ... ] }
     $attributes = array();
     if ( ! empty( $result['attributes'] ) && is_array( $result['attributes'] ) ) {
         $attributes = $result['attributes'];
     }
 
+    // ✅ Guardar en transient (15 min), incluyendo array vacío (respuesta válida)
+    set_transient( $transient_key, $attributes, 15 * MINUTE_IN_SECONDS );
+
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log(
             $business_id,
             'success',
-            sprintf( 'Location attributes fetched: %d attribute(s) found.', count( $attributes ) ),
+            sprintf( 'Location attributes fetched: %d attribute(s) found. Cached 15 min.', count( $attributes ) ),
             array( 'location' => $location_name )
         );
     }
@@ -2305,20 +2325,16 @@ public static function get_location_place_action_links( $business_id, $location_
 }
 
 
-    /**
+/**
  * Obtiene el menú estructurado de una ubicación desde Google My Business API v4 (foodMenus).
  *
  * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/foodMenus
  *
- * Este endpoint es parte de la API legacy v4 (no Business Information v1).
- * Devuelve el menú con secciones (categories), ítems, precios y restricciones dietéticas.
- * Solo disponible para negocios categorizados como restaurantes/food service en GMB.
- *
- * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
- * @param string $account_id    Account ID: numérico, "accounts/{id}", o resource name completo.
- * @param string $location_id   Location ID: numérico, "locations/{id}", o resource name completo.
- * @param bool   $force_refresh Si true, ignora caché del rate limiter y fuerza llamada directa al API.
- * @return array|WP_Error Array con los datos de foodMenus (puede estar vacío si no aplica), o WP_Error en fallo.
+ * @param int    $business_id   WP Post ID del oy_business.
+ * @param string $account_id    Account ID numérico, "accounts/{id}", o resource name completo.
+ * @param string $location_id   Location ID numérico, "locations/{id}", o resource name completo.
+ * @param bool   $force_refresh Si true, ignora caché del rate limiter.
+ * @return array|WP_Error
  */
 public static function get_location_food_menus( $business_id, $account_id, $location_id, $force_refresh = false ) {
     $business_id = absint( $business_id );
@@ -2330,7 +2346,6 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
     // Normalizar account_id a numérico
     $account_id_normalized = self::extract_account_id_from_name( (string) $account_id );
     if ( '' === $account_id_normalized ) {
-        // Fallback: usar directamente el valor si ya es numérico
         $account_id_normalized = trim( (string) $account_id, '/' );
     }
 
@@ -2345,10 +2360,10 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
             'missing_params',
             __( 'Missing/invalid accountId or locationId for food menus.', 'lealez' ),
             array(
-                'account_id_raw'         => $account_id,
-                'account_id_normalized'  => $account_id_normalized,
-                'location_id_raw'        => $location_id,
-                'location_id_normalized' => $location_id_normalized,
+                'account_id_raw'        => $account_id,
+                'account_id_normalized' => $account_id_normalized,
+                'location_id_raw'       => $location_id,
+                'location_id_normalized'=> $location_id_normalized,
             )
         );
     }
@@ -2363,10 +2378,10 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
             'info',
             'Fetching foodMenus (GMB API v4).',
             array(
-                'account_id'   => $account_id_normalized,
-                'location_id'  => $location_id_normalized,
-                'endpoint'     => self::$mybusiness_v4_base . $endpoint,
-                'force_refresh'=> $force_refresh ? 'yes' : 'no',
+                'account_id'    => $account_id_normalized,
+                'location_id'   => $location_id_normalized,
+                'endpoint'      => self::$mybusiness_v4_base . $endpoint,
+                'force_refresh' => $force_refresh ? 'yes' : 'no',
             )
         );
     }
@@ -2377,7 +2392,7 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
         self::$mybusiness_v4_base,
         'GET',
         array(),
-        ! $force_refresh, // use_cache: falso si force_refresh, verdadero si no
+        ! $force_refresh,
         array()
     );
 
@@ -2391,7 +2406,7 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
                     'account_id'  => $account_id_normalized,
                     'location_id' => $location_id_normalized,
                     'error_code'  => $result->get_error_code(),
-                    'hint'        => 'El endpoint /foodMenus requiere que el negocio esté categorizado como restaurante en GMB y que el token tenga scope https://www.googleapis.com/auth/business.manage. Si el negocio no tiene menú estructurado en GMB, este endpoint devuelve 404 o vacío.',
+                    'hint'        => 'El endpoint /foodMenus requiere que el negocio esté categorizado como restaurante en GMB y que el token tenga scope https://www.googleapis.com/auth/business.manage.',
                 )
             );
         }
