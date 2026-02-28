@@ -5334,8 +5334,8 @@ public function ajax_get_gmb_location_details() {
     // Se incluyen en la respuesta para que applyLocationToForm() los aplique visualmente al formulario.
     // El JS los procesará en loc.placeActionLinks → poblar #location_menu_url_gmb, booking_urls, order_urls.
     if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
-$place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, true ); // ✅ usa WP transient cache        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {
-            $found['placeActionLinks'] = $place_action_links_ajax;
+$place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, true ); // ✅ usa WP transient cache
+        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {            $found['placeActionLinks'] = $place_action_links_ajax;
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[OY Location] ajax_get_gmb_location_details — placeActionLinks incluidos: ' . count( $place_action_links_ajax ) . ' link(s).' );
             }
