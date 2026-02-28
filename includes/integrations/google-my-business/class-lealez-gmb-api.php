@@ -2306,6 +2306,116 @@ public static function get_location_place_action_links( $business_id, $location_
 
 
     /**
+ * Obtiene el menú estructurado de una ubicación desde Google My Business API v4 (foodMenus).
+ *
+ * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/foodMenus
+ *
+ * Este endpoint es parte de la API legacy v4 (no Business Information v1).
+ * Devuelve el menú con secciones (categories), ítems, precios y restricciones dietéticas.
+ * Solo disponible para negocios categorizados como restaurantes/food service en GMB.
+ *
+ * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
+ * @param string $account_id    Account ID: numérico, "accounts/{id}", o resource name completo.
+ * @param string $location_id   Location ID: numérico, "locations/{id}", o resource name completo.
+ * @param bool   $force_refresh Si true, ignora caché del rate limiter y fuerza llamada directa al API.
+ * @return array|WP_Error Array con los datos de foodMenus (puede estar vacío si no aplica), o WP_Error en fallo.
+ */
+public static function get_location_food_menus( $business_id, $account_id, $location_id, $force_refresh = false ) {
+    $business_id = absint( $business_id );
+
+    if ( ! $business_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id for food menus.', 'lealez' ) );
+    }
+
+    // Normalizar account_id a numérico
+    $account_id_normalized = self::extract_account_id_from_name( (string) $account_id );
+    if ( '' === $account_id_normalized ) {
+        // Fallback: usar directamente el valor si ya es numérico
+        $account_id_normalized = trim( (string) $account_id, '/' );
+    }
+
+    // Normalizar location_id a numérico
+    $location_id_normalized = self::extract_location_id_from_any( (string) $location_id );
+    if ( '' === $location_id_normalized ) {
+        $location_id_normalized = trim( (string) $location_id, '/' );
+    }
+
+    if ( '' === $account_id_normalized || '' === $location_id_normalized ) {
+        return new WP_Error(
+            'missing_params',
+            __( 'Missing/invalid accountId or locationId for food menus.', 'lealez' ),
+            array(
+                'account_id_raw'         => $account_id,
+                'account_id_normalized'  => $account_id_normalized,
+                'location_id_raw'        => $location_id,
+                'location_id_normalized' => $location_id_normalized,
+            )
+        );
+    }
+
+    $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
+                . '/locations/' . rawurlencode( $location_id_normalized )
+                . '/foodMenus';
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Fetching foodMenus (GMB API v4).',
+            array(
+                'account_id'   => $account_id_normalized,
+                'location_id'  => $location_id_normalized,
+                'endpoint'     => self::$mybusiness_v4_base . $endpoint,
+                'force_refresh'=> $force_refresh ? 'yes' : 'no',
+            )
+        );
+    }
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$mybusiness_v4_base,
+        'GET',
+        array(),
+        ! $force_refresh, // use_cache: falso si force_refresh, verdadero si no
+        array()
+    );
+
+    if ( is_wp_error( $result ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'error',
+                'get_location_food_menus failed: ' . $result->get_error_message(),
+                array(
+                    'account_id'  => $account_id_normalized,
+                    'location_id' => $location_id_normalized,
+                    'error_code'  => $result->get_error_code(),
+                    'hint'        => 'El endpoint /foodMenus requiere que el negocio esté categorizado como restaurante en GMB y que el token tenga scope https://www.googleapis.com/auth/business.manage. Si el negocio no tiene menú estructurado en GMB, este endpoint devuelve 404 o vacío.',
+                )
+            );
+        }
+        return $result;
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        $menus_count = ! empty( $result['menus'] ) && is_array( $result['menus'] ) ? count( $result['menus'] ) : 0;
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'foodMenus fetched: %d menu(s) found.', $menus_count ),
+            array(
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+            )
+        );
+    }
+
+    return is_array( $result ) ? $result : array();
+}
+
+
+    /**
      * Clear cache for a business
      *
      * @param int $business_id Business post ID
