@@ -3592,13 +3592,185 @@ private function humanize_attribute_id( $attr_id ) {
             return;
         }
 
-        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+if ( ! class_exists( 'Lealez_GMB_API' ) ) {
             return;
         }
+
+        // ✅ PLACE ACTIONS API — Se llama PRIMERO, antes de sync_location_data().
+        // Razón: sync_location_data() puede fallar por rate limit (Business Information API)
+        // y causar un return temprano que impediría que Place Actions API sea llamado nunca.
+        // Llamándolo primero garantizamos que location_menu_url se guarda aunque
+        // Business Information API esté temporalmente no disponible.
+        // ─────────────────────────────────────────────────────────────────────────────────────
+        // La My Business Place Actions API v1 es la fuente oficial de los "vínculos de acción":
+        //   • "Editar perfil → Reserva"           → placeActionType APPOINTMENT / ONLINE_APPOINTMENT / DINING_RESERVATION
+        //   • "Editar perfil → Menú"              → placeActionType MENU  ← location_menu_url
+        //   • "Editar perfil → Ordenar en línea"  → placeActionType FOOD_ORDERING / FOOD_DELIVERY / FOOD_TAKEOUT / SHOP_ONLINE / ORDER_AHEAD
+        // Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
+        // ─────────────────────────────────────────────────────────────────────────────────────
+        if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
+
+            // $use_cache = true: usa el WP transient (15 min) seteado previamente por el AJAX.
+            // Esto evita una segunda llamada al API si el Import Now ya obtuvo los datos.
+            $place_action_links = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, true );
+
+            if ( is_wp_error( $place_action_links ) ) {
+
+                // ── Error real de API (403, rate limit, red, etc.) ──────────────────────────────
+                $pa_error_msg  = $place_action_links->get_error_message();
+                $pa_error_code = $place_action_links->get_error_code();
+
+                $pa_error_data = array(
+                    'code'      => $pa_error_code,
+                    'message'   => $pa_error_msg,
+                    'timestamp' => current_time( 'mysql' ),
+                    'hint'      => 'Verifica que "My Business Place Actions API" esté habilitada en Google Cloud Console (console.cloud.google.com → APIs y servicios → Biblioteca). También confirma que el token OAuth tenga el scope https://www.googleapis.com/auth/business.manage',
+                );
+                update_post_meta( $post_id, 'gmb_place_actions_api_error', $pa_error_data );
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Place Actions API ERROR (' . $pa_error_code . '): ' . $pa_error_msg );
+                    error_log( '[OY Location] Place Actions API HINT: Habilita "My Business Place Actions API" en Google Cloud Console.' );
+                }
+
+            } elseif ( is_array( $place_action_links ) && ! empty( $place_action_links ) ) {
+
+                // ── Éxito: hay links configurados ────────────────────────────────────────────────
+                delete_post_meta( $post_id, 'gmb_place_actions_api_error' );
+                update_post_meta( $post_id, 'gmb_place_action_links_raw', $place_action_links );
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Place Actions API: ' . count( $place_action_links ) . ' link(s) encontrado(s).' );
+                }
+
+                $action_type_label_map = array(
+                    'APPOINTMENT'        => __( 'Reservas', 'lealez' ),
+                    'ONLINE_APPOINTMENT' => __( 'Cita online', 'lealez' ),
+                    'DINING_RESERVATION' => __( 'Reserva de mesa', 'lealez' ),
+                    'MENU'               => __( 'Menú', 'lealez' ),
+                    'FOOD_ORDERING'      => __( 'Ordenar en línea', 'lealez' ),
+                    'FOOD_DELIVERY'      => __( 'Domicilio', 'lealez' ),
+                    'FOOD_TAKEOUT'       => __( 'Para llevar', 'lealez' ),
+                    'SHOP_ONLINE'        => __( 'Tienda online', 'lealez' ),
+                    'ORDER_AHEAD'        => __( 'Ordenar anticipado', 'lealez' ),
+                    'ORDER_FOOD'         => __( 'Pedir comida', 'lealez' ),
+                );
+
+                $booking_types = array( 'APPOINTMENT', 'ONLINE_APPOINTMENT', 'DINING_RESERVATION' );
+                $order_types   = array( 'FOOD_ORDERING', 'FOOD_DELIVERY', 'FOOD_TAKEOUT', 'SHOP_ONLINE', 'ORDER_AHEAD', 'ORDER_FOOD' );
+
+                $gmb_booking_urls = array();
+                $gmb_order_urls   = array();
+                $gmb_menu_url     = '';
+
+                foreach ( $place_action_links as $link ) {
+                    if ( ! is_array( $link ) ) {
+                        continue;
+                    }
+
+                    $uri         = ! empty( $link['uri'] ) ? esc_url_raw( (string) $link['uri'] ) : '';
+                    $action_type = ! empty( $link['placeActionType'] ) ? strtoupper( trim( (string) $link['placeActionType'] ) ) : '';
+
+                    if ( ! $uri || ! $action_type ) {
+                        continue;
+                    }
+
+                    $label = isset( $action_type_label_map[ $action_type ] ) ? $action_type_label_map[ $action_type ] : $action_type;
+
+                    if ( in_array( $action_type, $booking_types, true ) ) {
+                        $already = array_filter( $gmb_booking_urls, fn( $e ) => $e['url'] === $uri );
+                        if ( empty( $already ) ) {
+                            $gmb_booking_urls[] = array(
+                                'url'      => $uri,
+                                'label'    => $label,
+                                'type'     => $action_type,
+                                'from_gmb' => 1,
+                            );
+                        }
+                    } elseif ( in_array( $action_type, $order_types, true ) ) {
+                        $already = array_filter( $gmb_order_urls, fn( $e ) => $e['url'] === $uri );
+                        if ( empty( $already ) ) {
+                            $gmb_order_urls[] = array(
+                                'url'      => $uri,
+                                'label'    => $label,
+                                'type'     => $action_type,
+                                'from_gmb' => 1,
+                            );
+                        }
+                    } elseif ( 'MENU' === $action_type ) {
+                        if ( ! $gmb_menu_url ) {
+                            $gmb_menu_url = $uri;
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( '[OY Location] Place Actions API — MENU link encontrado: ' . $uri );
+                            }
+                        }
+                    } else {
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[OY Location] Place Actions API — tipo no categorizado: ' . $action_type . ' (' . $uri . ')' );
+                        }
+                    }
+                }
+
+                // Guardar booking URLs
+                if ( ! empty( $gmb_booking_urls ) ) {
+                    $existing_booking = get_post_meta( $post_id, 'location_booking_urls', true );
+                    if ( ! is_array( $existing_booking ) ) {
+                        $existing_booking = array();
+                    }
+                    $manual_booking = array_values( array_filter( $existing_booking, fn( $e ) => empty( $e['from_gmb'] ) ) );
+                    $merged_booking = array_merge( $gmb_booking_urls, $manual_booking );
+                    update_post_meta( $post_id, 'location_booking_urls', $merged_booking );
+                    update_post_meta( $post_id, 'location_booking_url', $merged_booking[0]['url'] );
+                }
+
+                // Guardar order URLs
+                if ( ! empty( $gmb_order_urls ) ) {
+                    $existing_order = get_post_meta( $post_id, 'location_order_urls', true );
+                    if ( ! is_array( $existing_order ) ) {
+                        $existing_order = array();
+                    }
+                    $manual_order = array_values( array_filter( $existing_order, fn( $e ) => empty( $e['from_gmb'] ) ) );
+                    $merged_order = array_merge( $gmb_order_urls, $manual_order );
+                    update_post_meta( $post_id, 'location_order_urls', $merged_order );
+                    update_post_meta( $post_id, 'location_order_url', $merged_order[0]['url'] );
+                }
+
+                // ✅ Guardar menu URL — ESTE ES EL CAMPO CRÍTICO QUE FALLABA
+                if ( $gmb_menu_url ) {
+                    update_post_meta( $post_id, 'location_menu_url', $gmb_menu_url );
+                    update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] ✅ location_menu_url guardado desde Place Actions API: ' . $gmb_menu_url );
+                    }
+                }
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    if ( empty( $gmb_booking_urls ) && empty( $gmb_order_urls ) && ! $gmb_menu_url ) {
+                        error_log( '[OY Location] Place Actions API — links recibidos pero ninguno tiene tipo reconocido.' );
+                    }
+                }
+
+            } else {
+
+                // ── Respuesta vacía ────────────────────────────────────────────────────────────
+                delete_post_meta( $post_id, 'gmb_place_actions_api_error' );
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] Place Actions API — respuesta vacía. El negocio no tiene vínculos de acción configurados en Google Business Profile.' );
+                }
+            }
+
+        } else {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] AVISO: Lealez_GMB_API::get_location_place_action_links() no disponible. Actualiza class-lealez-gmb-api.php.' );
+            }
+        }
+        // ── Fin bloque Place Actions (ejecutado ANTES de sync_location_data) ──────────────
 
 $data = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
 if ( is_wp_error( $data ) || ! is_array( $data ) ) {
     // No rompemos el save: solo registramos last error
+    // NOTA: Place Actions (menu URL, booking URLs) ya fueron guardados arriba si el API respondió.
     update_post_meta( $post_id, 'gmb_last_import_error', is_wp_error( $data ) ? $data->get_error_message() : 'Unknown error' );
     return;
 }
@@ -3621,194 +3793,6 @@ if ( ! isset( $data['attributes'] ) || empty( $data['attributes'] ) ) {
         if ( ! isset( $data['attributes'] ) ) {
             $data['attributes'] = array();
         }
-    }
-}
-
-// ✅ PLACE ACTIONS API: Cargar URLs de Reservas, Menú y Pedidos Online
-// ─────────────────────────────────────────────────────────────────────────────────────
-// La My Business Place Actions API v1 es la fuente oficial de los "vínculos de acción"
-// que el negocio configura en su Perfil de Negocio de Google:
-//   • "Editar perfil → Reserva"           → placeActionType APPOINTMENT / ONLINE_APPOINTMENT / DINING_RESERVATION
-//   • "Editar perfil → Menú"              → placeActionType MENU
-//   • "Editar perfil → Ordenar en línea"  → placeActionType FOOD_ORDERING / FOOD_DELIVERY / FOOD_TAKEOUT / SHOP_ONLINE / ORDER_AHEAD
-//
-// Endpoint: GET https://mybusinessplaceactions.googleapis.com/v1/locations/{id}/placeActionLinks
-// Respuesta: { "placeActionLinks": [ { "uri": "...", "placeActionType": "FOOD_ORDERING", "providerType": "MERCHANT" } ] }
-//
-// IMPORTANTE: Estos links NO están en Business Information API v1 ni en el endpoint de atributos.
-// Deben obtenerse con get_location_place_action_links() que usa $place_actions_api_base.
-//
-// REQUISITO: La API "My Business Place Actions API" debe estar habilitada en Google Cloud Console.
-// Si no lo está, la llamada falla con 403 y el campo quedará vacío. En ese caso se guarda el error
-// en 'gmb_place_actions_api_error' para diagnóstico visible en el metabox.
-// ─────────────────────────────────────────────────────────────────────────────────────
-if ( method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
-
-    $place_action_links = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, false );
-
-    if ( is_wp_error( $place_action_links ) ) {
-
-        // ── Error real de API (403, rate limit, red, etc.) ──────────────────────────────
-        $pa_error_msg  = $place_action_links->get_error_message();
-        $pa_error_code = $place_action_links->get_error_code();
-
-        // Guardar el error en meta para mostrarlo en el metabox de administración
-        $pa_error_data = array(
-            'code'      => $pa_error_code,
-            'message'   => $pa_error_msg,
-            'timestamp' => current_time( 'mysql' ),
-            'hint'      => 'Verifica que "My Business Place Actions API" esté habilitada en Google Cloud Console (console.cloud.google.com → APIs y servicios → Biblioteca). También confirma que el token OAuth tenga el scope https://www.googleapis.com/auth/business.manage',
-        );
-        update_post_meta( $post_id, 'gmb_place_actions_api_error', $pa_error_data );
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY Location] Place Actions API ERROR (' . $pa_error_code . '): ' . $pa_error_msg );
-            error_log( '[OY Location] Place Actions API HINT: Habilita "My Business Place Actions API" en Google Cloud Console.' );
-        }
-
-    } elseif ( is_array( $place_action_links ) && ! empty( $place_action_links ) ) {
-
-        // ── Éxito: hay links configurados ────────────────────────────────────────────────
-        // Limpiar error previo si ahora funciona bien
-        delete_post_meta( $post_id, 'gmb_place_actions_api_error' );
-
-        // Guardar RAW de Place Action Links para debugging y auditoría
-        update_post_meta( $post_id, 'gmb_place_action_links_raw', $place_action_links );
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY Location] Place Actions API: ' . count( $place_action_links ) . ' link(s) encontrado(s).' );
-        }
-
-        // Etiquetas legibles por tipo (para guardar en el array junto con la URL)
-        $action_type_label_map = array(
-            'APPOINTMENT'        => __( 'Reservas', 'lealez' ),
-            'ONLINE_APPOINTMENT' => __( 'Cita online', 'lealez' ),
-            'DINING_RESERVATION' => __( 'Reserva de mesa', 'lealez' ),
-            'MENU'               => __( 'Menú', 'lealez' ),
-            'FOOD_ORDERING'      => __( 'Ordenar en línea', 'lealez' ),
-            'FOOD_DELIVERY'      => __( 'Domicilio', 'lealez' ),
-            'FOOD_TAKEOUT'       => __( 'Para llevar', 'lealez' ),
-            'SHOP_ONLINE'        => __( 'Tienda online', 'lealez' ),
-            'ORDER_AHEAD'        => __( 'Ordenar anticipado', 'lealez' ),
-            'ORDER_FOOD'         => __( 'Pedir comida', 'lealez' ),
-        );
-
-        // Categorías de placeActionType
-        $booking_types = array( 'APPOINTMENT', 'ONLINE_APPOINTMENT', 'DINING_RESERVATION' );
-        $order_types   = array( 'FOOD_ORDERING', 'FOOD_DELIVERY', 'FOOD_TAKEOUT', 'SHOP_ONLINE', 'ORDER_AHEAD', 'ORDER_FOOD' );
-
-        // Acumuladores — recolectamos TODOS los links de cada categoría
-        $gmb_booking_urls = array();
-        $gmb_order_urls   = array();
-        $gmb_menu_url     = '';
-
-        foreach ( $place_action_links as $link ) {
-            if ( ! is_array( $link ) ) {
-                continue;
-            }
-
-            $uri         = ! empty( $link['uri'] ) ? esc_url_raw( (string) $link['uri'] ) : '';
-            $action_type = ! empty( $link['placeActionType'] ) ? strtoupper( trim( (string) $link['placeActionType'] ) ) : '';
-
-            if ( ! $uri || ! $action_type ) {
-                continue;
-            }
-
-            $label = isset( $action_type_label_map[ $action_type ] ) ? $action_type_label_map[ $action_type ] : $action_type;
-
-            if ( in_array( $action_type, $booking_types, true ) ) {
-                // Evitar duplicados de URL dentro del mismo array
-                $already = array_filter( $gmb_booking_urls, fn( $e ) => $e['url'] === $uri );
-                if ( empty( $already ) ) {
-                    $gmb_booking_urls[] = array(
-                        'url'      => $uri,
-                        'label'    => $label,
-                        'type'     => $action_type,
-                        'from_gmb' => 1,
-                    );
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] Place Actions API — booking link: ' . $action_type . ' = ' . $uri );
-                    }
-                }
-            } elseif ( in_array( $action_type, $order_types, true ) ) {
-                $already = array_filter( $gmb_order_urls, fn( $e ) => $e['url'] === $uri );
-                if ( empty( $already ) ) {
-                    $gmb_order_urls[] = array(
-                        'url'      => $uri,
-                        'label'    => $label,
-                        'type'     => $action_type,
-                        'from_gmb' => 1,
-                    );
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] Place Actions API — order link: ' . $action_type . ' = ' . $uri );
-                    }
-                }
-            } elseif ( 'MENU' === $action_type ) {
-                if ( ! $gmb_menu_url ) {
-                    $gmb_menu_url = $uri;
-                }
-            } else {
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] Place Actions API — tipo no categorizado: ' . $action_type . ' (' . $uri . ')' );
-                }
-            }
-        }
-
-        // Guardar booking URLs: combinar los de GMB con los manuales existentes (que no son de GMB)
-        if ( ! empty( $gmb_booking_urls ) ) {
-            $existing_booking = get_post_meta( $post_id, 'location_booking_urls', true );
-            if ( ! is_array( $existing_booking ) ) {
-                $existing_booking = array();
-            }
-            // Mantener entradas manuales (from_gmb = 0) y reemplazar las de GMB
-            $manual_booking = array_values( array_filter( $existing_booking, fn( $e ) => empty( $e['from_gmb'] ) ) );
-            $merged_booking = array_merge( $gmb_booking_urls, $manual_booking );
-            update_post_meta( $post_id, 'location_booking_urls', $merged_booking );
-            // Backward compat
-            update_post_meta( $post_id, 'location_booking_url', $merged_booking[0]['url'] );
-        }
-
-        // Guardar order URLs: combinar los de GMB con los manuales existentes
-        if ( ! empty( $gmb_order_urls ) ) {
-            $existing_order = get_post_meta( $post_id, 'location_order_urls', true );
-            if ( ! is_array( $existing_order ) ) {
-                $existing_order = array();
-            }
-            $manual_order = array_values( array_filter( $existing_order, fn( $e ) => empty( $e['from_gmb'] ) ) );
-            $merged_order = array_merge( $gmb_order_urls, $manual_order );
-            update_post_meta( $post_id, 'location_order_urls', $merged_order );
-            // Backward compat
-            update_post_meta( $post_id, 'location_order_url', $merged_order[0]['url'] );
-        }
-
-        // Guardar menu URL (sigue siendo campo simple — GMB solo permite uno)
-        if ( $gmb_menu_url ) {
-            update_post_meta( $post_id, 'location_menu_url', $gmb_menu_url );
-            // Marcar como sincronizado desde GMB para que el campo editable del contact metabox
-            // muestre el badge 🔄 GMB junto al enlace
-            update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
-        }
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            if ( empty( $gmb_booking_urls ) && empty( $gmb_order_urls ) && ! $gmb_menu_url ) {
-                error_log( '[OY Location] Place Actions API — links recibidos pero ninguno tiene tipo reconocido.' );
-            }
-        }
-
-    } else {
-
-        // ── Respuesta vacía: el negocio no tiene URLs de acción configuradas en Google ──
-        // Limpiar error previo (la API sí respondió, simplemente no hay links)
-        delete_post_meta( $post_id, 'gmb_place_actions_api_error' );
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY Location] Place Actions API — respuesta vacía. El negocio no tiene vínculos de acción configurados (Reserva / Menú / Ordenar en línea) en Google Business Profile.' );
-        }
-    }
-
-} else {
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[OY Location] AVISO: Lealez_GMB_API::get_location_place_action_links() no disponible. Actualiza class-lealez-gmb-api.php.' );
     }
 }
 
@@ -5350,8 +5334,7 @@ public function ajax_get_gmb_location_details() {
     // Se incluyen en la respuesta para que applyLocationToForm() los aplique visualmente al formulario.
     // El JS los procesará en loc.placeActionLinks → poblar #location_menu_url_gmb, booking_urls, order_urls.
     if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_place_action_links' ) ) {
-        $place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, false );
-        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {
+$place_action_links_ajax = Lealez_GMB_API::get_location_place_action_links( $business_id, $location_name, true ); // ✅ usa WP transient cache        if ( ! is_wp_error( $place_action_links_ajax ) && is_array( $place_action_links_ajax ) ) {
             $found['placeActionLinks'] = $place_action_links_ajax;
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[OY Location] ajax_get_gmb_location_details — placeActionLinks incluidos: ' . count( $place_action_links_ajax ) . ' link(s).' );
