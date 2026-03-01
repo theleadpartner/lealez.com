@@ -4312,22 +4312,28 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 }
             }
 
-            // ✅ FALLBACK: Extraer URLs de acción desde atributos GMB (Business Information API v1)
+// ✅ Extraer URLs desde atributos GMB (Business Information API v1 — Attributes endpoint).
             // ─────────────────────────────────────────────────────────────────────────────────────────
-            // NOTA: La fuente PRINCIPAL de estas URLs es la Place Actions API (bloque ejecutado antes).
-            // Este bloque actúa como FALLBACK: solo guarda si los arrays aún están vacíos.
+            // FUENTES Y PRIORIDAD:
+            //   • url_menu        → FUENTE PRINCIPAL para location_menu_url (campo "Vínculo del menú
+            //                       o los servicios" en la sección Contacto de GBP — igual que redes
+            //                       sociales). Siempre sobreescribe lo que Place Actions haya guardado.
+            //   • url_appointment → FALLBACK para booking si Place Actions no devolvió ninguno.
+            //   • url_order_ahead → FALLBACK para order si Place Actions no devolvió ninguno.
+            //
+            // MATCHING: Para url_menu se usa strpos('menu') en lugar de igualdad exacta, cubriendo
+            // variantes del atributo: url_menu, url_food_menu, menu_url, etc.
             // ─────────────────────────────────────────────────────────────────────────────────────────
-
-            // Mapa: attribute_id => categoría interna
-            $url_attr_map = array(
-                'url_appointment' => 'booking',
-                'url_menu'        => 'menu',
-                'url_order_ahead' => 'order',
-            );
 
             $attr_fallback_labels = array(
                 'url_appointment' => __( 'Reservas', 'lealez' ),
                 'url_order_ahead' => __( 'Ordenar en línea', 'lealez' ),
+            );
+
+            // Mapa EXACTO para booking y order (no cambian de nombre)
+            $url_attr_exact_map = array(
+                'url_appointment' => 'booking',
+                'url_order_ahead' => 'order',
             );
 
             foreach ( $data['attributes'] as $attr ) {
@@ -4335,28 +4341,55 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                     continue;
                 }
 
-                // Normalizar el ID del atributo
-                $attr_id_raw = '';
+                // Normalizar el ID / nombre del atributo
+                $attr_id_raw  = '';
+                $attr_name_full = '';
                 if ( ! empty( $attr['attributeId'] ) ) {
-                    $attr_id_raw = (string) $attr['attributeId'];
+                    $attr_id_raw    = (string) $attr['attributeId'];
+                    $attr_name_full = $attr_id_raw;
                 } elseif ( ! empty( $attr['name'] ) ) {
-                    $name_str    = (string) $attr['name'];
-                    $parts       = explode( '/attributes/', $name_str );
-                    $attr_id_raw = trim( end( $parts ), '/' );
+                    $attr_name_full = (string) $attr['name'];
+                    $parts          = explode( '/attributes/', $attr_name_full );
+                    $attr_id_raw    = trim( end( $parts ), '/' );
                 }
 
                 if ( '' === $attr_id_raw ) {
                     continue;
                 }
 
-                $attr_id_lower = strtolower( $attr_id_raw );
+                $attr_id_lower    = strtolower( $attr_id_raw );
+                $attr_name_lower  = strtolower( $attr_name_full );
 
-                foreach ( $url_attr_map as $gmb_id => $category ) {
+                // ── CASO ESPECIAL: url_menu → fuente principal del campo "Vínculo del menú" ──────
+                // Se usa strpos para capturar variantes: url_menu, url_food_menu, menu_url, etc.
+                // Solo se procesa si tiene uriValues (es un atributo de tipo URL).
+                if ( false !== strpos( $attr_name_lower, 'menu' ) || false !== strpos( $attr_id_lower, 'menu' ) ) {
+                    $menu_uri = '';
+                    if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                        $menu_uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+                    }
+                    if ( $menu_uri ) {
+                        // FUENTE PRINCIPAL: siempre sobreescribe, incluso si Place Actions ya guardó algo.
+                        // "Vínculo del menú o los servicios" en GBP Contacto = este atributo.
+                        update_post_meta( $post_id, 'location_menu_url', $menu_uri );
+                        update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( sprintf(
+                                '[OY Location] ✅ Atributo "%s" (menú) → location_menu_url: %s',
+                                $attr_id_raw,
+                                $menu_uri
+                            ) );
+                        }
+                    }
+                    continue; // Atributo de menú procesado, pasar al siguiente atributo
+                }
+
+                // ── FALLBACK para booking y order: solo si Place Actions no los aportó ────────────
+                foreach ( $url_attr_exact_map as $gmb_id => $category ) {
                     if ( $attr_id_lower !== $gmb_id ) {
                         continue;
                     }
 
-                    // Extraer el URI desde uriValues
                     $uri = '';
                     if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
                         $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
@@ -4366,21 +4399,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                         break;
                     }
 
-if ( 'menu' === $category ) {
-                        // Durante un import explícito desde GMB siempre se sobreescribe con el
-                        // valor más reciente del atributo url_menu. Esto es correcto porque el
-                        // usuario eligió importar desde GMB; los datos de Google tienen prioridad.
-                        update_post_meta( $post_id, 'location_menu_url', $uri );
-                        update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
-                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                            error_log( sprintf( '[OY Location] ✅ url_menu (atributo GMB) → location_menu_url: %s', $uri ) );
-                        } else {
-                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                                error_log( '[OY Location] Fallback atributo ' . $gmb_id . ' ignorado: location_menu_url ya tiene valor.' );
-                            }
-                        }
-                    } elseif ( 'booking' === $category ) {
-                        // Booking: fallback solo si el array está vacío
+                    if ( 'booking' === $category ) {
                         $existing = get_post_meta( $post_id, 'location_booking_urls', true );
                         if ( empty( $existing ) || ! is_array( $existing ) ) {
                             $fallback_entry = array(
@@ -4400,7 +4419,6 @@ if ( 'menu' === $category ) {
                             }
                         }
                     } elseif ( 'order' === $category ) {
-                        // Order: fallback solo si el array está vacío
                         $existing = get_post_meta( $post_id, 'location_order_urls', true );
                         if ( empty( $existing ) || ! is_array( $existing ) ) {
                             $fallback_entry = array(
@@ -4421,7 +4439,7 @@ if ( 'menu' === $category ) {
                         }
                     }
 
-                    break; // Atributo encontrado, siguiente iteración del foreach externo
+                    break;
                 }
             }
 
@@ -5345,60 +5363,79 @@ public function ajax_get_gmb_location_details() {
         $found['placeActionLinks'] = array();
     }
 
-    // ✅ FALLBACK: Si Place Actions no devolvió un link MENU, intentar obtener url_menu
-    // desde los atributos de Business Information API v1.
-    // Según la documentación oficial de Google, "Vínculo del menú o los servicios"
-    // se almacena como attributes/url_menu, NO como un Place Action de tipo MENU.
-    // Ref: https://developers.google.com/my-business/content/attributes
-    $has_menu_in_place_actions = false;
-    if ( ! empty( $found['placeActionLinks'] ) && is_array( $found['placeActionLinks'] ) ) {
-        foreach ( $found['placeActionLinks'] as $_pal ) {
-            if ( isset( $_pal['placeActionType'] ) && 'MENU' === strtoupper( (string) $_pal['placeActionType'] ) ) {
-                $has_menu_in_place_actions = true;
-                break;
-            }
-        }
-    }
-
-    if ( ! $has_menu_in_place_actions && class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_attributes' ) ) {
-        $attrs_ajax = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, true ); // usa transient cache
+// ✅ FUENTE AUTORITATIVA para "Vínculo del menú o los servicios":
+    // Business Information API v1 — Attributes endpoint (url_menu / url_food_menu / variantes).
+    //
+    // CAMBIO vs. versión anterior: ya NO es un fallback condicional. Siempre se consultan
+    // los atributos y el url_menu encontrado SIEMPRE reemplaza cualquier MENU de Place Actions.
+    // Razón: "Vínculo del menú o los servicios" está en la sección Contacto de GBP (igual que
+    // las redes sociales), no en la sección Acciones. Por tanto proviene de Attributes API,
+    // no de Place Actions API. El matching usa strpos('menu') para cubrir variantes de nombre.
+    if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'get_location_attributes' ) ) {
+        $attrs_ajax = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, false ); // force fresh — evita cache vacío
         if ( ! is_wp_error( $attrs_ajax ) && is_array( $attrs_ajax ) ) {
+            $_menu_uri_from_attrs = '';
             foreach ( $attrs_ajax as $_attr ) {
                 if ( ! is_array( $_attr ) ) {
                     continue;
                 }
-                // Normalizar el ID del atributo desde 'locations/{id}/attributes/url_menu'
-                $_attr_id = '';
+
+                // Normalizar ID del atributo desde 'locations/{id}/attributes/url_menu'
+                $_attr_id_raw  = '';
+                $_attr_name_full = '';
                 if ( ! empty( $_attr['name'] ) ) {
-                    $_parts    = explode( '/attributes/', (string) $_attr['name'], 2 );
-                    $_attr_id  = strtolower( trim( end( $_parts ), '/' ) );
+                    $_attr_name_full = strtolower( (string) $_attr['name'] );
+                    $_parts          = explode( '/attributes/', (string) $_attr['name'], 2 );
+                    $_attr_id_raw    = strtolower( trim( end( $_parts ), '/' ) );
                 } elseif ( ! empty( $_attr['attributeId'] ) ) {
-                    $_attr_id = strtolower( trim( (string) $_attr['attributeId'] ) );
+                    $_attr_id_raw    = strtolower( trim( (string) $_attr['attributeId'] ) );
+                    $_attr_name_full = $_attr_id_raw;
                 }
 
-                if ( 'url_menu' !== $_attr_id ) {
-                    continue;
-                }
-
-                $_menu_uri = '';
-                if ( ! empty( $_attr['uriValues'] ) && is_array( $_attr['uriValues'] ) ) {
-                    $_menu_uri = (string) ( $_attr['uriValues'][0]['uri'] ?? '' );
-                }
-
-                if ( '' !== $_menu_uri ) {
-                    // Inyectar como entrada sintética de tipo MENU en placeActionLinks
-                    // para que el JS existente la procese sin cambios
-                    $found['placeActionLinks'][] = array(
-                        'uri'             => $_menu_uri,
-                        'placeActionType' => 'MENU',
-                        'providerType'    => 'MERCHANT',
-                    );
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] ajax_get_gmb_location_details — url_menu desde atributos: ' . $_menu_uri );
+                // Matching flexible: busca cualquier atributo con 'menu' en el nombre
+                // y que tenga uriValues (es de tipo URL, no booleano como has_menu).
+                if (
+                    ( false !== strpos( $_attr_name_full, 'menu' ) || false !== strpos( $_attr_id_raw, 'menu' ) )
+                    && ! empty( $_attr['uriValues'] )
+                    && is_array( $_attr['uriValues'] )
+                ) {
+                    $_candidate = (string) ( $_attr['uriValues'][0]['uri'] ?? '' );
+                    if ( '' !== $_candidate ) {
+                        $_menu_uri_from_attrs = esc_url_raw( $_candidate );
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( sprintf(
+                                '[OY Location] ajax — url_menu desde Attributes API (atributo: %s): %s',
+                                $_attr_id_raw,
+                                $_menu_uri_from_attrs
+                            ) );
+                        }
+                        break;
                     }
                 }
-                break;
             }
+
+            if ( '' !== $_menu_uri_from_attrs ) {
+                // Eliminar cualquier entrada MENU previa de Place Actions para evitar duplicados
+                if ( ! empty( $found['placeActionLinks'] ) && is_array( $found['placeActionLinks'] ) ) {
+                    $found['placeActionLinks'] = array_values( array_filter(
+                        $found['placeActionLinks'],
+                        function( $_e ) {
+                            return strtoupper( (string) ( $_e['placeActionType'] ?? '' ) ) !== 'MENU';
+                        }
+                    ) );
+                }
+                // Inyectar url_menu como entrada MENU autoritativa para que el JS la aplique
+                $found['placeActionLinks'][] = array(
+                    'uri'             => $_menu_uri_from_attrs,
+                    'placeActionType' => 'MENU',
+                    'providerType'    => 'MERCHANT',
+                );
+            } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax — No se encontró atributo de menú con uriValues en Attributes API.' );
+            }
+        } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $_attrs_err = is_wp_error( $attrs_ajax ) ? $attrs_ajax->get_error_message() : 'empty/null';
+            error_log( '[OY Location] ajax — get_location_attributes falló o vacío: ' . $_attrs_err );
         }
     }
 
@@ -5407,7 +5444,6 @@ public function ajax_get_gmb_location_details() {
         'location_id' => $location_id,
         'account_id'  => $account_id,
     ) );
-}
 
 
     /**
