@@ -480,17 +480,41 @@ public function render_address_meta_box( $post ) {
     $address_hidden     = $is_service_area && ! $is_show_address;
     $show_address_row   = $is_service_area;
 
-    // Build initial map embed URL (iframe embed — no API key required)
-    $has_coords     = ( $latitude && $longitude );
-    $embed_url      = '';
-    $map_link_url   = $map_url;
+// Build initial map embed URL (iframe embed — no API key required)
+    // ✅ Preferencia de embed URL (de más confiable a menos):
+    //   1. CID de location_map_url  → maps.google.com/maps?cid=XXX&output=embed  (más estable)
+    //   2. Coordenadas GPS          → maps.google.com/maps?q=LAT,LNG&output=embed
+    $has_coords   = ( $latitude && $longitude );
+    $embed_url    = '';
+    $map_link_url = $map_url;
 
-    if ( $has_coords ) {
-        $embed_url    = 'https://maps.google.com/maps?q=' . esc_attr( $latitude ) . ',' . esc_attr( $longitude ) . '&z=17&output=embed';
-        if ( empty( $map_link_url ) ) {
-            $map_link_url = 'https://maps.google.com/maps?q=' . esc_attr( $latitude ) . ',' . esc_attr( $longitude );
+    // Opción 1: extraer CID de la URL guardada de GMB (metadata.mapsUri → ?cid=XXXXXX)
+    $has_embed = false;
+    if ( $map_url && strpos( $map_url, 'cid=' ) !== false ) {
+        $parsed_cid = '';
+        parse_str( wp_parse_url( $map_url, PHP_URL_QUERY ), $qs );
+        if ( ! empty( $qs['cid'] ) ) {
+            $parsed_cid = $qs['cid'];
+        }
+        if ( $parsed_cid ) {
+            $embed_url = 'https://maps.google.com/maps?cid=' . rawurlencode( $parsed_cid ) . '&output=embed';
+            $has_embed = true;
         }
     }
+
+    // Opción 2: fallback a coordenadas GPS si no hay CID
+    if ( ! $has_embed && $has_coords ) {
+        $embed_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude ) . '&z=17&output=embed';
+        $has_embed = true;
+    }
+
+    // map_link_url para botón "Ajustar" — siempre construir si no viene de DB
+    if ( empty( $map_link_url ) && $has_coords ) {
+        $map_link_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude );
+    }
+
+    // $has_coords se usa para saber si mostrar iframe o placeholder en PHP
+    $has_coords = $has_embed;
     ?>
 
     <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
@@ -822,13 +846,38 @@ public function render_address_meta_box( $post ) {
      * Actualiza el mapa embebido cuando cambian las coordenadas GPS.
      * También actualiza el botón "Ajustar" y el enlace "Ver en Maps".
      */
-    window.oy_update_map_preview = function() {
+window.oy_update_map_preview = function() {
         var $ = jQuery;
-        var lat = $.trim( $('#location_latitude').val() );
-        var lng = $.trim( $('#location_longitude').val() );
+        var lat        = $.trim( $('#location_latitude').val() );
+        var lng        = $.trim( $('#location_longitude').val() );
+        var savedMapUrl = $.trim( $('#location_map_url').val() );
 
-        if ( ! lat || ! lng || isNaN( parseFloat(lat) ) || isNaN( parseFloat(lng) ) ) {
-            // Sin coordenadas válidas: mostrar placeholder, ocultar iframe y botones
+        var hasCoords  = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
+
+        // ✅ Preferencia de embed URL (igual que en PHP):
+        //   1. CID de location_map_url  → más estable en Google Maps
+        //   2. Coordenadas GPS          → fallback
+        var embedUrl = '';
+        var mapsUrl  = savedMapUrl || '';
+
+        if ( savedMapUrl && savedMapUrl.indexOf('cid=') !== -1 ) {
+            // Extraer CID de la URL guardada de GMB (metadata.mapsUri → ?cid=XXXXXX)
+            var cidMatch = savedMapUrl.match(/[?&]cid=([^&]+)/);
+            if ( cidMatch && cidMatch[1] ) {
+                embedUrl = 'https://maps.google.com/maps?cid=' + encodeURIComponent(cidMatch[1]) + '&output=embed';
+            }
+        }
+
+        if ( ! embedUrl && hasCoords ) {
+            embedUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng) + '&z=17&output=embed';
+        }
+
+        if ( ! mapsUrl && hasCoords ) {
+            mapsUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng);
+        }
+
+        if ( ! embedUrl ) {
+            // Sin URL de embed válida: mostrar placeholder
             $('#oy-map-iframe').hide().attr('src', '');
             $('#oy-map-placeholder').show();
             $('#oy-map-preview-wrap').css({ 'display': 'flex' });
@@ -837,23 +886,16 @@ public function render_address_meta_box( $post ) {
             return;
         }
 
-        var embedUrl   = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng) + '&z=17&output=embed';
-        var mapsUrl    = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
-
         // Actualizar iframe
         $('#oy-map-placeholder').hide();
         $('#oy-map-iframe').attr('src', embedUrl).css('display', 'block');
         $('#oy-map-preview-wrap').css({ 'display': 'block' });
 
         // Actualizar botón Ajustar
-        var $adjustBtn = $('#oy-map-adjust-btn');
-        // Preferir la URL de Maps ya guardada si existe, sino usar coords
-        var savedMapUrl = $.trim( $('#location_map_url').val() );
-        $adjustBtn.attr('href', savedMapUrl || mapsUrl).show();
-
-        // Actualizar enlace "Ver en Maps"
-        var $openLink = $('#oy-maps-open-link');
-        $openLink.attr('href', savedMapUrl || mapsUrl).show();
+        if ( mapsUrl ) {
+            $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
+            $('#oy-maps-open-link').attr('href', mapsUrl).show();
+        }
     };
 
     jQuery(document).ready(function($){
@@ -5487,20 +5529,29 @@ public function ajax_get_gmb_location_details() {
         }
     }
 
-    // ✅ CORRECCIÓN: Forzar re-fetch si la caché NO tiene campos críticos para la UI.
+// ✅ CORRECCIÓN: Forzar re-fetch si la caché NO tiene campos críticos para la UI.
     if ( null !== $found ) {
         $missing_profile       = empty( $found['profile'] );
         $missing_metadata      = empty( $found['metadata'] );
         $missing_regular_hours = ! array_key_exists( 'regularHours', (array) $found );
 
-        if ( $missing_profile || $missing_metadata || $missing_regular_hours ) {
+        // ✅ NUEVO: forzar re-fetch si latlng está ausente o incompleto en caché.
+        // Ocurre cuando el fetch inicial cayó en readMask 5+ (que no incluye latlng).
+        // Referencia API: Business Information API v1 → Location.latlng (LatLng object)
+        // https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations
+        $missing_latlng = empty( $found['latlng'] )
+            || ! isset( $found['latlng']['latitude'] )
+            || ! isset( $found['latlng']['longitude'] );
+
+        if ( $missing_profile || $missing_metadata || $missing_regular_hours || $missing_latlng ) {
             $found = null;
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( sprintf(
-                    '[OY Location] Cache miss — re-fetching from API. Missing: profile=%s, metadata=%s, regularHours=%s',
-                    $missing_profile      ? 'YES' : 'no',
-                    $missing_metadata     ? 'YES' : 'no',
-                    $missing_regular_hours ? 'YES' : 'no'
+                    '[OY Location] Cache miss — re-fetching from API. Missing: profile=%s, metadata=%s, regularHours=%s, latlng=%s',
+                    $missing_profile       ? 'YES' : 'no',
+                    $missing_metadata      ? 'YES' : 'no',
+                    $missing_regular_hours ? 'YES' : 'no',
+                    $missing_latlng        ? 'YES' : 'no'
                 ) );
             }
         }
