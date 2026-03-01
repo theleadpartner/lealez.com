@@ -2014,7 +2014,7 @@ public static function sync_location_data( $business_id, $location_name ) {
                 );
             }
 
-            // ✅ Si la mask exitosa no incluyó profile (o Google no lo retornó),
+// ✅ Si la mask exitosa no incluyó profile (o Google no lo retornó),
             // hacemos una llamada dedicada ultraliviana solo para profile.description.
             if ( empty( $result['profile'] ) ) {
                 $profile_query = array( 'readMask' => 'name,profile' );
@@ -2036,6 +2036,50 @@ public static function sync_location_data( $business_id, $location_name ) {
                             'Profile fetched via dedicated call (readMask=name,profile).',
                             array( 'location' => $location_name )
                         );
+                    }
+                }
+            }
+
+            // ✅ Si la mask exitosa no incluyó latlng (mask 5+), hacer llamada dedicada
+            // para recuperar coordenadas GPS. El campo latlng es parte del recurso Location
+            // en Business Information API v1 (latlng.latitude / latlng.longitude).
+            // Referencia: https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations
+            $latlng_missing = empty( $result['latlng'] )
+                || ! isset( $result['latlng']['latitude'] )
+                || ! isset( $result['latlng']['longitude'] );
+
+            if ( $latlng_missing ) {
+                $latlng_query = array( 'readMask' => 'name,latlng' );
+                $latlng_result = self::make_request(
+                    $business_id,
+                    $endpoint,
+                    self::$business_api_base,
+                    'GET',
+                    array(),
+                    false, // no cache: necesitamos dato fresco
+                    $latlng_query
+                );
+                if ( ! is_wp_error( $latlng_result )
+                    && isset( $latlng_result['latlng'] )
+                    && is_array( $latlng_result['latlng'] )
+                    && isset( $latlng_result['latlng']['latitude'] )
+                    && isset( $latlng_result['latlng']['longitude'] )
+                ) {
+                    $result['latlng'] = $latlng_result['latlng'];
+                    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                        Lealez_GMB_Logger::log(
+                            $business_id,
+                            'info',
+                            'LatLng fetched via dedicated call (readMask=name,latlng).',
+                            array(
+                                'location' => $location_name,
+                                'latlng'   => $latlng_result['latlng'],
+                            )
+                        );
+                    }
+                } else {
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] sync_location_data — latlng dedicated call failed or returned no coords for: ' . $location_name );
                     }
                 }
             }
