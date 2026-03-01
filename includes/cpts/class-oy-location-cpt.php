@@ -879,17 +879,33 @@ public function render_address_meta_box( $post ) {
             }
         });
 
-        // Ejecutar al cargar la página
+// Ejecutar al cargar la página
         window.oy_toggle_address_fields();
-        // El mapa ya viene renderizado desde PHP si hay coords; solo sincronizar botones
+
+        // Inicializar el mapa al cargar: si hay coordenadas ya guardadas, renderizar iframe.
+        // Se llama a oy_update_map_preview() para unificar la lógica de iframe, botones y enlaces.
+        // Esto también cubre el caso en que el iframe ya venía de PHP pero los botones necesitan
+        // sincronizar sus href con la URL de Maps guardada.
         (function() {
             var lat = $.trim( $('#location_latitude').val() );
             var lng = $.trim( $('#location_longitude').val() );
-            if ( lat && lng ) {
+            if ( lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng)) ) {
+                // Si el iframe ya tiene src (renderizado por PHP), solo sincronizar botones/links.
+                var iframeSrc = $('#oy-map-iframe').attr('src');
                 var savedMapUrl = $.trim( $('#location_map_url').val() );
-                var mapsUrl     = savedMapUrl || 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
-                $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
-                $('#oy-maps-open-link').attr('href', mapsUrl).show();
+                var mapsUrl = savedMapUrl || 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
+
+                if ( iframeSrc && iframeSrc.length > 5 ) {
+                    // iframe ya renderizado por PHP, solo sincronizar botones
+                    $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
+                    $('#oy-maps-open-link').attr('href', mapsUrl).show();
+                    $('#oy-map-placeholder').hide();
+                    $('#oy-map-iframe').css('display', 'block');
+                    $('#oy-map-preview-wrap').css('display', 'block');
+                } else {
+                    // Sin iframe de PHP (coords no disponibles al cargar en PHP), generar ahora.
+                    window.oy_update_map_preview();
+                }
             }
         })();
     });
@@ -2116,15 +2132,25 @@ function applyLocationToForm(loc){
         }
         // ── Fin bloque dirección ─────────────────────────────────────────────────
 
-        // LatLng
-        if(loc.latlng){
-            if(typeof loc.latlng.latitude !== 'undefined'){
-                $('#location_latitude').val(loc.latlng.latitude);
-            }
-            if(typeof loc.latlng.longitude !== 'undefined'){
-                $('#location_longitude').val(loc.latlng.longitude);
-            }
-        }
+// LatLng
+if(loc.latlng){
+    var latSet = false;
+    var lngSet = false;
+    if(typeof loc.latlng.latitude !== 'undefined'){
+        $('#location_latitude').val(loc.latlng.latitude);
+        latSet = true;
+    }
+    if(typeof loc.latlng.longitude !== 'undefined'){
+        $('#location_longitude').val(loc.latlng.longitude);
+        lngSet = true;
+    }
+    // ✅ Disparar actualización del mapa embebido una vez que ambas coords se han asignado.
+    // jQuery .val() NO dispara eventos change/input automáticamente, por eso se llama
+    // explícitamente a oy_update_map_preview después de setear lat y lng.
+    if((latSet || lngSet) && typeof window.oy_update_map_preview === 'function'){
+        window.oy_update_map_preview();
+    }
+}
 
         // Category
         if(loc.categories && loc.categories.primaryCategory){
