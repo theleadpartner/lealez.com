@@ -458,8 +458,28 @@ public function render_address_meta_box( $post ) {
     $state                = get_post_meta( $post->ID, 'location_state', true );
     $country              = get_post_meta( $post->ID, 'location_country', true );
     $postal_code          = get_post_meta( $post->ID, 'location_postal_code', true );
-    $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
+$latitude             = get_post_meta( $post->ID, 'location_latitude', true );
     $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
+
+    // ✅ Fallback: si location_latitude/longitude están vacíos, intenta recuperarlos de
+    // gmb_latlng_raw (guardado por import_location_from_gmb_and_map_fields cuando latlng
+    // viene en el API response). Esto sincroniza ambos meta keys y asegura que los campos
+    // del formulario muestren las coordenadas aunque el save haya ocurrido en una versión
+    // anterior que no guardaba por separado.
+    if ( ( $latitude === '' || $latitude === false ) || ( $longitude === '' || $longitude === false ) ) {
+        $latlng_raw = get_post_meta( $post->ID, 'gmb_latlng_raw', true );
+        if ( is_array( $latlng_raw ) ) {
+            if ( ( $latitude === '' || $latitude === false ) && ! empty( $latlng_raw['latitude'] ) ) {
+                $latitude = (string) $latlng_raw['latitude'];
+                // Re-sync al meta principal para que el siguiente save lo tenga disponible
+                update_post_meta( $post->ID, 'location_latitude', sanitize_text_field( $latitude ) );
+            }
+            if ( ( $longitude === '' || $longitude === false ) && ! empty( $latlng_raw['longitude'] ) ) {
+                $longitude = (string) $latlng_raw['longitude'];
+                update_post_meta( $post->ID, 'location_longitude', sanitize_text_field( $longitude ) );
+            }
+        }
+    }
     $formatted_address    = get_post_meta( $post->ID, 'location_formatted_address', true );
     $map_url              = get_post_meta( $post->ID, 'location_map_url', true );
     $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
@@ -3595,11 +3615,23 @@ private function humanize_attribute_id( $attr_id ) {
                 $value = call_user_func( $sanitize_callback, wp_unslash( $_POST[ $field_name ] ) );
                 update_post_meta( $post_id, $field_name, $value );
             } else {
-                // ✅ Campos readonly que NO deben borrarse si no vienen en POST
+// ✅ Campos readonly que NO deben borrarse si no vienen en POST
                 $readonly_fields = array( 'gmb_location_id', 'gmb_account_id' );
                 if ( in_array( $field_name, $readonly_fields, true ) ) {
                     // No hacer nada, mantener el valor existente
                     continue;
+                }
+
+                // ✅ Proteger location_latitude y location_longitude de ser borrados
+                // cuando el campo llega vacío en POST (ej: carga de página sin import activo).
+                // Solo se borran si el usuario explícitamente escribió un valor y lo borra.
+                // Esto evita que un save sin import limpie coordenadas guardadas por la API.
+                if ( in_array( $field_name, array( 'location_latitude', 'location_longitude' ), true ) ) {
+                    $existing_val = get_post_meta( $post_id, $field_name, true );
+                    if ( '' !== $existing_val && false !== $existing_val ) {
+                        // Mantener valor existente si el POST viene vacío
+                        continue;
+                    }
                 }
                 
                 // ✅ ojo: checkboxes no vienen si están off
