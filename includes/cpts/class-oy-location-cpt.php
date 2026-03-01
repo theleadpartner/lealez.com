@@ -479,6 +479,18 @@ public function render_address_meta_box( $post ) {
     $is_show_address    = ( '1' === (string) $show_address );
     $address_hidden     = $is_service_area && ! $is_show_address;
     $show_address_row   = $is_service_area;
+
+    // Build initial map embed URL (iframe embed — no API key required)
+    $has_coords     = ( $latitude && $longitude );
+    $embed_url      = '';
+    $map_link_url   = $map_url;
+
+    if ( $has_coords ) {
+        $embed_url    = 'https://maps.google.com/maps?q=' . esc_attr( $latitude ) . ',' . esc_attr( $longitude ) . '&z=17&output=embed';
+        if ( empty( $map_link_url ) ) {
+            $map_link_url = 'https://maps.google.com/maps?q=' . esc_attr( $latitude ) . ',' . esc_attr( $longitude );
+        }
+    }
     ?>
 
     <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
@@ -512,166 +524,270 @@ public function render_address_meta_box( $post ) {
         </div>
     </div>
 
-    <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
-    <table class="form-table">
-        <tr>
-            <th scope="row">
-                <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_address_line1"
-                       id="location_address_line1"
-                       value="<?php echo esc_attr( $address_line1 ); ?>"
-                       class="large-text"
-                       placeholder="<?php esc_attr_e( 'Ej: Calle 10 # 25-30', 'lealez' ); ?>">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[0]</code>', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_address_line2"><?php _e( 'Complemento', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_address_line2"
-                       id="location_address_line2"
-                       value="<?php echo esc_attr( $address_line2 ); ?>"
-                       class="large-text"
-                       placeholder="<?php esc_attr_e( 'Ej: Local 202, Piso 2, Edificio Torre Norte', 'lealez' ); ?>">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.subPremise</code> o <code>addressLines[1]</code>', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_neighborhood"><?php _e( 'Barrio/Colonia', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_neighborhood"
-                       id="location_neighborhood"
-                       value="<?php echo esc_attr( $neighborhood ); ?>"
-                       class="regular-text">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.sublocality</code> (si disponible). ⚙️ También editable manualmente.', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_city"
-                       id="location_city"
-                       value="<?php echo esc_attr( $city ); ?>"
-                       class="regular-text">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.locality</code>', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_state"><?php _e( 'Estado/Departamento', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_state"
-                       id="location_state"
-                       value="<?php echo esc_attr( $state ); ?>"
-                       class="regular-text">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.administrativeArea</code>', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_country"
-                       id="location_country"
-                       value="<?php echo esc_attr( $country ); ?>"
-                       class="regular-text"
-                       placeholder="<?php esc_attr_e( 'CO, MX, US', 'lealez' ); ?>"
-                       maxlength="2">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.regionCode</code> (ISO 3166-1 alpha-2).', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_postal_code"><?php _e( 'Código Postal', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text"
-                       name="location_postal_code"
-                       id="location_postal_code"
-                       value="<?php echo esc_attr( $postal_code ); ?>"
-                       class="regular-text">
-                <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
-            </td>
-        </tr>
-<?php if ( $formatted_address ) : ?>
-        <tr>
-            <th scope="row">
-                <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="text" readonly class="large-text" value="<?php echo esc_attr( $formatted_address ); ?>">
-                <p class="description"><?php _e( 'Auto-generada al importar desde GMB.', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <?php endif; ?>
-    </table>
-    </div><!-- #oy-address-fields-wrap -->
+    <?php /* ── Layout de dos columnas: Campos | Mapa (igual a la UI de GMB) ── */ ?>
+    <div id="oy-address-map-layout" style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
 
-    <?php /* ── Coordenadas y Maps URL: siempre visibles, incluso sin dirección física ── */ ?>
-    <table class="form-table" id="oy-coords-map-wrap">
-        <tr>
-            <th scope="row">
-                <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                    <div>
-                        <label for="location_latitude"><?php _e( 'Latitud', 'lealez' ); ?></label>
+        <?php /* ── Columna izquierda: campos de dirección ── */ ?>
+        <div id="oy-address-fields-col" style="flex:1; min-width:280px;">
+
+            <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
+            <table class="form-table" style="margin-top:0;">
+                <tr>
+                    <th scope="row" style="width:160px;">
+                        <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
+                    </th>
+                    <td>
                         <input type="text"
-                               name="location_latitude"
-                               id="location_latitude"
-                               value="<?php echo esc_attr( $latitude ); ?>"
-                               class="regular-text"
-                               placeholder="6.2476376">
-                    </div>
-                    <div>
-                        <label for="location_longitude"><?php _e( 'Longitud', 'lealez' ); ?></label>
+                               name="location_address_line1"
+                               id="location_address_line1"
+                               value="<?php echo esc_attr( $address_line1 ); ?>"
+                               class="large-text"
+                               placeholder="<?php esc_attr_e( 'Ej: Calle 10 # 25-30', 'lealez' ); ?>">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[0]</code>', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_address_line2"><?php _e( 'Complemento', 'lealez' ); ?></label>
+                    </th>
+                    <td>
                         <input type="text"
-                               name="location_longitude"
-                               id="location_longitude"
-                               value="<?php echo esc_attr( $longitude ); ?>"
+                               name="location_address_line2"
+                               id="location_address_line2"
+                               value="<?php echo esc_attr( $address_line2 ); ?>"
+                               class="large-text"
+                               placeholder="<?php esc_attr_e( 'Ej: Local 202, Piso 2, Edificio Torre Norte', 'lealez' ); ?>">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.subPremise</code> o <code>addressLines[1]</code>', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_neighborhood"><?php _e( 'Barrio/Colonia', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text"
+                               name="location_neighborhood"
+                               id="location_neighborhood"
+                               value="<?php echo esc_attr( $neighborhood ); ?>"
+                               class="regular-text">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.sublocality</code> (si disponible). ⚙️ También editable manualmente.', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text"
+                               name="location_city"
+                               id="location_city"
+                               value="<?php echo esc_attr( $city ); ?>"
+                               class="regular-text">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.locality</code>', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_state"><?php _e( 'Estado/Departamento', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text"
+                               name="location_state"
+                               id="location_state"
+                               value="<?php echo esc_attr( $state ); ?>"
+                               class="regular-text">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.administrativeArea</code>', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text"
+                               name="location_country"
+                               id="location_country"
+                               value="<?php echo esc_attr( $country ); ?>"
                                class="regular-text"
-                               placeholder="-75.5658153">
+                               placeholder="<?php esc_attr_e( 'CO, MX, US', 'lealez' ); ?>"
+                               maxlength="2">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.regionCode</code> (ISO 3166-1 alpha-2).', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_postal_code"><?php _e( 'Código Postal', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text"
+                               name="location_postal_code"
+                               id="location_postal_code"
+                               value="<?php echo esc_attr( $postal_code ); ?>"
+                               class="regular-text">
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <?php if ( $formatted_address ) : ?>
+                <tr>
+                    <th scope="row">
+                        <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="text" readonly class="large-text" value="<?php echo esc_attr( $formatted_address ); ?>">
+                        <p class="description"><?php _e( 'Auto-generada al importar desde GMB.', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <?php endif; ?>
+            </table>
+            </div><!-- #oy-address-fields-wrap -->
+
+            <?php /* ── Coordenadas GPS: siempre visibles ── */ ?>
+            <table class="form-table" id="oy-coords-map-wrap" style="margin-top:0;">
+                <tr>
+                    <th scope="row" style="width:160px;">
+                        <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                            <div>
+                                <label for="location_latitude"><?php _e( 'Latitud', 'lealez' ); ?></label>
+                                <input type="text"
+                                       name="location_latitude"
+                                       id="location_latitude"
+                                       value="<?php echo esc_attr( $latitude ); ?>"
+                                       class="regular-text"
+                                       placeholder="6.2476376">
+                            </div>
+                            <div>
+                                <label for="location_longitude"><?php _e( 'Longitud', 'lealez' ); ?></label>
+                                <input type="text"
+                                       name="location_longitude"
+                                       id="location_longitude"
+                                       value="<?php echo esc_attr( $longitude ); ?>"
+                                       class="regular-text"
+                                       placeholder="-75.5658153">
+                            </div>
+                        </div>
+                        <p class="description"><?php _e( 'Importado desde GMB: <code>latlng.latitude</code> / <code>latlng.longitude</code>', 'lealez' ); ?></p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
+                    </th>
+                    <td>
+                        <input type="url"
+                               name="location_map_url"
+                               id="location_map_url"
+                               value="<?php echo esc_attr( $map_url ); ?>"
+                               class="large-text">
+                        <p class="description">
+                            <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
+                            <?php if ( $map_url ) : ?>
+                                &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank" id="oy-maps-open-link"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
+                            <?php else : ?>
+                                &nbsp;<a href="#" target="_blank" id="oy-maps-open-link" style="<?php echo $has_coords ? '' : 'display:none;'; ?>"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
+                            <?php endif; ?>
+                        </p>
+                    </td>
+                </tr>
+            </table>
+
+        </div><!-- #oy-address-fields-col -->
+
+        <?php /* ── Columna derecha: mapa embebido al estilo GMB ── */ ?>
+        <div id="oy-map-preview-col" style="flex:0 0 380px; min-width:280px;">
+            <div id="oy-map-preview-wrap" style="
+                border:1px solid #c3d4e6;
+                border-radius:4px;
+                overflow:hidden;
+                background:#e8eaf0;
+                position:relative;
+                height:320px;
+                display:<?php echo $has_coords ? 'block' : 'flex'; ?>;
+                align-items:center;
+                justify-content:center;
+            ">
+                <?php if ( $has_coords ) : ?>
+                    <iframe
+                        id="oy-map-iframe"
+                        src="<?php echo esc_url( $embed_url ); ?>"
+                        width="100%"
+                        height="320"
+                        style="border:0; display:block;"
+                        allowfullscreen=""
+                        loading="lazy"
+                        referrerpolicy="no-referrer-when-downgrade"
+                    ></iframe>
+                <?php else : ?>
+                    <div id="oy-map-placeholder" style="text-align:center; color:#757575; padding:20px;">
+                        <span style="font-size:40px; display:block; margin-bottom:10px;">🗺️</span>
+                        <p style="margin:0; font-size:13px;"><?php _e( 'El mapa aparecerá cuando se ingresen las coordenadas GPS o se sincronice con GMB.', 'lealez' ); ?></p>
                     </div>
-                </div>
-                <p class="description"><?php _e( 'Importado desde GMB: <code>latlng.latitude</code> / <code>latlng.longitude</code>', 'lealez' ); ?></p>
-            </td>
-        </tr>
-        <tr>
-            <th scope="row">
-                <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <input type="url"
-                       name="location_map_url"
-                       id="location_map_url"
-                       value="<?php echo esc_attr( $map_url ); ?>"
-                       class="large-text">
-                <p class="description">
-                    <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
-                    <?php if ( $map_url ) : ?>
-                        &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
-                    <?php endif; ?>
-                </p>
-            </td>
-        </tr>
-    </table>
+                    <iframe
+                        id="oy-map-iframe"
+                        src=""
+                        width="100%"
+                        height="320"
+                        style="border:0; display:none;"
+                        allowfullscreen=""
+                        loading="lazy"
+                        referrerpolicy="no-referrer-when-downgrade"
+                    ></iframe>
+                <?php endif; ?>
+
+                <?php /* Botón "Ajustar" al estilo GMB — abre Google Maps en nueva pestaña */ ?>
+                <?php if ( $map_link_url ) : ?>
+                <a href="<?php echo esc_url( $map_link_url ); ?>"
+                   id="oy-map-adjust-btn"
+                   target="_blank"
+                   style="
+                    position:absolute;
+                    top:10px;
+                    right:10px;
+                    background:#fff;
+                    border:1px solid #dadce0;
+                    border-radius:4px;
+                    padding:6px 14px;
+                    font-size:13px;
+                    font-weight:500;
+                    color:#1a73e8;
+                    text-decoration:none;
+                    box-shadow:0 1px 3px rgba(0,0,0,.2);
+                    z-index:10;
+                    cursor:pointer;
+                    line-height:1.4;
+                   "><?php _e( 'Ajustar', 'lealez' ); ?></a>
+                <?php else : ?>
+                <a href="#"
+                   id="oy-map-adjust-btn"
+                   target="_blank"
+                   style="
+                    position:absolute;
+                    top:10px;
+                    right:10px;
+                    background:#fff;
+                    border:1px solid #dadce0;
+                    border-radius:4px;
+                    padding:6px 14px;
+                    font-size:13px;
+                    font-weight:500;
+                    color:#1a73e8;
+                    text-decoration:none;
+                    box-shadow:0 1px 3px rgba(0,0,0,.2);
+                    z-index:10;
+                    cursor:pointer;
+                    line-height:1.4;
+                    display:<?php echo $has_coords ? 'block' : 'none'; ?>;
+                   "><?php _e( 'Ajustar', 'lealez' ); ?></a>
+                <?php endif; ?>
+            </div>
+            <p class="description" style="margin-top:6px; font-size:11px; color:#757575;">
+                <?php _e( 'Vista previa del mapa. Se actualiza al cambiar las coordenadas GPS.', 'lealez' ); ?>
+            </p>
+        </div><!-- #oy-map-preview-col -->
+
+    </div><!-- #oy-address-map-layout -->
 
     <script type="text/javascript">
     /**
@@ -701,12 +817,81 @@ public function render_address_meta_box( $post ) {
         }
     };
 
+    /**
+     * oy_update_map_preview
+     * Actualiza el mapa embebido cuando cambian las coordenadas GPS.
+     * También actualiza el botón "Ajustar" y el enlace "Ver en Maps".
+     */
+    window.oy_update_map_preview = function() {
+        var $ = jQuery;
+        var lat = $.trim( $('#location_latitude').val() );
+        var lng = $.trim( $('#location_longitude').val() );
+
+        if ( ! lat || ! lng || isNaN( parseFloat(lat) ) || isNaN( parseFloat(lng) ) ) {
+            // Sin coordenadas válidas: mostrar placeholder, ocultar iframe y botones
+            $('#oy-map-iframe').hide().attr('src', '');
+            $('#oy-map-placeholder').show();
+            $('#oy-map-preview-wrap').css({ 'display': 'flex' });
+            $('#oy-map-adjust-btn').hide();
+            $('#oy-maps-open-link').hide();
+            return;
+        }
+
+        var embedUrl   = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng) + '&z=17&output=embed';
+        var mapsUrl    = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
+
+        // Actualizar iframe
+        $('#oy-map-placeholder').hide();
+        $('#oy-map-iframe').attr('src', embedUrl).css('display', 'block');
+        $('#oy-map-preview-wrap').css({ 'display': 'block' });
+
+        // Actualizar botón Ajustar
+        var $adjustBtn = $('#oy-map-adjust-btn');
+        // Preferir la URL de Maps ya guardada si existe, sino usar coords
+        var savedMapUrl = $.trim( $('#location_map_url').val() );
+        $adjustBtn.attr('href', savedMapUrl || mapsUrl).show();
+
+        // Actualizar enlace "Ver en Maps"
+        var $openLink = $('#oy-maps-open-link');
+        $openLink.attr('href', savedMapUrl || mapsUrl).show();
+    };
+
     jQuery(document).ready(function($){
+        // Toggle de dirección
         $('#service_area_only').on('change', window.oy_toggle_address_fields);
         $('#show_address_to_customers').on('change', window.oy_toggle_address_fields);
 
-        // Ejecutar al cargar
+        // Actualizar mapa al cambiar coordenadas (con debounce de 600ms para no recargar en cada tecla)
+        var oy_map_debounce_timer;
+        $('#location_latitude, #location_longitude').on('input change', function() {
+            clearTimeout(oy_map_debounce_timer);
+            oy_map_debounce_timer = setTimeout(function() {
+                window.oy_update_map_preview();
+            }, 600);
+        });
+
+        // Actualizar botón Ajustar cuando cambia la URL de Maps manualmente
+        $('#location_map_url').on('input change', function() {
+            var mapUrl = $.trim( $(this).val() );
+            if ( mapUrl ) {
+                $('#oy-map-adjust-btn').attr('href', mapUrl).show();
+                $('#oy-maps-open-link').attr('href', mapUrl).show();
+            }
+        });
+
+        // Ejecutar al cargar la página
         window.oy_toggle_address_fields();
+        // El mapa ya viene renderizado desde PHP si hay coords; solo sincronizar botones
+        (function() {
+            var lat = $.trim( $('#location_latitude').val() );
+            var lng = $.trim( $('#location_longitude').val() );
+            if ( lat && lng ) {
+                var savedMapUrl = $.trim( $('#location_map_url').val() );
+                var mapsUrl     = savedMapUrl || 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
+                $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
+                $('#oy-maps-open-link').attr('href', mapsUrl).show();
+            }
+        })();
     });
     </script>
     <?php
