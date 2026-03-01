@@ -2194,15 +2194,20 @@ function applyLocationToForm(loc){
         }
         // ── Fin bloque dirección ─────────────────────────────────────────────────
 
-// LatLng
+// LatLng — siempre limpiar primero, luego poblar si hay datos.
+// Si la nueva ubicación no tiene latlng (ej: negocio sin dirección física),
+// los campos deben quedar vacíos y no conservar coordenadas del post anterior.
+$('#location_latitude').val('');
+$('#location_longitude').val('');
+
 if(loc.latlng){
     var latSet = false;
     var lngSet = false;
-    if(typeof loc.latlng.latitude !== 'undefined'){
+    if(typeof loc.latlng.latitude !== 'undefined' && loc.latlng.latitude !== null && loc.latlng.latitude !== ''){
         $('#location_latitude').val(loc.latlng.latitude);
         latSet = true;
     }
-    if(typeof loc.latlng.longitude !== 'undefined'){
+    if(typeof loc.latlng.longitude !== 'undefined' && loc.latlng.longitude !== null && loc.latlng.longitude !== ''){
         $('#location_longitude').val(loc.latlng.longitude);
         lngSet = true;
     }
@@ -2210,6 +2215,13 @@ if(loc.latlng){
     // jQuery .val() NO dispara eventos change/input automáticamente, por eso se llama
     // explícitamente a oy_update_map_preview después de setear lat y lng.
     if((latSet || lngSet) && typeof window.oy_update_map_preview === 'function'){
+        window.oy_update_map_preview();
+    }
+} else {
+    // Sin latlng en la respuesta: actualizar el mapa igualmente.
+    // oy_update_map_preview usará el CID de location_map_url si está disponible,
+    // o mostrará el placeholder si tampoco hay URL de mapa.
+    if(typeof window.oy_update_map_preview === 'function'){
         window.oy_update_map_preview();
     }
 }
