@@ -5433,7 +5433,7 @@ public function ajax_get_gmb_location_details() {
             } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[OY Location] ajax — No se encontró atributo de menú con uriValues en Attributes API.' );
             }
-        } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+} elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             $_attrs_err = is_wp_error( $attrs_ajax ) ? $attrs_ajax->get_error_message() : 'empty/null';
             error_log( '[OY Location] ajax — get_location_attributes falló o vacío: ' . $_attrs_err );
         }
@@ -5444,6 +5444,7 @@ public function ajax_get_gmb_location_details() {
         'location_id' => $location_id,
         'account_id'  => $account_id,
     ) );
+}
 
 
     /**
