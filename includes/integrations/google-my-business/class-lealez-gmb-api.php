@@ -2311,8 +2311,6 @@ public static function get_location_attributes( $business_id, $location_name, $u
 }
 
 
-
-    <?php
 /**
  * =========================================================================
  * BLOQUE COMPLETO: Nuevos métodos para agregar en class-lealez-gmb-api.php
