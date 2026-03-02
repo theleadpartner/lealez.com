@@ -2324,157 +2324,157 @@ public static function get_location_attributes( $business_id, $location_name, $u
  */
 
 
-    /**
-     * Obtiene los METADATOS de atributos disponibles para una ubicación según su categoría.
-     *
-     * Llama al endpoint:
-     * GET https://mybusinessbusinessinformation.googleapis.com/v1/attributes
-     *   ?parent={locationName}
-     *   &regionCode=CO
-     *   &languageCode=es
-     *
-     * Esta API devuelve la lista completa de atributos que PUEDEN configurarse en una ubicación
-     * de esa categoría, con sus nombres de display, tipos de valor (BOOL, ENUM, URL, REPEATED_ENUM),
-     * grupos de display ("Información proporcionada por la empresa", "Accesibilidad", etc.) y
-     * las opciones posibles para ENUM/REPEATED_ENUM.
-     *
-     * A diferencia de `get_location_attributes()` que devuelve los VALORES actuales,
-     * este método devuelve el ESQUEMA: qué atributos existen y cómo se llaman en UI.
-     *
-     * Documentación oficial:
-     * https://developers.google.com/my-business/reference/businessinformation/rest/v1/attributes/list
-     *
-     * @param int    $business_id     WP Post ID del oy_business (para tokens OAuth).
-     * @param string $location_name   Resource name de la ubicación (cualquier formato aceptado).
-     * @param string $category_name   Nombre de categoría (puede venir vacío; se usa `parent` entonces).
-     *                                Ej: "categories/gcid:bar_pub" o "Restaurant".
-     * @param string $region_code     Código ISO 3166-1 alpha-2 del país. Default 'CO'.
-     * @param string $language_code   Código BCP-47 del idioma. Default 'es'.
-     * @param bool   $use_cache       Si true, usa caché del rate limiter. Default true.
-     *
-     * @return array|WP_Error Array de AttributeMetadata objects, o WP_Error en caso de fallo.
-     *
-     * Formato de retorno:
-     * [
-     *   [
-     *     'attributeId'      => 'has_women_led',
-     *     'displayName'      => 'Se identifica como mujer empresaria',
-     *     'groupDisplayName' => 'Información proporcionada por la empresa',
-     *     'valueType'        => 'BOOL',
-     *     'valueMetadata'    => [],
-     *     'isDeprecated'     => false,
-     *     'isRepeatable'     => false,
-     *   ],
-     *   ...
-     * ]
-     */
-    public static function get_attribute_metadata( $business_id, $location_name, $category_name = '', $region_code = 'CO', $language_code = 'es', $use_cache = true ) {
-        $business_id   = absint( $business_id );
-        $location_name = trim( (string) $location_name );
+/**
+ * Obtiene los METADATOS de atributos disponibles para una ubicación según su categoría.
+ *
+ * Llama al endpoint:
+ * GET https://mybusinessbusinessinformation.googleapis.com/v1/attributes
+ *   ?parent={locationName}
+ *   &regionCode=CO
+ *   &languageCode=es
+ *
+ * NOTA CRÍTICA DE URL ENCODING:
+ * add_query_arg() / http_build_query() codifican '/' como '%2F' en los valores de
+ * los parámetros de query string. Google valida el parámetro `parent` con un regex
+ * estricto que espera el formato literal "locations/{id}" — el slash codificado como
+ * '%2F' provoca el error HTTP 400 "Request contains an invalid argument."
+ *
+ * SOLUCIÓN: construir el query string manualmente e incrustarlo en el endpoint antes
+ * de pasarlo a make_request(), dejando $query_args vacío para que add_query_arg
+ * no toque la URL ya construida.
+ *
+ * @param int    $business_id     WP Post ID del oy_business (para tokens OAuth).
+ * @param string $location_name   Resource name de la ubicación (cualquier formato aceptado).
+ * @param string $category_name   Nombre de categoría (puede venir vacío).
+ * @param string $region_code     Código ISO 3166-1 alpha-2 del país. Default 'CO'.
+ * @param string $language_code   Código BCP-47 del idioma. Default 'es'.
+ * @param bool   $use_cache       Si true, usa caché del rate limiter. Default true.
+ *
+ * @return array|WP_Error Array de AttributeMetadata objects, o WP_Error en caso de fallo.
+ */
+public static function get_attribute_metadata( $business_id, $location_name, $category_name = '', $region_code = 'CO', $language_code = 'es', $use_cache = true ) {
+    $business_id   = absint( $business_id );
+    $location_name = trim( (string) $location_name );
 
-        if ( ! $business_id || '' === $location_name ) {
-            return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for get_attribute_metadata.', 'lealez' ) );
+    // Valores por defecto seguros para evitar deprecation warnings de PHP 8
+    // cuando los meta fields son null o vacíos.
+    if ( '' === $region_code || null === $region_code ) {
+        $region_code = 'CO';
+    }
+    if ( '' === $language_code || null === $language_code ) {
+        $language_code = 'es';
+    }
+    $region_code   = (string) $region_code;
+    $language_code = (string) $language_code;
+    $category_name = (string) $category_name;
+
+    if ( ! $business_id || '' === $location_name ) {
+        return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for get_attribute_metadata.', 'lealez' ) );
+    }
+
+    // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
+    $normalized_location = $location_name;
+    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+        $parts = explode( '/locations/', $location_name, 2 );
+        if ( ! empty( $parts[1] ) ) {
+            $normalized_location = 'locations/' . trim( (string) $parts[1], '/' );
         }
+    }
+    // Eliminar cualquier sufijo extra (e.g. /attributes)
+    if ( false !== strpos( $normalized_location, '/attributes' ) ) {
+        $normalized_location = explode( '/attributes', $normalized_location )[0];
+    }
+    $normalized_location = trim( $normalized_location );
 
-        // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
-        $normalized_location = $location_name;
-        if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-            $parts = explode( '/locations/', $location_name, 2 );
-            if ( ! empty( $parts[1] ) ) {
-                $normalized_location = 'locations/' . trim( $parts[1], '/' );
-            }
-        }
-        // Eliminar cualquier sufijo extra (e.g. /attributes)
-        if ( false !== strpos( $normalized_location, '/attributes' ) ) {
-            $normalized_location = explode( '/attributes', $normalized_location )[0];
-        }
+    // ── Construir query string MANUALMENTE para evitar que add_query_arg()
+    // codifique el '/' de 'locations/{id}' como '%2F', lo que provoca HTTP 400
+    // "Request contains an invalid argument." en la API de Google.
+    //
+    // Google valida el parámetro `parent` con regex estricto que espera el literal
+    // "locations/{id}" — la versión encoded '%2F' es rechazada por INVALID_ARGUMENT.
+    // ──────────────────────────────────────────────────────────────────────────────
+    $region_code_clean   = strtoupper( preg_replace( '/[^A-Za-z]/', '', $region_code ) );
+    $language_code_clean = preg_replace( '/[^A-Za-z\-]/', '', $language_code );
 
-        // ── Construir query params ───────────────────────────────────────────
-        // El endpoint usa el location resource name como 'parent' para filtrar atributos
-        // relevantes para ESA ubicación específica (considera su categoría y país).
-        $query_args = array(
-            'parent'       => $normalized_location,
-            'regionCode'   => strtoupper( sanitize_text_field( $region_code ) ),
-            'languageCode' => sanitize_text_field( $language_code ),
-        );
+    // parent NO se URL-encoda (Google necesita el slash literal)
+    $query_string = 'parent=' . $normalized_location;
+    $query_string .= '&regionCode=' . rawurlencode( $region_code_clean );
+    $query_string .= '&languageCode=' . rawurlencode( $language_code_clean );
 
-        // categoryName es opcional pero puede mejorar los resultados
-        // si está disponible (formato: "categories/gcid:bar_pub" o simplemente omitir)
-        if ( ! empty( $category_name ) ) {
-            // Si viene como nombre de display (ej: "Bar restaurante"), intentar no enviarlo
-            // La API espera "categories/gcid:xxx" — si no es ese formato, omitir.
-            if ( strpos( $category_name, 'categories/' ) === 0 ) {
-                $query_args['categoryName'] = sanitize_text_field( $category_name );
-            }
-            // Si no viene en formato gcid, simplemente no lo mandamos — el endpoint
-            // usa el `parent` (location resource name) para inferir la categoría.
-        }
+    // categoryName es opcional; solo se incluye si está en formato 'categories/gcid:xxx'
+    if ( '' !== $category_name && strpos( $category_name, 'categories/' ) === 0 ) {
+        $query_string .= '&categoryName=' . rawurlencode( $category_name );
+    }
 
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'info',
-                'Fetching attribute metadata (schema) for location.',
-                array(
-                    'location'     => $normalized_location,
-                    'category'     => $category_name,
-                    'region_code'  => $region_code,
-                    'language'     => $language_code,
-                    'query_args'   => $query_args,
-                )
-            );
-        }
+    // Incrustar el query string en el endpoint para que make_request() NO llame
+    // a add_query_arg() sobre él (pasamos $query_args vacío).
+    $endpoint_with_qs = '/attributes?' . $query_string;
 
-        // El endpoint es /v1/attributes (en $business_api_base)
-        $result = self::make_request(
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
             $business_id,
-            '/attributes',
-            self::$business_api_base,
-            'GET',
-            array(),
-            $use_cache,
-            $query_args
+            'info',
+            'Fetching attribute metadata (schema) for location.',
+            array(
+                'location'         => $normalized_location,
+                'category'         => $category_name,
+                'region_code'      => $region_code_clean,
+                'language'         => $language_code_clean,
+                'endpoint_preview' => self::$business_api_base . $endpoint_with_qs,
+            )
         );
+    }
 
-        if ( is_wp_error( $result ) ) {
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'warning',
-                    'get_attribute_metadata failed: ' . $result->get_error_message(),
-                    array( 'location' => $normalized_location )
-                );
-            }
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB More] get_attribute_metadata error: ' . $result->get_error_message() );
-            }
-            return $result;
-        }
+    // Pasamos $query_args vacío para que make_request() no toque la URL ya construida.
+    $result = self::make_request(
+        $business_id,
+        $endpoint_with_qs,
+        self::$business_api_base,
+        'GET',
+        array(),
+        $use_cache,
+        array() // <-- VACÍO: el query string ya está incrustado en $endpoint_with_qs
+    );
 
-        // La respuesta tiene el formato:
-        // { "attributeMetadata": [ { "attributeId": "has_women_led", "displayName": "...", ... } ] }
-        $metadata = array();
-        if ( ! empty( $result['attributeMetadata'] ) && is_array( $result['attributeMetadata'] ) ) {
-            $metadata = $result['attributeMetadata'];
-        }
-
+    if ( is_wp_error( $result ) ) {
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
-                'success',
-                sprintf( 'Attribute metadata fetched: %d attribute(s) available.', count( $metadata ) ),
+                'warning',
+                'get_attribute_metadata failed: ' . $result->get_error_message(),
                 array( 'location' => $normalized_location )
             );
         }
-
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log(
-                '[OY GMB More] get_attribute_metadata: ' . count( $metadata ) . ' attribute(s) for ' . $normalized_location
-            );
+            error_log( '[OY GMB More] get_attribute_metadata error: ' . $result->get_error_message() );
         }
-
-        return $metadata;
+        return $result;
     }
+
+    // La respuesta tiene el formato:
+    // { "attributeMetadata": [ { "attributeId": "has_women_led", "displayName": "...", ... } ] }
+    $metadata = array();
+    if ( ! empty( $result['attributeMetadata'] ) && is_array( $result['attributeMetadata'] ) ) {
+        $metadata = $result['attributeMetadata'];
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'Attribute metadata fetched: %d attribute(s) available.', count( $metadata ) ),
+            array( 'location' => $normalized_location )
+        );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log(
+            '[OY GMB More] get_attribute_metadata: ' . count( $metadata ) . ' attribute(s) for ' . $normalized_location
+        );
+    }
+
+    return $metadata;
+}
 
 
     /**
