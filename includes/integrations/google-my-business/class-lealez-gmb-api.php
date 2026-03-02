@@ -2312,6 +2312,291 @@ public static function get_location_attributes( $business_id, $location_name, $u
 
 
 
+    <?php
+/**
+ * =========================================================================
+ * BLOQUE COMPLETO: Nuevos métodos para agregar en class-lealez-gmb-api.php
+ *
+ * INSTRUCCIÓN DE INTEGRACIÓN:
+ * Agregar estos dos métodos DENTRO de la clase Lealez_GMB_API,
+ * justo DESPUÉS del método `get_location_attributes()` existente.
+ *
+ * Archivo destino: includes/integrations/google-my-business/class-lealez-gmb-api.php
+ * =========================================================================
+ */
+
+
+    /**
+     * Obtiene los METADATOS de atributos disponibles para una ubicación según su categoría.
+     *
+     * Llama al endpoint:
+     * GET https://mybusinessbusinessinformation.googleapis.com/v1/attributes
+     *   ?parent={locationName}
+     *   &regionCode=CO
+     *   &languageCode=es
+     *
+     * Esta API devuelve la lista completa de atributos que PUEDEN configurarse en una ubicación
+     * de esa categoría, con sus nombres de display, tipos de valor (BOOL, ENUM, URL, REPEATED_ENUM),
+     * grupos de display ("Información proporcionada por la empresa", "Accesibilidad", etc.) y
+     * las opciones posibles para ENUM/REPEATED_ENUM.
+     *
+     * A diferencia de `get_location_attributes()` que devuelve los VALORES actuales,
+     * este método devuelve el ESQUEMA: qué atributos existen y cómo se llaman en UI.
+     *
+     * Documentación oficial:
+     * https://developers.google.com/my-business/reference/businessinformation/rest/v1/attributes/list
+     *
+     * @param int    $business_id     WP Post ID del oy_business (para tokens OAuth).
+     * @param string $location_name   Resource name de la ubicación (cualquier formato aceptado).
+     * @param string $category_name   Nombre de categoría (puede venir vacío; se usa `parent` entonces).
+     *                                Ej: "categories/gcid:bar_pub" o "Restaurant".
+     * @param string $region_code     Código ISO 3166-1 alpha-2 del país. Default 'CO'.
+     * @param string $language_code   Código BCP-47 del idioma. Default 'es'.
+     * @param bool   $use_cache       Si true, usa caché del rate limiter. Default true.
+     *
+     * @return array|WP_Error Array de AttributeMetadata objects, o WP_Error en caso de fallo.
+     *
+     * Formato de retorno:
+     * [
+     *   [
+     *     'attributeId'      => 'has_women_led',
+     *     'displayName'      => 'Se identifica como mujer empresaria',
+     *     'groupDisplayName' => 'Información proporcionada por la empresa',
+     *     'valueType'        => 'BOOL',
+     *     'valueMetadata'    => [],
+     *     'isDeprecated'     => false,
+     *     'isRepeatable'     => false,
+     *   ],
+     *   ...
+     * ]
+     */
+    public static function get_attribute_metadata( $business_id, $location_name, $category_name = '', $region_code = 'CO', $language_code = 'es', $use_cache = true ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for get_attribute_metadata.', 'lealez' ) );
+        }
+
+        // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
+        $normalized_location = $location_name;
+        if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+            $parts = explode( '/locations/', $location_name, 2 );
+            if ( ! empty( $parts[1] ) ) {
+                $normalized_location = 'locations/' . trim( $parts[1], '/' );
+            }
+        }
+        // Eliminar cualquier sufijo extra (e.g. /attributes)
+        if ( false !== strpos( $normalized_location, '/attributes' ) ) {
+            $normalized_location = explode( '/attributes', $normalized_location )[0];
+        }
+
+        // ── Construir query params ───────────────────────────────────────────
+        // El endpoint usa el location resource name como 'parent' para filtrar atributos
+        // relevantes para ESA ubicación específica (considera su categoría y país).
+        $query_args = array(
+            'parent'       => $normalized_location,
+            'regionCode'   => strtoupper( sanitize_text_field( $region_code ) ),
+            'languageCode' => sanitize_text_field( $language_code ),
+        );
+
+        // categoryName es opcional pero puede mejorar los resultados
+        // si está disponible (formato: "categories/gcid:bar_pub" o simplemente omitir)
+        if ( ! empty( $category_name ) ) {
+            // Si viene como nombre de display (ej: "Bar restaurante"), intentar no enviarlo
+            // La API espera "categories/gcid:xxx" — si no es ese formato, omitir.
+            if ( strpos( $category_name, 'categories/' ) === 0 ) {
+                $query_args['categoryName'] = sanitize_text_field( $category_name );
+            }
+            // Si no viene en formato gcid, simplemente no lo mandamos — el endpoint
+            // usa el `parent` (location resource name) para inferir la categoría.
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Fetching attribute metadata (schema) for location.',
+                array(
+                    'location'     => $normalized_location,
+                    'category'     => $category_name,
+                    'region_code'  => $region_code,
+                    'language'     => $language_code,
+                    'query_args'   => $query_args,
+                )
+            );
+        }
+
+        // El endpoint es /v1/attributes (en $business_api_base)
+        $result = self::make_request(
+            $business_id,
+            '/attributes',
+            self::$business_api_base,
+            'GET',
+            array(),
+            $use_cache,
+            $query_args
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'get_attribute_metadata failed: ' . $result->get_error_message(),
+                    array( 'location' => $normalized_location )
+                );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY GMB More] get_attribute_metadata error: ' . $result->get_error_message() );
+            }
+            return $result;
+        }
+
+        // La respuesta tiene el formato:
+        // { "attributeMetadata": [ { "attributeId": "has_women_led", "displayName": "...", ... } ] }
+        $metadata = array();
+        if ( ! empty( $result['attributeMetadata'] ) && is_array( $result['attributeMetadata'] ) ) {
+            $metadata = $result['attributeMetadata'];
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'Attribute metadata fetched: %d attribute(s) available.', count( $metadata ) ),
+                array( 'location' => $normalized_location )
+            );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[OY GMB More] get_attribute_metadata: ' . count( $metadata ) . ' attribute(s) for ' . $normalized_location
+            );
+        }
+
+        return $metadata;
+    }
+
+
+    /**
+     * Actualiza (PATCH) los atributos de una ubicación en Google Business Profile.
+     *
+     * Endpoint:
+     * PATCH https://mybusinessbusinessinformation.googleapis.com/v1/{locationName}/attributes
+     *
+     * El body debe contener el resource name de la ubicación + la lista de atributos a actualizar.
+     * Google usa PATCH con `updateMask=attributes` — SOLO se actualizan los atributos enviados;
+     * los demás no se modifican.
+     *
+     * Documentación oficial:
+     * https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/updateAttributes
+     *
+     * @param int    $business_id        WP Post ID del oy_business (para tokens OAuth).
+     * @param string $location_name      Resource name de la ubicación (cualquier formato aceptado).
+     * @param array  $attributes_payload Array de atributos en formato GMB API v1:
+     *                                   [
+     *                                     [
+     *                                       'name'      => 'attributes/has_women_led',
+     *                                       'valueType' => 'BOOL',
+     *                                       'values'    => [true],
+     *                                     ],
+     *                                   ]
+     *
+     * @return array|WP_Error Respuesta de la API (el Attributes resource actualizado), o WP_Error.
+     */
+    public static function update_location_attributes( $business_id, $location_name, $attributes_payload ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_attributes.', 'lealez' ) );
+        }
+
+        if ( empty( $attributes_payload ) || ! is_array( $attributes_payload ) ) {
+            return new WP_Error( 'empty_payload', __( 'No attributes provided to update.', 'lealez' ) );
+        }
+
+        // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
+        $normalized_location = $location_name;
+        if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+            $parts = explode( '/locations/', $location_name, 2 );
+            if ( ! empty( $parts[1] ) ) {
+                $normalized_location = 'locations/' . trim( $parts[1], '/' );
+            }
+        }
+        if ( false !== strpos( $normalized_location, '/attributes' ) ) {
+            $normalized_location = explode( '/attributes', $normalized_location )[0];
+        }
+
+        // El endpoint PATCH para atributos es: /v1/locations/{id}/attributes
+        $endpoint = '/' . rtrim( $normalized_location, '/' ) . '/attributes';
+
+        // Body del PATCH: { "name": "locations/{id}/attributes", "attributes": [...] }
+        $body = array(
+            'name'       => $normalized_location . '/attributes',
+            'attributes' => $attributes_payload,
+        );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                sprintf( 'Updating %d attribute(s) for location.', count( $attributes_payload ) ),
+                array(
+                    'location' => $normalized_location,
+                    'endpoint' => $endpoint,
+                    'count'    => count( $attributes_payload ),
+                )
+            );
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$business_api_base,
+            'PATCH',
+            $body,
+            false, // No caché en PATCH
+            array( 'updateMask' => 'attributes' )
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'error',
+                    'update_location_attributes failed: ' . $result->get_error_message(),
+                    array( 'location' => $normalized_location )
+                );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY GMB More] update_location_attributes error: ' . $result->get_error_message() );
+            }
+            return $result;
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'Attributes updated successfully for location: %s', $normalized_location ),
+                array( 'location' => $normalized_location )
+            );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[OY GMB More] update_location_attributes: OK for ' . $normalized_location .
+                ' (' . count( $attributes_payload ) . ' attr(s) updated)'
+            );
+        }
+
+        return $result;
+    }
+
+
+
 
 /**
  * Obtiene los PlaceActionLinks de una ubicación desde My Business Place Actions API v1.
