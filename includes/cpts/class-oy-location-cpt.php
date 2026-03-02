@@ -115,6 +115,19 @@ public function __construct() {
 }
 
 
+    /**
+ * ✅ Metabox externo: Atributos dinámicos sección "Más" de GBP
+ * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-more-metabox.php
+ */
+$more_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-more-metabox.php';
+if ( file_exists( $more_metabox_file ) ) {
+    require_once $more_metabox_file;
+    if ( class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
+        new OY_Location_GMB_More_Metabox();
+    }
+}
+
+
 /**
  * Register the custom post type
  */
