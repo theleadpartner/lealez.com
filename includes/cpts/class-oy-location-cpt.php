@@ -4197,15 +4197,101 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
             }
         }
 
-        // latlng (RAW + map)
+// latlng (RAW + map)
+        // ✅ NOTA: Business Information API v1 solo retorna `latlng` cuando fue establecido
+        // manualmente por el negocio. Para ubicaciones con coordenadas auto-detectadas el
+        // campo llega vacío o ausente aunque el negocio sí tenga coordenadas en Google Maps.
+        // Por eso implementamos dos niveles de fallback adicionales.
         $latlng = isset( $data['latlng'] ) && is_array( $data['latlng'] ) ? $data['latlng'] : array();
-        if ( ! empty( $latlng ) ) {
+
+        $lat_saved = false;
+        $lng_saved = false;
+
+        if (
+            ! empty( $latlng )
+            && isset( $latlng['latitude'], $latlng['longitude'] )
+            && ( (float) $latlng['latitude'] !== 0.0 || (float) $latlng['longitude'] !== 0.0 )
+        ) {
+            // ── Caso 1: API retornó latlng válido ──────────────────────────────────
             update_post_meta( $post_id, 'gmb_latlng_raw', $latlng );
-            if ( isset( $latlng['latitude'] ) ) {
-                update_post_meta( $post_id, 'location_latitude', sanitize_text_field( (string) $latlng['latitude'] ) );
+            update_post_meta( $post_id, 'location_latitude',  sanitize_text_field( (string) $latlng['latitude'] ) );
+            update_post_meta( $post_id, 'location_longitude', sanitize_text_field( (string) $latlng['longitude'] ) );
+            $lat_saved = true;
+            $lng_saved = true;
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[OY Location] import — latlng desde API GMB: lat=%s, lng=%s',
+                    $latlng['latitude'],
+                    $latlng['longitude']
+                ) );
             }
-            if ( isset( $latlng['longitude'] ) ) {
-                update_post_meta( $post_id, 'location_longitude', sanitize_text_field( (string) $latlng['longitude'] ) );
+        } else {
+            // ── Caso 2: API no retornó latlng → intentar geocoding desde dirección ──
+            // sync_location_data() ya intentó el fallback de Nominatim, pero si este
+            // método fue llamado con datos en caché o el geocoding falló, intentamos
+            // de nuevo aquí con la dirección que viene en el response actual.
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] import — latlng vacío/ausente en $data. Intentando geocoding fallback desde storefrontAddress.' );
+            }
+
+            $geo_coords = null;
+
+            // Intento A: desde storefrontAddress en el response actual
+            if (
+                class_exists( 'Lealez_GMB_API' )
+                && method_exists( 'Lealez_GMB_API', 'geocode_address_fallback' )
+                && ! empty( $data['storefrontAddress'] )
+                && is_array( $data['storefrontAddress'] )
+            ) {
+                $geo_coords = Lealez_GMB_API::geocode_address_fallback( $data['storefrontAddress'] );
+            }
+
+            // Intento B: desde campos de dirección ya guardados en el post (si A falló)
+            if ( ! $geo_coords ) {
+                $addr_parts = array_filter( array(
+                    get_post_meta( $post_id, 'location_address_line1', true ),
+                    get_post_meta( $post_id, 'location_city',          true ),
+                    get_post_meta( $post_id, 'location_state',         true ),
+                    get_post_meta( $post_id, 'location_country',       true ),
+                ) );
+
+                if (
+                    ! empty( $addr_parts )
+                    && class_exists( 'Lealez_GMB_API' )
+                    && method_exists( 'Lealez_GMB_API', 'geocode_address_fallback' )
+                ) {
+                    // Construir PostalAddress mínima para reutilizar el método
+                    $synthetic_addr = array(
+                        'addressLines' => array( (string) reset( $addr_parts ) ),
+                        'locality'     => get_post_meta( $post_id, 'location_city',    true ),
+                        'administrativeArea' => get_post_meta( $post_id, 'location_state',   true ),
+                        'regionCode'   => get_post_meta( $post_id, 'location_country', true ),
+                    );
+
+                    $geo_coords = Lealez_GMB_API::geocode_address_fallback( $synthetic_addr );
+                }
+            }
+
+            if ( $geo_coords && isset( $geo_coords['latitude'], $geo_coords['longitude'] ) ) {
+                update_post_meta( $post_id, 'location_latitude',  sanitize_text_field( (string) $geo_coords['latitude'] ) );
+                update_post_meta( $post_id, 'location_longitude', sanitize_text_field( (string) $geo_coords['longitude'] ) );
+                // Guardar también en gmb_latlng_raw para referencia (marcado como geocoded)
+                update_post_meta( $post_id, 'gmb_latlng_raw', $geo_coords );
+                $lat_saved = true;
+                $lng_saved = true;
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( sprintf(
+                        '[OY Location] import — latlng obtenido via geocoding Nominatim: lat=%s, lng=%s',
+                        $geo_coords['latitude'],
+                        $geo_coords['longitude']
+                    ) );
+                }
+            } else {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] import — No se pudo obtener latlng. Campos location_latitude/longitude no actualizados.' );
+                }
             }
         }
 
