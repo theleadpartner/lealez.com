@@ -2072,6 +2072,7 @@ if ( $latlng_missing ) {
                     && isset( $latlng_result['latlng']['longitude'] )
                     && ( (float) $latlng_result['latlng']['latitude'] !== 0.0 || (float) $latlng_result['latlng']['longitude'] !== 0.0 )
                 ) {
+                    // Intento 1 exitoso — coordenadas del campo latlng explícito del negocio.
                     $result['latlng'] = $latlng_result['latlng'];
 
                     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -2087,34 +2088,77 @@ if ( $latlng_missing ) {
                     }
                 } else {
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] sync_location_data — latlng dedicated call vacío/fallido para: ' . $location_name . '. Intentando geocoding desde dirección.' );
+                        error_log( '[OY Location] sync_location_data — Intento 1 (readMask latlng) vacío/fallido para: ' . $location_name . '. Intentando googleLocations:search.' );
                     }
 
-                    // ── Intento 2: geocoding desde storefrontAddress (Nominatim) ──────────
-                    // La API de Business Information v1 no expone coordenadas auto-detectadas
-                    // vía el campo latlng. Como fallback usamos Nominatim (OpenStreetMap),
-                    // que es gratuito y no requiere API key.
-                    // Condición: que la respuesta tenga storefrontAddress para construir la query.
-                    if ( ! empty( $result['storefrontAddress'] ) && is_array( $result['storefrontAddress'] ) ) {
-                        $geocoded = self::geocode_address_fallback( $result['storefrontAddress'] );
+                    // ── Intento 2: googleLocations:search (Business Information API v1) ───
+                    // Fuente de datos: el mismo Google, con las mismas credenciales OAuth.
+                    // El endpoint POST /v1/googleLocations:search recibe el nombre y dirección
+                    // del negocio y retorna las coordenadas exactas que Google Maps usa
+                    // internamente — incluyendo negocios sin latlng explícito en el recurso.
+                    // Ref: https://developers.google.com/my-business/reference/businessinformation/rest/v1/googleLocations/search
+                    $gl_title   = isset( $result['title'] )    ? (string) $result['title']    : '';
+                    $gl_address = isset( $result['storefrontAddress'] ) && is_array( $result['storefrontAddress'] )
+                        ? $result['storefrontAddress']
+                        : array();
+                    $gl_phone   = isset( $result['phoneNumbers']['primaryPhone'] )
+                        ? (string) $result['phoneNumbers']['primaryPhone']
+                        : '';
 
-                        if ( $geocoded ) {
-                            $result['latlng'] = $geocoded;
+                    $google_coords = null;
 
-                            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                                Lealez_GMB_Logger::log(
-                                    $business_id,
-                                    'info',
-                                    'LatLng obtenido via geocoding Nominatim (fallback).',
-                                    array(
-                                        'location' => $location_name,
-                                        'latlng'   => $geocoded,
-                                    )
-                                );
-                            }
-                        } else {
-                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                                error_log( '[OY Location] sync_location_data — geocoding Nominatim también falló para: ' . $location_name );
+                    if ( '' !== $gl_title || ! empty( $gl_address ) ) {
+                        $google_coords = self::geocode_via_google_locations_search(
+                            $business_id,
+                            $gl_title,
+                            $gl_address,
+                            $gl_phone
+                        );
+                    }
+
+                    if ( $google_coords ) {
+                        $result['latlng'] = $google_coords;
+
+                        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                            Lealez_GMB_Logger::log(
+                                $business_id,
+                                'info',
+                                'LatLng obtenido via googleLocations:search (coordenadas exactas de Google).',
+                                array(
+                                    'location' => $location_name,
+                                    'latlng'   => $google_coords,
+                                )
+                            );
+                        }
+                    } else {
+                        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                            error_log( '[OY Location] sync_location_data — Intento 2 (googleLocations:search) falló para: ' . $location_name . '. Intentando Nominatim como último recurso.' );
+                        }
+
+                        // ── Intento 3: Nominatim (OpenStreetMap) — último recurso ─────────
+                        // Solo se usa si Google no pudo retornar coords por ninguna vía.
+                        // Precisión variable para direcciones latinoamericanas.
+                        if ( ! empty( $gl_address ) ) {
+                            $nominatim_coords = self::geocode_address_fallback( $gl_address );
+
+                            if ( $nominatim_coords ) {
+                                $result['latlng'] = $nominatim_coords;
+
+                                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                                    Lealez_GMB_Logger::log(
+                                        $business_id,
+                                        'info',
+                                        'LatLng obtenido via Nominatim (último recurso — precisión menor).',
+                                        array(
+                                            'location' => $location_name,
+                                            'latlng'   => $nominatim_coords,
+                                        )
+                                    );
+                                }
+                            } else {
+                                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                    error_log( '[OY Location] sync_location_data — Intento 3 (Nominatim) también falló para: ' . $location_name . '. Sin coordenadas.' );
+                                }
                             }
                         }
                     }
@@ -2741,6 +2785,152 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
         set_transient( $cache_key, $result, HOUR_IN_SECONDS );
 
         return $result;
+}
+
+    /**
+     * ✅ Geocodificar usando googleLocations:search de la Business Information API v1.
+     *
+     * Este endpoint usa las mismas credenciales OAuth del negocio y devuelve las
+     * coordenadas exactas que Google Maps tiene internamente para el negocio —
+     * incluyendo negocios cuyo campo `latlng` no está explícitamente en el recurso.
+     *
+     * Es mucho más preciso que Nominatim para negocios latinoamericanos porque usa
+     * los propios datos internos de Google Maps.
+     *
+     * Referencia oficial:
+     * https://developers.google.com/my-business/reference/businessinformation/rest/v1/googleLocations/search
+     *
+     * @param int    $business_id   WP post ID del oy_business (para OAuth).
+     * @param string $title         Nombre del negocio (location title del API).
+     * @param array  $address_data  storefrontAddress (PostalAddress de Google).
+     * @param string $phone         Teléfono principal opcional (mejora precisión).
+     *
+     * @return array|null ['latitude' => float, 'longitude' => float, 'source' => string] o null.
+     */
+    public static function geocode_via_google_locations_search( $business_id, $title, $address_data = array(), $phone = '' ) {
+        $business_id = absint( $business_id );
+        $title       = trim( (string) $title );
+
+        if ( ! $business_id ) {
+            return null;
+        }
+
+        if ( '' === $title && empty( $address_data ) ) {
+            return null;
+        }
+
+        // ── Cache key (geo3_ para separarlo de los anteriores) ───────────────────
+        $cache_raw = implode( '|', array_filter( array(
+            $title,
+            isset( $address_data['addressLines'][0] ) ? (string) $address_data['addressLines'][0] : '',
+            isset( $address_data['locality'] )        ? (string) $address_data['locality']        : '',
+            isset( $address_data['regionCode'] )      ? (string) $address_data['regionCode']      : '',
+        ) ) );
+        $cache_key = 'lealez_geo3_' . md5( strtolower( $cache_raw ) );
+
+        $cached = get_transient( $cache_key );
+        if ( is_array( $cached ) && isset( $cached['latitude'], $cached['longitude'] ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_via_google_locations_search — desde caché (geo3) para: ' . $cache_raw );
+            }
+            return $cached;
+        }
+
+        // ── Construir cuerpo del request ─────────────────────────────────────────
+        $location_body = array();
+
+        if ( '' !== $title ) {
+            $location_body['title'] = $title;
+        }
+
+        if ( ! empty( $address_data ) && is_array( $address_data ) ) {
+            $location_body['storefrontAddress'] = $address_data;
+        }
+
+        if ( '' !== trim( (string) $phone ) ) {
+            $location_body['phoneNumbers'] = array(
+                'primaryPhone' => trim( (string) $phone ),
+            );
+        }
+
+        if ( empty( $location_body ) ) {
+            return null;
+        }
+
+        // ── Llamar al endpoint POST /v1/googleLocations:search ───────────────────
+        $result = self::make_request(
+            $business_id,
+            '/googleLocations:search',
+            self::$business_api_base,
+            'POST',
+            array( 'location' => $location_body ),
+            false  // no usar caché de make_request; el caché lo manejamos aquí
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_via_google_locations_search — WP_Error: ' . $result->get_error_message() . ' para: ' . $cache_raw );
+            }
+            return null;
+        }
+
+        if ( empty( $result['googleLocations'] ) || ! is_array( $result['googleLocations'] ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_via_google_locations_search — sin resultados googleLocations para: ' . $cache_raw );
+            }
+            return null;
+        }
+
+        // ── Iterar resultados y tomar el primero con latlng válido ───────────────
+        // El primer resultado suele ser el más relevante (Google lo ordena por relevancia).
+        foreach ( $result['googleLocations'] as $gl ) {
+            if ( ! is_array( $gl ) ) {
+                continue;
+            }
+
+            $gl_lat = isset( $gl['location']['latlng']['latitude'] )
+                ? (float) $gl['location']['latlng']['latitude']
+                : null;
+            $gl_lng = isset( $gl['location']['latlng']['longitude'] )
+                ? (float) $gl['location']['latlng']['longitude']
+                : null;
+
+            if ( null === $gl_lat || null === $gl_lng ) {
+                continue;
+            }
+
+            // Descartar (0, 0) — coordenada inválida
+            if ( 0.0 === $gl_lat && 0.0 === $gl_lng ) {
+                continue;
+            }
+
+            $coords = array(
+                'latitude'  => $gl_lat,
+                'longitude' => $gl_lng,
+                'source'    => 'googleLocations_search',
+            );
+
+            // Guardar en caché 2 horas (coordenadas de Google son muy estables)
+            set_transient( $cache_key, $coords, 2 * HOUR_IN_SECONDS );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[OY Location] geocode_via_google_locations_search — OK: lat=%s, lng=%s (fuente: %s) para "%s"',
+                    $gl_lat,
+                    $gl_lng,
+                    isset( $gl['location']['name'] ) ? (string) $gl['location']['name'] : 'unknown',
+                    $cache_raw
+                ) );
+            }
+
+            return $coords;
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] geocode_via_google_locations_search — resultados sin latlng válido para: ' . $cache_raw );
+        }
+
+        return null;
     }
 
 }
