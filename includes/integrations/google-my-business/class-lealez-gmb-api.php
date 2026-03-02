@@ -2562,146 +2562,183 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
 
 
 
-    /**
-     * ✅ Geocodificar una dirección usando Nominatim (OpenStreetMap) como fallback gratuito.
+/**
+     * ✅ Geocodificar una dirección usando Nominatim (OpenStreetMap) con multi-intento.
      *
-     * Se usa cuando la Business Information API v1 no retorna el campo `latlng` porque
-     * las coordenadas fueron auto-detectadas por Google (no establecidas manualmente).
-     * Nominatim no requiere API key y está disponible de forma pública.
+     * Problemas conocidos con el approach anterior (parámetro `q` único):
+     * - El formato colombiano "Carrera 54 #46-17" no lo entiende Nominatim con `q`.
+     * - Nominatim ignora el `#` o retorna 0 resultados para nomenclaturas latinas.
      *
-     * Términos de uso Nominatim: máx. 1 req/seg, User-Agent obligatorio.
-     * Ref: https://nominatim.org/release-docs/latest/api/Search/
+     * Solución: usar la API ESTRUCTURADA de Nominatim (street + city + country separados).
+     * Ref: https://nominatim.org/release-docs/latest/api/Search/#structured-query
      *
-     * @param array $address_data Array en formato PostalAddress de Google:
+     * Estrategia de intentos:
+     *   1. Nominatim estructurado: calle (limpia) + ciudad + país
+     *   2. Nominatim estructurado: ciudad + estado + país (sin calle — más permisivo)
+     *
+     * @param array $address_data PostalAddress de Google:
      *                            ['addressLines' => [...], 'locality' => ..., 'regionCode' => ...]
-     *
-     * @return array|null Array ['latitude' => float, 'longitude' => float] o null si falla.
+     * @return array|null ['latitude' => float, 'longitude' => float, 'source' => string] o null.
      */
     public static function geocode_address_fallback( array $address_data ) {
         if ( empty( $address_data ) ) {
             return null;
         }
 
-        // ── Construir query de dirección desde PostalAddress ──────────────────────
-        $parts = array();
-
-        // Líneas de dirección (calle, número, etc.)
+        // ── Extraer componentes de PostalAddress ──────────────────────────────────
+        $raw_street = '';
         if ( ! empty( $address_data['addressLines'] ) && is_array( $address_data['addressLines'] ) ) {
-            foreach ( $address_data['addressLines'] as $line ) {
-                $line = trim( (string) $line );
-                if ( '' !== $line ) {
-                    $parts[] = $line;
-                }
-            }
+            $raw_street = trim( (string) ( $address_data['addressLines'][0] ?? '' ) );
         }
 
-        // Ciudad
-        if ( ! empty( $address_data['locality'] ) ) {
-            $parts[] = trim( (string) $address_data['locality'] );
-        }
+        $city    = trim( (string) ( $address_data['locality']           ?? '' ) );
+        $state   = trim( (string) ( $address_data['administrativeArea'] ?? '' ) );
+        $country = strtoupper( trim( (string) ( $address_data['regionCode'] ?? '' ) ) );
+        $postal  = trim( (string) ( $address_data['postalCode']         ?? '' ) );
 
-        // Estado / Departamento
-        if ( ! empty( $address_data['administrativeArea'] ) ) {
-            $parts[] = trim( (string) $address_data['administrativeArea'] );
-        }
-
-        // Código postal
-        if ( ! empty( $address_data['postalCode'] ) ) {
-            $parts[] = trim( (string) $address_data['postalCode'] );
-        }
-
-        // País (regionCode ISO-2: CO, MX, US, etc.)
-        if ( ! empty( $address_data['regionCode'] ) ) {
-            $parts[] = trim( (string) $address_data['regionCode'] );
-        }
-
-        // Filtrar vacíos y armar string
-        $parts    = array_filter( $parts );
-        $q_string = implode( ', ', $parts );
-
-        if ( '' === $q_string ) {
+        // Mínimo requerido: ciudad + país
+        if ( '' === $city || '' === $country ) {
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] geocode_address_fallback — dirección vacía, no se puede geocodificar.' );
+                error_log( '[OY Location] geocode_address_fallback — faltan ciudad y/o país, no se puede geocodificar.' );
             }
             return null;
         }
 
-        // ── Verificar transient cache (1 hora) ────────────────────────────────────
-        $cache_key = 'lealez_geo_' . md5( strtolower( $q_string ) );
-        $cached    = get_transient( $cache_key );
+        // ── Limpiar calle para formato colombiano/latinoamericano ─────────────────
+        // "Carrera 54 #46-17" → "Carrera 54 46-17"  (Nominatim no entiende el #)
+        $clean_street = preg_replace( '/\s*#\s*/', ' ', $raw_street );
+        $clean_street = preg_replace( '/\s{2,}/', ' ', $clean_street );
+        $clean_street = trim( $clean_street );
+
+        // ── Cache key (usa prefijo geo2_ para no colisionar con caché viejo de geo_) ──
+        $cache_raw = implode( '|', array_filter( array( $clean_street, $city, $state, $country ) ) );
+        $cache_key = 'lealez_geo2_' . md5( strtolower( $cache_raw ) );
+
+        $cached = get_transient( $cache_key );
         if ( is_array( $cached ) && isset( $cached['latitude'], $cached['longitude'] ) ) {
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] geocode_address_fallback — resultado desde caché para: ' . $q_string );
+                error_log( '[OY Location] geocode_address_fallback — resultado desde caché (geo2) para: ' . $cache_raw );
             }
             return $cached;
         }
 
-        // ── Llamar a Nominatim ────────────────────────────────────────────────────
-        $nominatim_url = add_query_arg(
-            array(
-                'q'              => $q_string,
-                'format'         => 'json',
-                'limit'          => 1,
-                'addressdetails' => 0,
-            ),
-            'https://nominatim.openstreetmap.org/search'
+        $nominatim_base    = 'https://nominatim.openstreetmap.org/search';
+        $nominatim_headers = array(
+            'User-Agent' => 'Lealez-WP-Plugin/1.0 (WordPress loyalty plugin; admin@lealez.app)',
         );
 
-        $response = wp_remote_get(
-            $nominatim_url,
-            array(
-                'timeout' => 10,
-                'headers' => array(
-                    // Nominatim requiere User-Agent identificable (política de uso)
-                    'User-Agent' => 'Lealez-WP-Plugin/1.0 (WordPress loyalty plugin; contact@lealez.app)',
-                ),
-            )
-        );
+        // ── Intento 1: Nominatim ESTRUCTURADO — calle + ciudad + país ─────────────
+        // Usar parámetros separados en vez de `q` es mucho más confiable para
+        // nomenclaturas latinoamericanas (Carrera, Calle, Avenida, etc.).
+        if ( '' !== $clean_street ) {
+            $params1 = array_filter( array(
+                'street'     => $clean_street,
+                'city'       => $city,
+                'state'      => $state,
+                'country'    => $country,
+                'postalcode' => $postal,
+                'format'     => 'json',
+                'limit'      => '1',
+            ) );
 
+            $resp1  = wp_remote_get(
+                add_query_arg( $params1, $nominatim_base ),
+                array( 'timeout' => 10, 'headers' => $nominatim_headers )
+            );
+            $coords = self::_parse_nominatim_response( $resp1, 'nominatim_structured_street', $cache_key );
+            if ( $coords ) {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( sprintf(
+                        '[OY Location] geocode_address_fallback — Intento 1 OK (nominatim_structured_street): lat=%s, lng=%s para "%s"',
+                        $coords['latitude'], $coords['longitude'], $cache_raw
+                    ) );
+                }
+                return $coords;
+            }
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_address_fallback — Intento 1 sin resultados para: ' . $clean_street . ', ' . $city . ', ' . $country );
+            }
+        }
+
+        // ── Intento 2: Nominatim ESTRUCTURADO — solo ciudad + estado + país ────────
+        // Omitimos la calle para ser más permisivos. Retorna el centroide de la ciudad.
+        // Útil cuando la calle no está en OSM o el formato no es reconocible.
+        $params2 = array_filter( array(
+            'city'    => $city,
+            'state'   => $state,
+            'country' => $country,
+            'format'  => 'json',
+            'limit'   => '1',
+        ) );
+
+        $resp2  = wp_remote_get(
+            add_query_arg( $params2, $nominatim_base ),
+            array( 'timeout' => 10, 'headers' => $nominatim_headers )
+        );
+        $coords = self::_parse_nominatim_response( $resp2, 'nominatim_structured_city', $cache_key );
+        if ( $coords ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[OY Location] geocode_address_fallback — Intento 2 OK (nominatim_structured_city): lat=%s, lng=%s para "%s, %s"',
+                    $coords['latitude'], $coords['longitude'], $city, $country
+                ) );
+            }
+            return $coords;
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] geocode_address_fallback — todos los intentos fallaron para: ' . $cache_raw );
+        }
+
+        return null;
+    }
+
+    /**
+     * Helper: parsear respuesta de Nominatim y devolver array de coords o null.
+     *
+     * @param array|WP_Error $response     Respuesta de wp_remote_get().
+     * @param string         $source_label Etiqueta de fuente para debug.
+     * @param string         $cache_key    Clave de transient para guardar resultado exitoso.
+     *
+     * @return array|null ['latitude', 'longitude', 'source'] o null si no hay resultado.
+     */
+    private static function _parse_nominatim_response( $response, $source_label, $cache_key ) {
         if ( is_wp_error( $response ) ) {
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] geocode_address_fallback — error HTTP Nominatim: ' . $response->get_error_message() );
+                error_log( '[OY Location] _parse_nominatim_response (' . $source_label . ') — WP_Error: ' . $response->get_error_message() );
             }
             return null;
         }
 
-        $http_code = wp_remote_retrieve_response_code( $response );
-        $body      = wp_remote_retrieve_body( $response );
-        $data      = json_decode( $body, true );
-
-        if ( 200 !== (int) $http_code || ! is_array( $data ) || empty( $data ) ) {
+        $http_code = (int) wp_remote_retrieve_response_code( $response );
+        if ( 200 !== $http_code ) {
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] geocode_address_fallback — Nominatim HTTP ' . $http_code . ', respuesta vacía/inválida para: ' . $q_string );
+                error_log( '[OY Location] _parse_nominatim_response (' . $source_label . ') — HTTP ' . $http_code );
             }
             return null;
+        }
+
+        $data = json_decode( wp_remote_retrieve_body( $response ), true );
+
+        if ( ! is_array( $data ) || empty( $data ) ) {
+            return null;  // Array vacío = sin resultados, no se loguea individualmente
         }
 
         $first = $data[0];
 
         if ( empty( $first['lat'] ) || empty( $first['lon'] ) ) {
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] geocode_address_fallback — Nominatim no retornó lat/lon para: ' . $q_string );
-            }
             return null;
         }
 
         $result = array(
             'latitude'  => (float) $first['lat'],
             'longitude' => (float) $first['lon'],
-            'source'    => 'nominatim',   // marca de origen para debug
+            'source'    => $source_label,
         );
 
-        // ── Guardar en caché 1 hora ───────────────────────────────────────────────
+        // Guardar en transient (1 hora)
         set_transient( $cache_key, $result, HOUR_IN_SECONDS );
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( sprintf(
-                '[OY Location] geocode_address_fallback — coords obtenidas: lat=%s, lng=%s para "%s"',
-                $result['latitude'],
-                $result['longitude'],
-                $q_string
-            ) );
-        }
 
         return $result;
     }
