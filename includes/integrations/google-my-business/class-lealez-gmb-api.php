@@ -2048,24 +2048,32 @@ public static function sync_location_data( $business_id, $location_name ) {
                 || ! isset( $result['latlng']['latitude'] )
                 || ! isset( $result['latlng']['longitude'] );
 
-            if ( $latlng_missing ) {
-                $latlng_query = array( 'readMask' => 'name,latlng' );
+if ( $latlng_missing ) {
+                // ── Intento 1: llamada dedicada readMask=name,latlng ─────────────────────
+                // La Business Information API v1 SOLO retorna latlng cuando fue establecido
+                // manualmente por el negocio. Para coordenadas auto-detectadas el campo viene
+                // vacío o ausente aunque el negocio sí tenga coordenadas en Google Maps.
+                $latlng_query  = array( 'readMask' => 'name,latlng' );
                 $latlng_result = self::make_request(
                     $business_id,
                     $endpoint,
                     self::$business_api_base,
                     'GET',
                     array(),
-                    false, // no cache: necesitamos dato fresco
+                    false,   // no cache: necesitamos dato fresco
                     $latlng_query
                 );
-                if ( ! is_wp_error( $latlng_result )
+
+                if (
+                    ! is_wp_error( $latlng_result )
                     && isset( $latlng_result['latlng'] )
                     && is_array( $latlng_result['latlng'] )
                     && isset( $latlng_result['latlng']['latitude'] )
                     && isset( $latlng_result['latlng']['longitude'] )
+                    && ( (float) $latlng_result['latlng']['latitude'] !== 0.0 || (float) $latlng_result['latlng']['longitude'] !== 0.0 )
                 ) {
                     $result['latlng'] = $latlng_result['latlng'];
+
                     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                         Lealez_GMB_Logger::log(
                             $business_id,
@@ -2079,7 +2087,36 @@ public static function sync_location_data( $business_id, $location_name ) {
                     }
                 } else {
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] sync_location_data — latlng dedicated call failed or returned no coords for: ' . $location_name );
+                        error_log( '[OY Location] sync_location_data — latlng dedicated call vacío/fallido para: ' . $location_name . '. Intentando geocoding desde dirección.' );
+                    }
+
+                    // ── Intento 2: geocoding desde storefrontAddress (Nominatim) ──────────
+                    // La API de Business Information v1 no expone coordenadas auto-detectadas
+                    // vía el campo latlng. Como fallback usamos Nominatim (OpenStreetMap),
+                    // que es gratuito y no requiere API key.
+                    // Condición: que la respuesta tenga storefrontAddress para construir la query.
+                    if ( ! empty( $result['storefrontAddress'] ) && is_array( $result['storefrontAddress'] ) ) {
+                        $geocoded = self::geocode_address_fallback( $result['storefrontAddress'] );
+
+                        if ( $geocoded ) {
+                            $result['latlng'] = $geocoded;
+
+                            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                                Lealez_GMB_Logger::log(
+                                    $business_id,
+                                    'info',
+                                    'LatLng obtenido via geocoding Nominatim (fallback).',
+                                    array(
+                                        'location' => $location_name,
+                                        'latlng'   => $geocoded,
+                                    )
+                                );
+                            }
+                        } else {
+                            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                                error_log( '[OY Location] sync_location_data — geocoding Nominatim también falló para: ' . $location_name );
+                            }
+                        }
                     }
                 }
             }
@@ -2524,6 +2561,150 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
 }
 
 
+
+    /**
+     * ✅ Geocodificar una dirección usando Nominatim (OpenStreetMap) como fallback gratuito.
+     *
+     * Se usa cuando la Business Information API v1 no retorna el campo `latlng` porque
+     * las coordenadas fueron auto-detectadas por Google (no establecidas manualmente).
+     * Nominatim no requiere API key y está disponible de forma pública.
+     *
+     * Términos de uso Nominatim: máx. 1 req/seg, User-Agent obligatorio.
+     * Ref: https://nominatim.org/release-docs/latest/api/Search/
+     *
+     * @param array $address_data Array en formato PostalAddress de Google:
+     *                            ['addressLines' => [...], 'locality' => ..., 'regionCode' => ...]
+     *
+     * @return array|null Array ['latitude' => float, 'longitude' => float] o null si falla.
+     */
+    public static function geocode_address_fallback( array $address_data ) {
+        if ( empty( $address_data ) ) {
+            return null;
+        }
+
+        // ── Construir query de dirección desde PostalAddress ──────────────────────
+        $parts = array();
+
+        // Líneas de dirección (calle, número, etc.)
+        if ( ! empty( $address_data['addressLines'] ) && is_array( $address_data['addressLines'] ) ) {
+            foreach ( $address_data['addressLines'] as $line ) {
+                $line = trim( (string) $line );
+                if ( '' !== $line ) {
+                    $parts[] = $line;
+                }
+            }
+        }
+
+        // Ciudad
+        if ( ! empty( $address_data['locality'] ) ) {
+            $parts[] = trim( (string) $address_data['locality'] );
+        }
+
+        // Estado / Departamento
+        if ( ! empty( $address_data['administrativeArea'] ) ) {
+            $parts[] = trim( (string) $address_data['administrativeArea'] );
+        }
+
+        // Código postal
+        if ( ! empty( $address_data['postalCode'] ) ) {
+            $parts[] = trim( (string) $address_data['postalCode'] );
+        }
+
+        // País (regionCode ISO-2: CO, MX, US, etc.)
+        if ( ! empty( $address_data['regionCode'] ) ) {
+            $parts[] = trim( (string) $address_data['regionCode'] );
+        }
+
+        // Filtrar vacíos y armar string
+        $parts    = array_filter( $parts );
+        $q_string = implode( ', ', $parts );
+
+        if ( '' === $q_string ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_address_fallback — dirección vacía, no se puede geocodificar.' );
+            }
+            return null;
+        }
+
+        // ── Verificar transient cache (1 hora) ────────────────────────────────────
+        $cache_key = 'lealez_geo_' . md5( strtolower( $q_string ) );
+        $cached    = get_transient( $cache_key );
+        if ( is_array( $cached ) && isset( $cached['latitude'], $cached['longitude'] ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_address_fallback — resultado desde caché para: ' . $q_string );
+            }
+            return $cached;
+        }
+
+        // ── Llamar a Nominatim ────────────────────────────────────────────────────
+        $nominatim_url = add_query_arg(
+            array(
+                'q'              => $q_string,
+                'format'         => 'json',
+                'limit'          => 1,
+                'addressdetails' => 0,
+            ),
+            'https://nominatim.openstreetmap.org/search'
+        );
+
+        $response = wp_remote_get(
+            $nominatim_url,
+            array(
+                'timeout' => 10,
+                'headers' => array(
+                    // Nominatim requiere User-Agent identificable (política de uso)
+                    'User-Agent' => 'Lealez-WP-Plugin/1.0 (WordPress loyalty plugin; contact@lealez.app)',
+                ),
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_address_fallback — error HTTP Nominatim: ' . $response->get_error_message() );
+            }
+            return null;
+        }
+
+        $http_code = wp_remote_retrieve_response_code( $response );
+        $body      = wp_remote_retrieve_body( $response );
+        $data      = json_decode( $body, true );
+
+        if ( 200 !== (int) $http_code || ! is_array( $data ) || empty( $data ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_address_fallback — Nominatim HTTP ' . $http_code . ', respuesta vacía/inválida para: ' . $q_string );
+            }
+            return null;
+        }
+
+        $first = $data[0];
+
+        if ( empty( $first['lat'] ) || empty( $first['lon'] ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] geocode_address_fallback — Nominatim no retornó lat/lon para: ' . $q_string );
+            }
+            return null;
+        }
+
+        $result = array(
+            'latitude'  => (float) $first['lat'],
+            'longitude' => (float) $first['lon'],
+            'source'    => 'nominatim',   // marca de origen para debug
+        );
+
+        // ── Guardar en caché 1 hora ───────────────────────────────────────────────
+        set_transient( $cache_key, $result, HOUR_IN_SECONDS );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY Location] geocode_address_fallback — coords obtenidas: lat=%s, lng=%s para "%s"',
+                $result['latitude'],
+                $result['longitude'],
+                $q_string
+            ) );
+        }
+
+        return $result;
+    }
 
 }
 
