@@ -138,12 +138,15 @@ if ( ! class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
                 )
             );
 
-            // CSS inline pequeño para el metabox
-            wp_add_inline_style(
-                'wp-admin',
-                $this->get_inline_styles()
-            );
-        }
+// ✅ CSS inline: usar un handle real registrado por el plugin (evita deprecated warnings)
+$css_handle = 'oy-location-gmb-more-inline';
+wp_register_style( $css_handle, false, array(), $version );
+wp_enqueue_style( $css_handle );
+
+wp_add_inline_style(
+    $css_handle,
+    $this->get_inline_styles()
+);
 
         // =========================================================================
         // RENDER
@@ -162,11 +165,23 @@ if ( ! class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
             $parent_business_id = (int) get_post_meta( $post_id, 'parent_business_id', true );
             $gmb_location_name  = (string) get_post_meta( $post_id, 'gmb_location_name', true );
 
-            // ── Valores actuales desde sincronización previa ──────────────────────
-            $raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
-            if ( ! is_array( $raw_attributes ) ) {
-                $raw_attributes = array();
-            }
+$raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
+
+/**
+ * ✅ ROBUSTEZ:
+ * - puede venir como array (ideal)
+ * - puede venir como JSON string (por cómo se guardó en otro flujo)
+ */
+if ( is_string( $raw_attributes ) && '' !== trim( $raw_attributes ) ) {
+    $decoded_raw = json_decode( $raw_attributes, true );
+    if ( is_array( $decoded_raw ) ) {
+        $raw_attributes = $decoded_raw;
+    }
+}
+
+if ( ! is_array( $raw_attributes ) ) {
+    $raw_attributes = array();
+}
 
             // ── Sobreescrituras manuales guardadas en Lealez (no enviadas aún) ───
             $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
@@ -759,42 +774,53 @@ if ( ! class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
          * @param string $location_name
          * @return array
          */
-        private function get_cached_attribute_metadata( $post_id, $business_id, $location_name ) {
-            if ( ! $business_id || ! $location_name ) {
-                return array();
-            }
+private function get_cached_attribute_metadata( $post_id, $business_id, $location_name ) {
+    if ( ! $business_id || ! $location_name ) {
+        return array();
+    }
 
-            $last_fetch = (int) get_post_meta( $post_id, '_gmb_attrs_metadata_last_fetch', true );
-            $cached_raw = get_post_meta( $post_id, '_gmb_attrs_metadata', true );
+    $last_fetch = (int) get_post_meta( $post_id, '_gmb_attrs_metadata_last_fetch', true );
+    $cached_raw = get_post_meta( $post_id, '_gmb_attrs_metadata', true );
 
-            // Si el caché es válido y tenemos datos, usarlos
-            if (
-                $last_fetch > 0 &&
-                ( time() - $last_fetch ) < self::METADATA_CACHE_TTL &&
-                ! empty( $cached_raw )
-            ) {
-                $decoded = json_decode( $cached_raw, true );
-                if ( is_array( $decoded ) && ! empty( $decoded ) ) {
-                    return $decoded;
-                }
-            }
+    /**
+     * ✅ ROBUSTEZ:
+     * - A veces WP puede tener este meta como ARRAY (no JSON string), por flows viejos o updates.
+     * - Si viene como array, lo usamos directo.
+     * - Si viene como string, intentamos json_decode.
+     */
+    $cached_decoded = array();
 
-            // Intentar fetch fresco
-            $metadata = $this->fetch_and_cache_attribute_metadata( $post_id, $business_id, $location_name, false );
-
-            if ( is_wp_error( $metadata ) || ! is_array( $metadata ) ) {
-                // Devolver caché anterior aunque sea viejo antes de devolver vacío
-                if ( ! empty( $cached_raw ) ) {
-                    $decoded = json_decode( $cached_raw, true );
-                    if ( is_array( $decoded ) ) {
-                        return $decoded;
-                    }
-                }
-                return array();
-            }
-
-            return $metadata;
+    if ( is_array( $cached_raw ) ) {
+        $cached_decoded = $cached_raw;
+    } elseif ( is_string( $cached_raw ) && '' !== trim( $cached_raw ) ) {
+        $tmp = json_decode( $cached_raw, true );
+        if ( is_array( $tmp ) ) {
+            $cached_decoded = $tmp;
         }
+    }
+
+    // 1) Si el caché está vigente y tiene datos, usarlo
+    if (
+        $last_fetch > 0 &&
+        ( time() - $last_fetch ) < self::METADATA_CACHE_TTL &&
+        ! empty( $cached_decoded )
+    ) {
+        return $cached_decoded;
+    }
+
+    // 2) Si está vencido o vacío, intentar fetch fresco
+    $metadata = $this->fetch_and_cache_attribute_metadata( $post_id, $business_id, $location_name, false );
+
+    if ( is_wp_error( $metadata ) || ! is_array( $metadata ) || empty( $metadata ) ) {
+        // 3) Si falla el fetch, devolver caché previo aunque sea viejo (si existe)
+        if ( ! empty( $cached_decoded ) ) {
+            return $cached_decoded;
+        }
+        return array();
+    }
+
+    return $metadata;
+}
 
         /**
          * Fetcha los metadatos desde la API y los guarda en post_meta.
@@ -939,16 +965,44 @@ if ( ! class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
          * @param array $attr_meta
          * @return string
          */
-        private function extract_attr_id_from_meta( $attr_meta ) {
-            if ( ! empty( $attr_meta['attributeId'] ) ) {
-                return sanitize_key( (string) $attr_meta['attributeId'] );
-            }
-            if ( ! empty( $attr_meta['name'] ) ) {
-                $parts = explode( '/', (string) $attr_meta['name'] );
-                return sanitize_key( end( $parts ) );
-            }
-            return '';
+private function extract_attr_id_from_meta( $attr_meta ) {
+    // 1) attributeId directo
+    if ( ! empty( $attr_meta['attributeId'] ) ) {
+        $raw = (string) $attr_meta['attributeId'];
+
+        // Si viene como "attributes/url_instagram" o "locations/.../attributes/url_instagram"
+        if ( false !== strpos( $raw, '/attributes/' ) ) {
+            $parts = explode( '/attributes/', $raw, 2 );
+            $raw   = $parts[1] ?? $raw;
+        } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+            $raw = substr( $raw, strlen( 'attributes/' ) );
         }
+
+        $raw = trim( $raw, '/' );
+        return sanitize_key( $raw );
+    }
+
+    // 2) derivar desde name
+    if ( ! empty( $attr_meta['name'] ) ) {
+        $raw = (string) $attr_meta['name'];
+
+        if ( false !== strpos( $raw, '/attributes/' ) ) {
+            $parts = explode( '/attributes/', $raw, 2 );
+            $raw   = $parts[1] ?? '';
+        } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+            $raw = substr( $raw, strlen( 'attributes/' ) );
+        } else {
+            // fallback: último segmento
+            $chunks = explode( '/', $raw );
+            $raw    = end( $chunks );
+        }
+
+        $raw = trim( (string) $raw, '/' );
+        return sanitize_key( $raw );
+    }
+
+    return '';
+}
 
         /**
          * Convierte overrides al formato de payload para la GMB API PATCH.
