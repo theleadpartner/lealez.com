@@ -56,22 +56,25 @@ if ( ! class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
         /**
          * Constructor: registra hooks.
          */
-        public function __construct() {
-            // Registrar el metabox en la pantalla de edición de oy_location
-            add_action( 'add_meta_boxes_oy_location', array( $this, 'register_metabox' ), 25, 1 );
+public function __construct() {
+    // Registrar el metabox en la pantalla de edición de oy_location
+    add_action( 'add_meta_boxes_oy_location', array( $this, 'register_metabox' ), 25, 1 );
 
-            // Encolar scripts/estilos solo en la pantalla correcta
-            add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
+    // Encolar scripts/estilos solo en la pantalla correcta
+    add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
 
-            // Guardar cuando WordPress hace save_post
-            add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 15, 2 );
+    // Guardar cuando WordPress hace save_post
+    add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 15, 2 );
 
-            // AJAX: refrescar metadatos desde la API de Google
-            add_action( 'wp_ajax_oy_gmb_more_refresh_metadata', array( $this, 'ajax_refresh_metadata' ) );
+    // AJAX: refrescar metadatos desde la API de Google
+    add_action( 'wp_ajax_oy_gmb_more_refresh_metadata', array( $this, 'ajax_refresh_metadata' ) );
 
-            // AJAX: enviar atributos editados a la API de Google
-            add_action( 'wp_ajax_oy_gmb_more_push_to_gmb', array( $this, 'ajax_push_to_gmb' ) );
-        }
+    // ✅ AJAX: renderizar (pintar) los atributos en la UI del metabox sin llamar a Google
+    add_action( 'wp_ajax_oy_gmb_more_render_attributes', array( $this, 'ajax_render_attributes' ) );
+
+    // AJAX: enviar atributos editados a la API de Google
+    add_action( 'wp_ajax_oy_gmb_more_push_to_gmb', array( $this, 'ajax_push_to_gmb' ) );
+}
 
         // =========================================================================
         // REGISTRO Y SCRIPTS
@@ -128,13 +131,20 @@ public function enqueue_scripts( $hook ) {
             'nonce'   => wp_create_nonce( self::NONCE_AJAX_ACTION ),
             'postId'  => $post->ID,
             'i18n'    => array(
-                'refreshing'   => __( 'Actualizando metadatos...', 'lealez' ),
-                'refreshDone'  => __( 'Metadatos actualizados.', 'lealez' ),
-                'refreshError' => __( 'Error al actualizar metadatos.', 'lealez' ),
-                'pushing'      => __( 'Enviando a Google...', 'lealez' ),
-                'pushDone'     => __( 'Atributos actualizados en Google Business Profile.', 'lealez' ),
-                'pushError'    => __( 'Error al enviar a Google.', 'lealez' ),
-                'confirmPush'  => __( '¿Enviar los cambios directamente a Google Business Profile?', 'lealez' ),
+                'refreshing'     => __( 'Actualizando metadatos...', 'lealez' ),
+                'refreshDone'    => __( 'Metadatos actualizados.', 'lealez' ),
+                'refreshError'   => __( 'Error al actualizar metadatos.', 'lealez' ),
+
+                // ✅ Nuevo: render UI
+                'rendering'      => __( 'Agregando atributos en la UI...', 'lealez' ),
+                'renderDone'     => __( 'Atributos agregados en la UI.', 'lealez' ),
+                'renderError'    => __( 'No se pudieron renderizar los atributos.', 'lealez' ),
+                'renderNeedMeta' => __( 'No hay metadatos cargados. Primero haz clic en "Actualizar metadatos".', 'lealez' ),
+
+                'pushing'        => __( 'Enviando a Google...', 'lealez' ),
+                'pushDone'       => __( 'Atributos actualizados en Google Business Profile.', 'lealez' ),
+                'pushError'      => __( 'Error al enviar a Google.', 'lealez' ),
+                'confirmPush'    => __( '¿Enviar los cambios directamente a Google Business Profile?', 'lealez' ),
             ),
         )
     );
@@ -156,149 +166,164 @@ public function enqueue_scripts( $hook ) {
          *
          * @param WP_Post $post Post de oy_location.
          */
-        public function render_metabox( $post ) {
-            // Nonce para el guardado del formulario
-            wp_nonce_field( self::NONCE_SAVE_ACTION, '_oy_gmb_more_nonce' );
+public function render_metabox( $post ) {
+    // Nonce para el guardado del formulario
+    wp_nonce_field( self::NONCE_SAVE_ACTION, '_oy_gmb_more_nonce' );
 
-            $post_id            = (int) $post->ID;
-            $parent_business_id = (int) get_post_meta( $post_id, 'parent_business_id', true );
-            $gmb_location_name  = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+    $post_id            = (int) $post->ID;
+    $parent_business_id = (int) get_post_meta( $post_id, 'parent_business_id', true );
+    $gmb_location_name  = (string) get_post_meta( $post_id, 'gmb_location_name', true );
 
-$raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
+    $raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
 
-/**
- * ✅ ROBUSTEZ:
- * - puede venir como array (ideal)
- * - puede venir como JSON string (por cómo se guardó en otro flujo)
- */
-if ( is_string( $raw_attributes ) && '' !== trim( $raw_attributes ) ) {
-    $decoded_raw = json_decode( $raw_attributes, true );
-    if ( is_array( $decoded_raw ) ) {
-        $raw_attributes = $decoded_raw;
-    }
-}
-
-if ( ! is_array( $raw_attributes ) ) {
-    $raw_attributes = array();
-}
-
-            // ── Sobreescrituras manuales guardadas en Lealez (no enviadas aún) ───
-            $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
-            $overrides      = array();
-            if ( ! empty( $overrides_json ) ) {
-                $decoded = json_decode( $overrides_json, true );
-                if ( is_array( $decoded ) ) {
-                    $overrides = $decoded;
-                }
-            }
-
-            // ── Metadatos de atributos disponibles (con caché de 24 h) ──────────
-            $metadata = $this->get_cached_attribute_metadata( $post_id, $parent_business_id, $gmb_location_name );
-
-            // ── Construir un mapa de valores actuales [attr_id => value] ─────────
-            $current_values = $this->build_current_values_map( $raw_attributes );
-
-            // Los overrides manuales tienen precedencia sobre los valores sincronizados
-            foreach ( $overrides as $attr_id => $val ) {
-                $current_values[ sanitize_text_field( $attr_id ) ] = $val;
-            }
-
-            $has_gmb_connection = ! empty( $gmb_location_name ) && ! empty( $parent_business_id );
-            $has_metadata       = ! empty( $metadata );
-
-            ?>
-            <div class="oy-gmb-more-wrapper" id="oy-gmb-more-metabox-<?php echo esc_attr( $post_id ); ?>">
-
-                <?php // ── Barra de herramientas ──────────────────────────────────── ?>
-                <div class="oy-gmb-more-toolbar">
-                    <span class="oy-gmb-more-toolbar-info">
-                        <?php if ( $has_gmb_connection ) : ?>
-                            <span class="dashicons dashicons-yes-alt" style="color:#46b450;"></span>
-                            <?php esc_html_e( 'Ubicación conectada a Google Business Profile.', 'lealez' ); ?>
-                        <?php else : ?>
-                            <span class="dashicons dashicons-warning" style="color:#dba617;"></span>
-                            <?php esc_html_e( 'Ubica y conecta esta location con GMB para ver los atributos disponibles.', 'lealez' ); ?>
-                        <?php endif; ?>
-                    </span>
-
-                    <span class="oy-gmb-more-toolbar-actions">
-                        <?php if ( $has_gmb_connection ) : ?>
-                            <button type="button"
-                                    class="button button-secondary oy-gmb-more-btn-refresh"
-                                    data-post-id="<?php echo esc_attr( $post_id ); ?>">
-                                <span class="dashicons dashicons-update" style="margin-top:3px;"></span>
-                                <?php esc_html_e( 'Actualizar metadatos', 'lealez' ); ?>
-                            </button>
-                            <button type="button"
-                                    class="button button-primary oy-gmb-more-btn-push"
-                                    data-post-id="<?php echo esc_attr( $post_id ); ?>"
-                                    <?php disabled( ! $has_metadata ); ?>>
-                                <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
-                                <?php esc_html_e( 'Enviar a Google ↑', 'lealez' ); ?>
-                            </button>
-                        <?php endif; ?>
-                    </span>
-                </div>
-
-                <div class="oy-gmb-more-notice" id="oy-gmb-more-notice-<?php echo esc_attr( $post_id ); ?>" style="display:none;"></div>
-
-                <?php // ── Contenido principal ─────────────────────────────────────── ?>
-                <div class="oy-gmb-more-content" id="oy-gmb-more-content-<?php echo esc_attr( $post_id ); ?>">
-                    <?php
-                    if ( ! $has_gmb_connection ) {
-                        echo '<p class="description">' .
-                             esc_html__( 'Conecta esta ubicación con Google My Business para gestionar sus atributos.', 'lealez' ) .
-                             '</p>';
-                    } elseif ( ! $has_metadata ) {
-                        // Sin metadatos: mostrar solo los valores RAW disponibles + botón de refresh
-                        echo '<p class="description">' .
-                             esc_html__( 'Los metadatos de atributos aún no se han cargado. Haz clic en "Actualizar metadatos" para obtenerlos desde Google, o sincroniza la ubicación desde GMB.', 'lealez' ) .
-                             '</p>';
-
-                        // Si hay valores RAW, mostrarlos de todas formas
-                        if ( ! empty( $current_values ) ) {
-                            echo '<details style="margin-top:10px;">';
-                            echo '<summary><strong>' . esc_html__( 'Valores RAW disponibles', 'lealez' ) . ' (' . count( $current_values ) . ')</strong></summary>';
-                            echo '<div style="margin-top:8px; padding:8px; background:#f9f9f9; border:1px solid #ddd;">';
-                            foreach ( $current_values as $attr_id => $val ) {
-                                $display_val = is_bool( $val ) ? ( $val ? 'Sí' : 'No' ) : ( is_array( $val ) ? implode( ', ', $val ) : esc_html( (string) $val ) );
-                                echo '<div style="margin-bottom:4px;"><code>' . esc_html( $attr_id ) . '</code>: <strong>' . esc_html( $display_val ) . '</strong></div>';
-                            }
-                            echo '</div></details>';
-                        }
-                    } else {
-                        // ── Renderizar por grupos ──────────────────────────────────────
-                        $this->render_attribute_groups( $metadata, $current_values, $post_id );
-                    }
-                    ?>
-                </div>
-
-                <?php // ── Meta de estado del caché ────────────────────────────────── ?>
-                <?php
-                $last_fetch = (int) get_post_meta( $post_id, '_gmb_attrs_metadata_last_fetch', true );
-                if ( $last_fetch ) :
-                    $age = human_time_diff( $last_fetch, time() );
-                ?>
-                <p class="description" style="margin-top:10px; font-size:11px; color:#888;">
-                    <?php
-                    printf(
-                        /* translators: %s: human time diff */
-                        esc_html__( 'Metadatos cargados hace %s. Se actualizan automáticamente cada 24 h.', 'lealez' ),
-                        esc_html( $age )
-                    );
-                    ?>
-                </p>
-                <?php endif; ?>
-
-                <?php // ── Campo oculto con estado de overrides pendientes ──────────── ?>
-                <input type="hidden"
-                       name="oy_gmb_more_has_changes"
-                       id="oy_gmb_more_has_changes_<?php echo esc_attr( $post_id ); ?>"
-                       value="0" />
-
-            </div><!-- /.oy-gmb-more-wrapper -->
-            <?php
+    /**
+     * ✅ ROBUSTEZ:
+     * - puede venir como array (ideal)
+     * - puede venir como JSON string (por cómo se guardó en otro flujo)
+     */
+    if ( is_string( $raw_attributes ) && '' !== trim( $raw_attributes ) ) {
+        $decoded_raw = json_decode( $raw_attributes, true );
+        if ( is_array( $decoded_raw ) ) {
+            $raw_attributes = $decoded_raw;
         }
+    }
+
+    if ( ! is_array( $raw_attributes ) ) {
+        $raw_attributes = array();
+    }
+
+    // ── Sobreescrituras manuales guardadas en Lealez (no enviadas aún) ───
+    $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
+    $overrides      = array();
+    if ( ! empty( $overrides_json ) ) {
+        $decoded = json_decode( $overrides_json, true );
+        if ( is_array( $decoded ) ) {
+            $overrides = $decoded;
+        }
+    }
+
+    // ── Metadatos de atributos disponibles (con caché de 24 h) ──────────
+    $metadata = $this->get_cached_attribute_metadata( $post_id, $parent_business_id, $gmb_location_name );
+
+    // ── Construir un mapa de valores actuales [attr_id => value] ─────────
+    $current_values = $this->build_current_values_map( $raw_attributes );
+
+    // Los overrides manuales tienen precedencia sobre los valores sincronizados
+    foreach ( $overrides as $attr_id => $val ) {
+        $current_values[ sanitize_text_field( $attr_id ) ] = $val;
+    }
+
+    $has_gmb_connection = ! empty( $gmb_location_name ) && ! empty( $parent_business_id );
+    $has_metadata       = ! empty( $metadata );
+
+    ?>
+    <div class="oy-gmb-more-wrapper" id="oy-gmb-more-metabox-<?php echo esc_attr( $post_id ); ?>">
+
+        <?php // ── Barra de herramientas ──────────────────────────────────── ?>
+        <div class="oy-gmb-more-toolbar">
+            <span class="oy-gmb-more-toolbar-info">
+                <?php if ( $has_gmb_connection ) : ?>
+                    <span class="dashicons dashicons-yes-alt" style="color:#46b450;"></span>
+                    <?php esc_html_e( 'Ubicación conectada a Google Business Profile.', 'lealez' ); ?>
+                <?php else : ?>
+                    <span class="dashicons dashicons-warning" style="color:#dba617;"></span>
+                    <?php esc_html_e( 'Ubica y conecta esta location con GMB para ver los atributos disponibles.', 'lealez' ); ?>
+                <?php endif; ?>
+            </span>
+
+            <span class="oy-gmb-more-toolbar-actions">
+                <?php if ( $has_gmb_connection ) : ?>
+
+                    <button type="button"
+                            class="button button-secondary oy-gmb-more-btn-refresh"
+                            data-post-id="<?php echo esc_attr( $post_id ); ?>">
+                        <span class="dashicons dashicons-update" style="margin-top:3px;"></span>
+                        <?php esc_html_e( 'Actualizar metadatos', 'lealez' ); ?>
+                    </button>
+
+                    <?php
+                    // ✅ Nuevo botón: solo renderiza la UI en el metabox con lo que ya está guardado
+                    // Requiere metadata para poder agrupar, traducir displayName y elegir control (BOOL/ENUM/URL...)
+                    ?>
+                    <button type="button"
+                            class="button button-secondary oy-gmb-more-btn-render"
+                            data-post-id="<?php echo esc_attr( $post_id ); ?>"
+                            <?php disabled( ! $has_metadata ); ?>>
+                        <span class="dashicons dashicons-forms" style="margin-top:3px;"></span>
+                        <?php esc_html_e( 'Agregar los atributos', 'lealez' ); ?>
+                    </button>
+
+                    <button type="button"
+                            class="button button-primary oy-gmb-more-btn-push"
+                            data-post-id="<?php echo esc_attr( $post_id ); ?>"
+                            <?php disabled( ! $has_metadata ); ?>>
+                        <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
+                        <?php esc_html_e( 'Enviar a Google ↑', 'lealez' ); ?>
+                    </button>
+
+                <?php endif; ?>
+            </span>
+        </div>
+
+        <div class="oy-gmb-more-notice" id="oy-gmb-more-notice-<?php echo esc_attr( $post_id ); ?>" style="display:none;"></div>
+
+        <?php // ── Contenido principal ─────────────────────────────────────── ?>
+        <div class="oy-gmb-more-content" id="oy-gmb-more-content-<?php echo esc_attr( $post_id ); ?>">
+            <?php
+            if ( ! $has_gmb_connection ) {
+                echo '<p class="description">' .
+                        esc_html__( 'Conecta esta ubicación con Google My Business para gestionar sus atributos.', 'lealez' ) .
+                     '</p>';
+            } elseif ( ! $has_metadata ) {
+                // Sin metadatos: mostrar solo los valores RAW disponibles + botón de refresh
+                echo '<p class="description">' .
+                        esc_html__( 'Los metadatos de atributos aún no se han cargado. Haz clic en "Actualizar metadatos" para obtenerlos desde Google, o sincroniza la ubicación desde GMB.', 'lealez' ) .
+                     '</p>';
+
+                // Si hay valores RAW, mostrarlos de todas formas
+                if ( ! empty( $current_values ) ) {
+                    echo '<details style="margin-top:10px;">';
+                    echo '<summary><strong>' . esc_html__( 'Valores RAW disponibles', 'lealez' ) . ' (' . count( $current_values ) . ')</strong></summary>';
+                    echo '<div style="margin-top:8px; padding:8px; background:#f9f9f9; border:1px solid #ddd;">';
+                    foreach ( $current_values as $attr_id => $val ) {
+                        $display_val = is_bool( $val ) ? ( $val ? 'Sí' : 'No' ) : ( is_array( $val ) ? implode( ', ', $val ) : esc_html( (string) $val ) );
+                        echo '<div style="margin-bottom:4px;"><code>' . esc_html( $attr_id ) . '</code>: <strong>' . esc_html( $display_val ) . '</strong></div>';
+                    }
+                    echo '</div></details>';
+                }
+            } else {
+                // ── Renderizar por grupos ──────────────────────────────────────
+                $this->render_attribute_groups( $metadata, $current_values, $post_id );
+            }
+            ?>
+        </div>
+
+        <?php // ── Meta de estado del caché ────────────────────────────────── ?>
+        <?php
+        $last_fetch = (int) get_post_meta( $post_id, '_gmb_attrs_metadata_last_fetch', true );
+        if ( $last_fetch ) :
+            $age = human_time_diff( $last_fetch, time() );
+        ?>
+        <p class="description" style="margin-top:10px; font-size:11px; color:#888;">
+            <?php
+            printf(
+                /* translators: %s: human time diff */
+                esc_html__( 'Metadatos cargados hace %s. Se actualizan automáticamente cada 24 h.', 'lealez' ),
+                esc_html( $age )
+            );
+            ?>
+        </p>
+        <?php endif; ?>
+
+        <?php // ── Campo oculto con estado de overrides pendientes ──────────── ?>
+        <input type="hidden"
+               name="oy_gmb_more_has_changes"
+               id="oy_gmb_more_has_changes_<?php echo esc_attr( $post_id ); ?>"
+               value="0" />
+
+    </div><!-- /.oy-gmb-more-wrapper -->
+    <?php
+}
 
         /**
          * Renderiza los atributos agrupados por `groupDisplayName`.
@@ -680,6 +705,82 @@ if ( ! is_array( $raw_attributes ) ) {
                 'reload'         => true, // El JS recargará el metabox via wp_ajax o recargará la página
             ) );
         }
+
+
+
+        public function ajax_render_attributes() {
+    check_ajax_referer( self::NONCE_AJAX_ACTION, 'nonce' );
+
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Permisos insuficientes.', 'lealez' ) ) );
+        return;
+    }
+
+    $post_id = absint( $_POST['post_id'] ?? 0 );
+    if ( ! $post_id ) {
+        wp_send_json_error( array( 'message' => __( 'post_id inválido.', 'lealez' ) ) );
+        return;
+    }
+
+    $parent_business_id = (int) get_post_meta( $post_id, 'parent_business_id', true );
+    $gmb_location_name  = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+
+    if ( ! $parent_business_id || ! $gmb_location_name ) {
+        wp_send_json_error( array(
+            'message' => __( 'Esta location no tiene una conexión GMB configurada.', 'lealez' ),
+        ) );
+        return;
+    }
+
+    // 1) Leer RAW attributes (valores)
+    $raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
+
+    // Robustez: puede venir string JSON
+    if ( is_string( $raw_attributes ) && '' !== trim( $raw_attributes ) ) {
+        $decoded_raw = json_decode( $raw_attributes, true );
+        if ( is_array( $decoded_raw ) ) {
+            $raw_attributes = $decoded_raw;
+        }
+    }
+    if ( ! is_array( $raw_attributes ) ) {
+        $raw_attributes = array();
+    }
+
+    $current_values = $this->build_current_values_map( $raw_attributes );
+
+    // 2) Leer overrides (precedencia)
+    $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
+    $overrides      = array();
+    if ( ! empty( $overrides_json ) ) {
+        $decoded = json_decode( $overrides_json, true );
+        if ( is_array( $decoded ) ) {
+            $overrides = $decoded;
+        }
+    }
+    foreach ( $overrides as $attr_id => $val ) {
+        $current_values[ sanitize_text_field( $attr_id ) ] = $val;
+    }
+
+    // 3) Metadata cacheada (NO llamamos a Google aquí)
+    $metadata = $this->get_cached_attribute_metadata( $post_id, $parent_business_id, $gmb_location_name );
+
+    if ( empty( $metadata ) || ! is_array( $metadata ) ) {
+        wp_send_json_error( array(
+            'message' => __( 'No hay metadatos cacheados para renderizar. Primero haz clic en "Actualizar metadatos".', 'lealez' ),
+        ) );
+        return;
+    }
+
+    // 4) Renderizar HTML del contenido (grupos)
+    ob_start();
+    $this->render_attribute_groups( $metadata, $current_values, $post_id );
+    $html = ob_get_clean();
+
+    wp_send_json_success( array(
+        'message' => __( 'Atributos agregados/renderizados en la UI del metabox.', 'lealez' ),
+        'html'    => $html,
+    ) );
+}
 
         /**
          * AJAX: Envía los atributos editados directamente a Google Business Profile API.
