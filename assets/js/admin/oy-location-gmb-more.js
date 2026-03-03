@@ -1,29 +1,19 @@
 /**
  * OY Location - GMB "Más" Attributes Metabox JavaScript
  *
- * Maneja las interacciones del metabox de atributos dinámicos:
- * - Detectar cambios en campos y marcar el estado "modificado"
- * - Botón "Actualizar metadatos" → AJAX refresh y recarga de página
- * - Botón "Agregar los atributos" → AJAX render UI (sin llamar a Google) y pinta campos
- * - Botón "Enviar a Google ↑" → AJAX push a GMB API
- *
- * @package Lealez
- * @since 1.0.0
+ * - Botón "Actualizar metadatos" → AJAX refresh + reload
+ * - Botón "Agregar los atributos" → AJAX render UI (sin llamar a Google) + INSERT REAL
+ * - Botón "Enviar a Google ↑" → AJAX push
  */
 
 (function ($) {
     'use strict';
 
-    // Configuración inyectada por wp_localize_script
     var config = (typeof oyGmbMoreConfig !== 'undefined') ? oyGmbMoreConfig : {};
     var ajaxUrl = config.ajaxUrl || '';
     var nonce   = config.nonce   || '';
     var postId  = config.postId  || 0;
     var i18n    = config.i18n    || {};
-
-    // =========================================================================
-    // INIT
-    // =========================================================================
 
     $(document).ready(function () {
         if (!postId) return;
@@ -34,28 +24,15 @@
         initPushButton();
     });
 
-    // =========================================================================
-    // CHANGE TRACKING
-    // =========================================================================
-
-    /**
-     * Detecta cambios en cualquier campo del metabox y marca el estado.
-     */
     function initChangeTracking() {
         var wrapper = $('#oy-gmb-more-metabox-' + postId);
         if (!wrapper.length) return;
 
-        // Escuchar cambios en inputs, selects y textareas del metabox
         wrapper.on('change', '.oy-gmb-more-field-input', function () {
             markHasChanges(true);
         });
     }
 
-    /**
-     * Marca o desmarca el campo oculto de "tiene cambios pendientes".
-     *
-     * @param {boolean} hasChanges
-     */
     function markHasChanges(hasChanges) {
         $('#oy_gmb_more_has_changes_' + postId).val(hasChanges ? '1' : '0');
 
@@ -65,13 +42,6 @@
         }
     }
 
-    // =========================================================================
-    // REFRESH METADATA BUTTON
-    // =========================================================================
-
-    /**
-     * Inicializa el botón "Actualizar metadatos".
-     */
     function initRefreshButton() {
         $(document).on('click', '.oy-gmb-more-btn-refresh', function (e) {
             e.preventDefault();
@@ -102,8 +72,6 @@
 
                     if (response.success) {
                         showNotice('success', response.data.message || (i18n.refreshDone || 'Metadatos actualizados.'));
-
-                        // Si el servidor pide reload, recargar la página tras 1.5 s
                         if (response.data.reload) {
                             setTimeout(function () {
                                 window.location.reload();
@@ -125,12 +93,9 @@
         });
     }
 
-    // =========================================================================
-    // RENDER ATTRIBUTES BUTTON (NEW)
-    // =========================================================================
-
     /**
-     * Inicializa el botón "Agregar los atributos" (render UI sin llamar a Google).
+     * ✅ FIX: Insertar HTML relativo al botón para evitar fallos por re-render del DOM.
+     * Además, NO mostrar success si NO insertó realmente.
      */
     function initRenderButton() {
         $(document).on('click', '.oy-gmb-more-btn-render', function (e) {
@@ -141,6 +106,16 @@
                 if (btn.prop('disabled')) {
                     showNotice('error', i18n.renderNeedMeta || 'No hay metadatos cargados. Primero haz clic en "Actualizar metadatos".');
                 }
+                return;
+            }
+
+            // Encontrar el wrapper y el contenedor REAL a reemplazar
+            var wrapperEl = btn.closest('.oy-gmb-more-wrapper');
+            var contentEl = wrapperEl.find('.oy-gmb-more-content').first();
+
+            if (!wrapperEl.length || !contentEl.length) {
+                showNotice('error', 'No se encontró el contenedor del metabox para insertar los atributos (DOM no encontrado).');
+                if (window.console) console.error('[OY GMB More] Render: wrapper/content not found.', { wrapper: wrapperEl.length, content: contentEl.length });
                 return;
             }
 
@@ -159,37 +134,51 @@
                 success: function (response) {
                     setButtonLoading(btn, false);
 
-                    if (response.success) {
-                        // Pintar HTML de grupos en el contenedor del metabox
-                        var contentEl = $('#oy-gmb-more-content-' + postId);
-                        if (contentEl.length && response.data && response.data.html) {
-                            contentEl.html(response.data.html);
-                        }
-
-                        showNotice('success', response.data.message || (i18n.renderDone || 'Atributos agregados en la UI.'));
-                    } else {
-                        var msg = (response.data && response.data.message)
+                    if (!response || !response.success) {
+                        var msgErr = (response && response.data && response.data.message)
                             ? response.data.message
                             : (i18n.renderError || 'No se pudieron renderizar los atributos.');
-                        showNotice('error', msg);
+                        showNotice('error', msgErr);
+                        if (window.console) console.error('[OY GMB More] Render failed:', response);
+                        return;
                     }
+
+                    var html = (response.data && response.data.html) ? String(response.data.html) : '';
+                    var htmlLen = html.trim().length;
+
+                    // ✅ GARANTÍA JS: si no hay html real, NO success
+                    if (htmlLen < 50) {
+                        showNotice('error', 'El servidor respondió éxito pero NO devolvió HTML válido para insertar.');
+                        if (window.console) console.error('[OY GMB More] Render success but empty HTML:', response.data);
+                        return;
+                    }
+
+                    // ✅ Insertar HTML
+                    contentEl.html(html);
+
+                    // ✅ Verificación post-insert (garantía)
+                    var hasGroups = contentEl.find('.oy-gmb-more-group').length;
+                    if (hasGroups < 1) {
+                        showNotice('error', 'Se insertó HTML pero no contiene grupos de atributos. Revisa metadata/groupDisplayName.');
+                        if (window.console) console.error('[OY GMB More] Inserted HTML but no groups found.', { hasGroups: hasGroups, responseData: response.data });
+                        return;
+                    }
+
+                    // Success real
+                    var msgOk = response.data.message || (i18n.renderDone || 'Atributos agregados en la UI.');
+                    // Añadimos datos útiles (no molesta y te confirma que sí insertó)
+                    msgOk += ' (Grupos: ' + hasGroups + ')';
+                    showNotice('success', msgOk);
                 },
                 error: function (xhr, status, error) {
                     setButtonLoading(btn, false);
                     showNotice('error', (i18n.renderError || 'No se pudieron renderizar los atributos.') + ' (' + error + ')');
-                    if (window.console) console.error('[OY GMB More] AJAX error (render):', status, error);
+                    if (window.console) console.error('[OY GMB More] AJAX error (render):', status, error, xhr);
                 }
             });
         });
     }
 
-    // =========================================================================
-    // PUSH TO GMB BUTTON
-    // =========================================================================
-
-    /**
-     * Inicializa el botón "Enviar a Google ↑".
-     */
     function initPushButton() {
         $(document).on('click', '.oy-gmb-more-btn-push', function (e) {
             e.preventDefault();
@@ -200,7 +189,6 @@
             var confirmed = confirm(i18n.confirmPush || '¿Enviar los cambios directamente a Google Business Profile?');
             if (!confirmed) return;
 
-            // Primero guardar el formulario para que los overrides estén en la BD
             var saveFirst = saveFormFirst();
             saveFirst.then(function () {
                 showNotice('info', i18n.pushing || 'Enviando a Google...');
@@ -239,16 +227,6 @@
         });
     }
 
-    // =========================================================================
-    // HELPERS
-    // =========================================================================
-
-    /**
-     * Muestra un mensaje de notificación en el metabox.
-     *
-     * @param {string} type    'success' | 'error' | 'info'
-     * @param {string} message Texto del mensaje.
-     */
     function showNotice(type, message) {
         var noticeEl = $('#oy-gmb-more-notice-' + postId);
         if (!noticeEl.length) return;
@@ -259,7 +237,6 @@
             .html('<strong>' + escapeHtml(message) + '</strong>')
             .fadeIn(200);
 
-        // Auto-ocultar después de 6 s para success/info
         if (type !== 'error') {
             clearTimeout(noticeEl.data('hide-timer'));
             noticeEl.data('hide-timer', setTimeout(function () {
@@ -268,12 +245,6 @@
         }
     }
 
-    /**
-     * Activa o desactiva el estado de carga de un botón.
-     *
-     * @param {jQuery}  btn       El botón.
-     * @param {boolean} loading   true = cargando.
-     */
     function setButtonLoading(btn, loading) {
         if (loading) {
             btn.addClass('is-loading').prop('disabled', true).css('opacity', '0.7');
@@ -282,22 +253,12 @@
         }
     }
 
-    /**
-     * Guarda el formulario de manera silenciosa haciendo click en el botón
-     * "Actualizar" de WordPress antes de un push.
-     *
-     * @returns {Promise}
-     */
     function saveFormFirst() {
         return new Promise(function (resolve) {
-            // Intentar trigger del save de WordPress
             var publishBtn = $('#publish, #save-post');
             if (publishBtn.length) {
-                // Solo si el formulario tiene cambios reales
                 if ($('#oy_gmb_more_has_changes_' + postId).val() === '1') {
-                    // Disparar click en Actualizar
                     publishBtn.first().trigger('click');
-                    // Esperar un momento para que WordPress procese
                     setTimeout(resolve, 800);
                 } else {
                     resolve();
@@ -308,12 +269,6 @@
         });
     }
 
-    /**
-     * Escapa HTML básico para mostrar en notificaciones.
-     *
-     * @param {string} str
-     * @returns {string}
-     */
     function escapeHtml(str) {
         return String(str)
             .replace(/&/g, '&amp;')
