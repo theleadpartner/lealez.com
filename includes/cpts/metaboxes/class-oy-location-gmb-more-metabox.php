@@ -139,15 +139,12 @@ public function enqueue_scripts( $hook ) {
         )
     );
 
-    // ✅ CSS inline: usar un handle real registrado por el plugin (evita deprecated warnings)
+    // ✅ CSS inline SIN src=false (evita null/false en internals de WP/PHP)
     $css_handle = 'oy-location-gmb-more-inline';
-    wp_register_style( $css_handle, false, array(), $version );
+    wp_register_style( $css_handle, '', array(), $version );
     wp_enqueue_style( $css_handle );
 
-    wp_add_inline_style(
-        $css_handle,
-        $this->get_inline_styles()
-    );
+    wp_add_inline_style( $css_handle, $this->get_inline_styles() );
 }
 
         // =========================================================================
