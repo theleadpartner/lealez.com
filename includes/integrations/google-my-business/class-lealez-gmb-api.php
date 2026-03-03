@@ -2327,153 +2327,228 @@ public static function get_location_attributes( $business_id, $location_name, $u
 /**
  * Obtiene los METADATOS de atributos disponibles para una ubicación según su categoría.
  *
- * Llama al endpoint:
- * GET https://mybusinessbusinessinformation.googleapis.com/v1/attributes
- *   ?parent={locationName}
- *   &regionCode=CO
- *   &languageCode=es
+ * Endpoint: GET https://mybusinessbusinessinformation.googleapis.com/v1/attributes
  *
- * NOTA CRÍTICA DE URL ENCODING:
- * add_query_arg() / http_build_query() codifican '/' como '%2F' en los valores de
- * los parámetros de query string. Google valida el parámetro `parent` con un regex
- * estricto que espera el formato literal "locations/{id}" — el slash codificado como
- * '%2F' provoca el error HTTP 400 "Request contains an invalid argument."
+ * ESTRATEGIA MULTI-INTENTO:
+ * Google's /v1/attributes endpoint en la práctica requiere el formato completo
+ * accounts/{acc}/locations/{id} para el parámetro parent, aunque la documentación
+ * oficial liste solo locations/{id}. Se intentan ambos formatos en secuencia.
  *
- * SOLUCIÓN: construir el query string manualmente e incrustarlo en el endpoint antes
- * de pasarlo a make_request(), dejando $query_args vacío para que add_query_arg
- * no toque la URL ya construida.
+ * DIAGNÓSTICO:
+ * Con WP_DEBUG activo se loguea el raw_body de la respuesta de Google,
+ * lo que permite ver los fieldViolations exactos cuando hay INVALID_ARGUMENT.
  *
  * @param int    $business_id     WP Post ID del oy_business (para tokens OAuth).
- * @param string $location_name   Resource name de la ubicación (cualquier formato aceptado).
- * @param string $category_name   Nombre de categoría (puede venir vacío).
- * @param string $region_code     Código ISO 3166-1 alpha-2 del país. Default 'CO'.
- * @param string $language_code   Código BCP-47 del idioma. Default 'es'.
- * @param bool   $use_cache       Si true, usa caché del rate limiter. Default true.
+ * @param string $location_name   Resource name completo (accounts/{acc}/locations/{id})
+ *                                o corto (locations/{id}).
+ * @param string $category_name   Categoría en formato 'categories/gcid:xxx'. Default ''.
+ * @param string $region_code     ISO 3166-1 alpha-2. Default 'CO'.
+ * @param string $language_code   BCP-47. Default 'es'.
+ * @param bool   $use_cache       Usar caché del rate limiter. Default true.
  *
- * @return array|WP_Error Array de AttributeMetadata objects, o WP_Error en caso de fallo.
+ * @return array|WP_Error Array de AttributeMetadata o WP_Error.
  */
 public static function get_attribute_metadata( $business_id, $location_name, $category_name = '', $region_code = 'CO', $language_code = 'es', $use_cache = true ) {
     $business_id   = absint( $business_id );
     $location_name = trim( (string) $location_name );
 
-    // Valores por defecto seguros para evitar deprecation warnings de PHP 8
-    // cuando los meta fields son null o vacíos.
-    if ( '' === $region_code || null === $region_code ) {
-        $region_code = 'CO';
+    // ── Sanitizar entradas — protección contra null en PHP 8 ────────────────
+    $region_code   = ( is_string( $region_code )   && '' !== $region_code )   ? $region_code   : 'CO';
+    $language_code = ( is_string( $language_code ) && '' !== $language_code ) ? $language_code : 'es';
+    $category_name = is_string( $category_name ) ? $category_name : '';
+
+    // Limpiar: solo letras para region, solo letras+guion para language
+    $region_code_clean   = strtoupper( preg_replace( '/[^A-Za-z]/', '', $region_code ) );
+    $language_code_clean = preg_replace( '/[^A-Za-z\-]/', '', $language_code );
+    if ( '' === $region_code_clean ) {
+        $region_code_clean = 'CO';
     }
-    if ( '' === $language_code || null === $language_code ) {
-        $language_code = 'es';
+    if ( '' === $language_code_clean ) {
+        $language_code_clean = 'es';
     }
-    $region_code   = (string) $region_code;
-    $language_code = (string) $language_code;
-    $category_name = (string) $category_name;
 
     if ( ! $business_id || '' === $location_name ) {
         return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for get_attribute_metadata.', 'lealez' ) );
     }
 
-    // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
-    $normalized_location = $location_name;
-    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-        $parts = explode( '/locations/', $location_name, 2 );
+    // ── Derivar ambos formatos de parent ─────────────────────────────────────
+    // Eliminar sufijos no deseados (e.g. /attributes)
+    $clean_name = $location_name;
+    if ( false !== strpos( $clean_name, '/attributes' ) ) {
+        $clean_name = explode( '/attributes', $clean_name )[0];
+    }
+    $clean_name = trim( $clean_name, '/' );
+
+    // Formato completo: accounts/{acc}/locations/{id}
+    $parent_full = '';
+    // Formato corto: locations/{id}
+    $parent_short = '';
+
+    if ( strpos( $clean_name, 'accounts/' ) === 0 ) {
+        // Viene en formato completo — lo usamos tal cual
+        $parent_full = $clean_name; // accounts/{acc}/locations/{id}
+
+        // Derivar el corto
+        $parts = explode( '/locations/', $clean_name, 2 );
         if ( ! empty( $parts[1] ) ) {
-            $normalized_location = 'locations/' . trim( (string) $parts[1], '/' );
+            $parent_short = 'locations/' . trim( $parts[1], '/' );
         }
+    } elseif ( strpos( $clean_name, 'locations/' ) === 0 ) {
+        // Solo viene en formato corto
+        $parent_short = $clean_name;
+    } elseif ( preg_match( '/^\d+$/', $clean_name ) ) {
+        // Solo el ID numérico
+        $parent_short = 'locations/' . $clean_name;
+    } else {
+        // Formato desconocido — lo usamos como está en parent_short
+        $parent_short = $clean_name;
     }
-    // Eliminar cualquier sufijo extra (e.g. /attributes)
-    if ( false !== strpos( $normalized_location, '/attributes' ) ) {
-        $normalized_location = explode( '/attributes', $normalized_location )[0];
-    }
-    $normalized_location = trim( $normalized_location );
 
-    // ── Construir query string MANUALMENTE para evitar que add_query_arg()
-    // codifique el '/' de 'locations/{id}' como '%2F', lo que provoca HTTP 400
-    // "Request contains an invalid argument." en la API de Google.
-    //
-    // Google valida el parámetro `parent` con regex estricto que espera el literal
-    // "locations/{id}" — la versión encoded '%2F' es rechazada por INVALID_ARGUMENT.
-    // ──────────────────────────────────────────────────────────────────────────────
-    $region_code_clean   = strtoupper( preg_replace( '/[^A-Za-z]/', '', $region_code ) );
-    $language_code_clean = preg_replace( '/[^A-Za-z\-]/', '', $language_code );
+    // ── Sufijo de parámetros comunes (sin parent) ────────────────────────────
+    $common_qs  = '&regionCode=' . rawurlencode( $region_code_clean );
+    $common_qs .= '&languageCode=' . rawurlencode( $language_code_clean );
 
-    // parent NO se URL-encoda (Google necesita el slash literal)
-    $query_string = 'parent=' . $normalized_location;
-    $query_string .= '&regionCode=' . rawurlencode( $region_code_clean );
-    $query_string .= '&languageCode=' . rawurlencode( $language_code_clean );
-
-    // categoryName es opcional; solo se incluye si está en formato 'categories/gcid:xxx'
+    // categoryName solo si viene en formato gcid correcto
     if ( '' !== $category_name && strpos( $category_name, 'categories/' ) === 0 ) {
-        $query_string .= '&categoryName=' . rawurlencode( $category_name );
+        // rawurlencode codifica '/' como '%2F' — para categoryName es correcto
+        $common_qs .= '&categoryName=' . rawurlencode( $category_name );
     }
 
-    // Incrustar el query string en el endpoint para que make_request() NO llame
-    // a add_query_arg() sobre él (pasamos $query_args vacío).
-    $endpoint_with_qs = '/attributes?' . $query_string;
+    // ── Construir la lista de parents a intentar ─────────────────────────────
+    // Intentamos primero el formato completo (más fiable en la práctica)
+    // y luego el corto (el que documenta Google).
+    // En ambos casos el slash NO se codifica porque va en el VALUE del QS.
+    $parents_to_try = array();
+    if ( '' !== $parent_full ) {
+        $parents_to_try[] = $parent_full;
+    }
+    if ( '' !== $parent_short && $parent_short !== $parent_full ) {
+        $parents_to_try[] = $parent_short;
+    }
 
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
+    if ( empty( $parents_to_try ) ) {
+        return new WP_Error( 'invalid_params', __( 'No se pudo determinar el parent para get_attribute_metadata.', 'lealez' ) );
+    }
+
+    $last_error = null;
+
+    foreach ( $parents_to_try as $idx => $parent_value ) {
+
+        // El slash en el VALUE del query string es literal (RFC 3986 lo permite).
+        // No se usa add_query_arg() para evitar que codifique el slash como %2F.
+        $endpoint_with_qs = '/attributes?parent=' . $parent_value . $common_qs;
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                sprintf( 'Attempt %d/%d: Fetching attribute metadata.', $idx + 1, count( $parents_to_try ) ),
+                array(
+                    'parent'    => $parent_value,
+                    'category'  => $category_name,
+                    'endpoint'  => self::$business_api_base . $endpoint_with_qs,
+                )
+            );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY GMB More] get_attribute_metadata attempt %d — URL: %s',
+                $idx + 1,
+                self::$business_api_base . $endpoint_with_qs
+            ) );
+        }
+
+        // Pasamos $query_args vacío — el QS ya está embebido en $endpoint_with_qs.
+        $result = self::make_request(
             $business_id,
-            'info',
-            'Fetching attribute metadata (schema) for location.',
-            array(
-                'location'         => $normalized_location,
-                'category'         => $category_name,
-                'region_code'      => $region_code_clean,
-                'language'         => $language_code_clean,
-                'endpoint_preview' => self::$business_api_base . $endpoint_with_qs,
-            )
+            $endpoint_with_qs,
+            self::$business_api_base,
+            'GET',
+            array(),
+            $use_cache,
+            array()
         );
-    }
 
-    // Pasamos $query_args vacío para que make_request() no toque la URL ya construida.
-    $result = self::make_request(
-        $business_id,
-        $endpoint_with_qs,
-        self::$business_api_base,
-        'GET',
-        array(),
-        $use_cache,
-        array() // <-- VACÍO: el query string ya está incrustado en $endpoint_with_qs
-    );
+        if ( ! is_wp_error( $result ) ) {
+            // ── Éxito ────────────────────────────────────────────────────────
+            $metadata = array();
+            if ( ! empty( $result['attributeMetadata'] ) && is_array( $result['attributeMetadata'] ) ) {
+                $metadata = $result['attributeMetadata'];
+            }
 
-    if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'success',
+                    sprintf( 'Attribute metadata fetched: %d attribute(s) [parent=%s].', count( $metadata ), $parent_value ),
+                    array( 'parent' => $parent_value )
+                );
+            }
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[OY GMB More] get_attribute_metadata OK: %d attribute(s) for parent=%s',
+                    count( $metadata ),
+                    $parent_value
+                ) );
+            }
+
+            return $metadata;
+        }
+
+        // ── Error — loguear detalladamente ───────────────────────────────────
+        $last_error = $result;
+        $error_data = $result->get_error_data();
+
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'warning',
-                'get_attribute_metadata failed: ' . $result->get_error_message(),
-                array( 'location' => $normalized_location )
+                sprintf( 'Attempt %d failed: %s', $idx + 1, $result->get_error_message() ),
+                array(
+                    'parent'     => $parent_value,
+                    'error_code' => $result->get_error_code(),
+                    'raw_body'   => is_array( $error_data ) ? ( $error_data['raw_body'] ?? '' ) : '',
+                )
             );
         }
+
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY GMB More] get_attribute_metadata error: ' . $result->get_error_message() );
+            error_log( sprintf(
+                '[OY GMB More] get_attribute_metadata attempt %d FAILED. parent=%s | error=%s | raw_body=%s',
+                $idx + 1,
+                $parent_value,
+                $result->get_error_message(),
+                is_array( $error_data ) ? substr( (string) ( $error_data['raw_body'] ?? '' ), 0, 1000 ) : 'n/a'
+            ) );
         }
-        return $result;
+
+        // Si NO es un error de argumento inválido, no seguimos intentando
+        // (podría ser rate limit, auth error, etc.)
+        $error_code = $result->get_error_code();
+        if ( ! in_array( $error_code, array( 'api_error' ), true ) ) {
+            break;
+        }
+
+        // Si el código HTTP es 400 (INVALID_ARGUMENT), sí probamos el siguiente parent
+        $http_code = is_array( $error_data ) ? ( (int) ( $error_data['code'] ?? 0 ) ) : 0;
+        if ( 400 !== $http_code ) {
+            break; // Para otros errores (401, 403, 429, 5xx) no reintentamos
+        }
+
+        // Continuar con el siguiente parent
     }
 
-    // La respuesta tiene el formato:
-    // { "attributeMetadata": [ { "attributeId": "has_women_led", "displayName": "...", ... } ] }
-    $metadata = array();
-    if ( ! empty( $result['attributeMetadata'] ) && is_array( $result['attributeMetadata'] ) ) {
-        $metadata = $result['attributeMetadata'];
+    // Todos los intentos fallaron
+    if ( is_wp_error( $last_error ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY GMB More] get_attribute_metadata error: ' . $last_error->get_error_message() );
+        }
+        return $last_error;
     }
 
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'success',
-            sprintf( 'Attribute metadata fetched: %d attribute(s) available.', count( $metadata ) ),
-            array( 'location' => $normalized_location )
-        );
-    }
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log(
-            '[OY GMB More] get_attribute_metadata: ' . count( $metadata ) . ' attribute(s) for ' . $normalized_location
-        );
-    }
-
-    return $metadata;
+    return new WP_Error( 'api_error', __( 'API request failed', 'lealez' ) );
 }
 
 
