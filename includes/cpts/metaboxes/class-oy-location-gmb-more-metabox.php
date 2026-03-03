@@ -406,60 +406,136 @@ public function render_metabox( $post ) {
          * @param array  $current_values Mapa actual de valores.
          * @param int    $post_id       ID del post.
          */
-        private function render_single_attribute( $attr_id, $attr_meta, $current_values, $post_id ) {
-            $value_type   = isset( $attr_meta['valueType'] ) ? strtoupper( (string) $attr_meta['valueType'] ) : 'BOOL';
-            $display_name = ! empty( $attr_meta['displayName'] ) ? (string) $attr_meta['displayName'] : $this->humanize_attr_id( $attr_id );
-            $is_deprecated = ! empty( $attr_meta['isDeprecated'] );
+private function render_single_attribute( $attr_id, $attr_meta, $current_values, $post_id ) {
 
-            if ( $is_deprecated ) {
-                return; // Omitir atributos obsoletos
-            }
+    $value_type   = isset( $attr_meta['valueType'] ) ? strtoupper( (string) $attr_meta['valueType'] ) : 'BOOL';
+    $display_name = ! empty( $attr_meta['displayName'] ) ? (string) $attr_meta['displayName'] : $this->humanize_attr_id( $attr_id );
 
-            $field_name = 'oy_gmb_more_attr[' . esc_attr( $attr_id ) . ']';
-            $field_id   = 'oy_gmb_more_attr_' . sanitize_html_class( $attr_id ) . '_' . $post_id;
+    /**
+     * ✅ FIX:
+     * Google usa "deprecated" (no "isDeprecated") en AttributeMetadata.
+     * Conservamos compat con isDeprecated por si llega desde otro origen.
+     */
+    $is_deprecated = false;
+    if ( ! empty( $attr_meta['deprecated'] ) ) {
+        $is_deprecated = true;
+    } elseif ( ! empty( $attr_meta['isDeprecated'] ) ) {
+        $is_deprecated = true;
+    }
 
-            // Valor actual (puede no existir si nunca fue configurado en GMB)
-            $current_raw = isset( $current_values[ $attr_id ] ) ? $current_values[ $attr_id ] : null;
+    if ( $is_deprecated ) {
+        return;
+    }
 
-            ?>
-            <div class="oy-gmb-more-field" data-attr-id="<?php echo esc_attr( $attr_id ); ?>" data-value-type="<?php echo esc_attr( $value_type ); ?>">
-                <label class="oy-gmb-more-field-label" for="<?php echo esc_attr( $field_id ); ?>">
-                    <?php echo esc_html( $display_name ); ?>
-                </label>
-                <div class="oy-gmb-more-field-control">
-                    <?php
-                    switch ( $value_type ) {
-                        case 'BOOL':
-                            $this->render_bool_field( $field_name, $field_id, $current_raw );
-                            break;
+    /**
+     * ✅ FIX:
+     * AttributeMetadata trae "repeatable" (bool).
+     * Si valueType=ENUM y repeatable=true → UI debe ser multi-select (checkboxes) => REPEATED_ENUM.
+     */
+    $repeatable = ! empty( $attr_meta['repeatable'] );
+    if ( $repeatable && 'ENUM' === $value_type ) {
+        $value_type = 'REPEATED_ENUM';
+    }
 
-                        case 'ENUM':
-                            $value_metadata = isset( $attr_meta['valueMetadata'] ) ? (array) $attr_meta['valueMetadata'] : array();
-                            $this->render_enum_field( $field_name, $field_id, $current_raw, $value_metadata );
-                            break;
+    $field_name = 'oy_gmb_more_attr[' . esc_attr( $attr_id ) . ']';
+    $field_id   = 'oy_gmb_more_attr_' . sanitize_html_class( $attr_id ) . '_' . $post_id;
 
-                        case 'URL':
-                            $this->render_url_field( $field_name, $field_id, $current_raw );
-                            break;
+    $current_raw = isset( $current_values[ $attr_id ] ) ? $current_values[ $attr_id ] : null;
+    ?>
+    <div class="oy-gmb-more-field"
+         data-attr-id="<?php echo esc_attr( $attr_id ); ?>"
+         data-value-type="<?php echo esc_attr( $value_type ); ?>">
+        <label class="oy-gmb-more-field-label" for="<?php echo esc_attr( $field_id ); ?>">
+            <?php echo esc_html( $display_name ); ?>
+        </label>
 
-                        case 'REPEATED_ENUM':
-                            $value_metadata = isset( $attr_meta['valueMetadata'] ) ? (array) $attr_meta['valueMetadata'] : array();
-                            $this->render_repeated_enum_field( $field_name, $field_id, $current_raw, $value_metadata );
-                            break;
-
-                        default:
-                            // Fallback: campo de texto genérico
-                            $this->render_url_field( $field_name, $field_id, $current_raw );
-                            break;
-                    }
-                    ?>
-                </div>
-                <?php if ( null === $current_raw ) : ?>
-                    <span class="oy-gmb-more-field-unset"><?php esc_html_e( 'No configurado en GMB', 'lealez' ); ?></span>
-                <?php endif; ?>
-            </div>
+        <div class="oy-gmb-more-field-control">
             <?php
+            switch ( $value_type ) {
+
+                case 'BOOL':
+                    $this->render_bool_field( $field_name, $field_id, $current_raw );
+                    break;
+
+                case 'ENUM':
+                    $value_metadata = isset( $attr_meta['valueMetadata'] ) && is_array( $attr_meta['valueMetadata'] )
+                        ? $attr_meta['valueMetadata']
+                        : array();
+                    $this->render_enum_field( $field_name, $field_id, $current_raw, $value_metadata );
+                    break;
+
+                case 'URL':
+                    $this->render_url_field( $field_name, $field_id, $current_raw );
+                    break;
+
+                case 'REPEATED_ENUM':
+                    $value_metadata = isset( $attr_meta['valueMetadata'] ) && is_array( $attr_meta['valueMetadata'] )
+                        ? $attr_meta['valueMetadata']
+                        : array();
+                    $this->render_repeated_enum_field( $field_name, $field_id, $current_raw, $value_metadata );
+                    break;
+
+                default:
+                    $this->render_url_field( $field_name, $field_id, $current_raw );
+                    break;
+            }
+            ?>
+        </div>
+
+        <?php if ( null === $current_raw ) : ?>
+            <span class="oy-gmb-more-field-unset"><?php esc_html_e( 'No configurado en GMB', 'lealez' ); ?></span>
+        <?php endif; ?>
+    </div>
+    <?php
+}
+
+
+
+        /**
+ * Normaliza AttributeValueMetadata.value a un string usable en <option value="">
+ *
+ * En attributes.list, valueMetadata[].value viene en formato "Value" (protobuf),
+ * por lo que puede llegar como:
+ * - string: "PAID"
+ * - array:  ["stringValue" => "PAID"]
+ * - array:  ["boolValue" => true]
+ * - array:  ["numberValue" => 1]
+ *
+ * @param mixed $v
+ * @return string
+ */
+private function normalize_value_metadata_value( $v ) {
+    if ( is_string( $v ) ) {
+        return $v;
+    }
+    if ( is_bool( $v ) ) {
+        return $v ? 'true' : 'false';
+    }
+    if ( is_numeric( $v ) ) {
+        return (string) $v;
+    }
+    if ( is_array( $v ) ) {
+        // Protobuf Value forms
+        if ( array_key_exists( 'stringValue', $v ) ) {
+            return (string) $v['stringValue'];
         }
+        if ( array_key_exists( 'boolValue', $v ) ) {
+            return ! empty( $v['boolValue'] ) ? 'true' : 'false';
+        }
+        if ( array_key_exists( 'numberValue', $v ) ) {
+            return (string) $v['numberValue'];
+        }
+
+        // Fallback: primer scalar
+        foreach ( $v as $vv ) {
+            if ( is_scalar( $vv ) ) {
+                return (string) $vv;
+            }
+        }
+    }
+
+    return '';
+}
 
         /**
          * Renderiza un campo booleano (Sí / No / No configurado).
@@ -510,28 +586,43 @@ public function render_metabox( $post ) {
         /**
          * Renderiza un campo de tipo ENUM (select).
          */
-        private function render_enum_field( $field_name, $field_id, $current_raw, $value_metadata ) {
-            $current_string = is_array( $current_raw ) ? ( isset( $current_raw[0] ) ? (string) $current_raw[0] : '' ) : (string) $current_raw;
-            ?>
-            <select name="<?php echo esc_attr( $field_name ); ?>"
-                    id="<?php echo esc_attr( $field_id ); ?>"
-                    class="oy-gmb-more-field-input">
-                <option value=""><?php esc_html_e( '— No especificado —', 'lealez' ); ?></option>
-                <?php foreach ( $value_metadata as $vm ) : ?>
-                    <?php
-                    $vm_value       = isset( $vm['value'] ) ? (string) $vm['value'] : '';
-                    $vm_display     = isset( $vm['displayName'] ) ? (string) $vm['displayName'] : $vm_value;
-                    $vm_deprecated  = ! empty( $vm['isDeprecated'] );
-                    if ( $vm_deprecated ) continue;
-                    ?>
-                    <option value="<?php echo esc_attr( $vm_value ); ?>"
-                            <?php selected( $current_string, $vm_value ); ?>>
-                        <?php echo esc_html( $vm_display ); ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
+private function render_enum_field( $field_name, $field_id, $current_raw, $value_metadata ) {
+    $current_string = is_array( $current_raw )
+        ? ( isset( $current_raw[0] ) ? (string) $current_raw[0] : '' )
+        : (string) $current_raw;
+    ?>
+    <select name="<?php echo esc_attr( $field_name ); ?>"
+            id="<?php echo esc_attr( $field_id ); ?>"
+            class="oy-gmb-more-field-input">
+        <option value=""><?php esc_html_e( '— No especificado —', 'lealez' ); ?></option>
+        <?php foreach ( $value_metadata as $vm ) : ?>
             <?php
-        }
+            if ( ! is_array( $vm ) ) {
+                continue;
+            }
+
+            $vm_value_raw = $vm['value'] ?? '';
+            $vm_value     = $this->normalize_value_metadata_value( $vm_value_raw );
+            $vm_display   = isset( $vm['displayName'] ) ? (string) $vm['displayName'] : $vm_value;
+
+            // Google usa "deprecated" (no isDeprecated) aquí también.
+            $vm_deprecated = ! empty( $vm['deprecated'] ) || ! empty( $vm['isDeprecated'] );
+            if ( $vm_deprecated ) {
+                continue;
+            }
+
+            if ( '' === $vm_value ) {
+                continue;
+            }
+            ?>
+            <option value="<?php echo esc_attr( $vm_value ); ?>"
+                    <?php selected( $current_string, $vm_value ); ?>>
+                <?php echo esc_html( $vm_display ); ?>
+            </option>
+        <?php endforeach; ?>
+    </select>
+    <?php
+}
 
         /**
          * Renderiza un campo URL.
@@ -556,38 +647,51 @@ public function render_metabox( $post ) {
         /**
          * Renderiza un campo REPEATED_ENUM (checkboxes múltiples).
          */
-        private function render_repeated_enum_field( $field_name, $field_id, $current_raw, $value_metadata ) {
-            // $current_raw puede ser un array de valores seleccionados
-            $selected_values = array();
-            if ( is_array( $current_raw ) ) {
-                $selected_values = array_map( 'strval', $current_raw );
-            } elseif ( is_string( $current_raw ) && '' !== $current_raw ) {
-                $selected_values = array( $current_raw );
-            }
+private function render_repeated_enum_field( $field_name, $field_id, $current_raw, $value_metadata ) {
+    $selected_values = array();
 
-            echo '<div class="oy-gmb-repeated-enum-group">';
-            foreach ( $value_metadata as $vm ) {
-                $vm_value      = isset( $vm['value'] ) ? (string) $vm['value'] : '';
-                $vm_display    = isset( $vm['displayName'] ) ? (string) $vm['displayName'] : $vm_value;
-                $vm_deprecated = ! empty( $vm['isDeprecated'] );
-                if ( $vm_deprecated ) {
-                    continue;
-                }
-                $cb_id = $field_id . '_' . sanitize_html_class( $vm_value );
-                ?>
-                <label class="oy-gmb-checkbox-option">
-                    <input type="checkbox"
-                           name="<?php echo esc_attr( $field_name ); ?>[]"
-                           id="<?php echo esc_attr( $cb_id ); ?>"
-                           value="<?php echo esc_attr( $vm_value ); ?>"
-                           class="oy-gmb-more-field-input"
-                           <?php checked( in_array( $vm_value, $selected_values, true ) ); ?> />
-                    <span><?php echo esc_html( $vm_display ); ?></span>
-                </label>
-                <?php
-            }
-            echo '</div>';
+    if ( is_array( $current_raw ) ) {
+        $selected_values = array_map( 'strval', $current_raw );
+    } elseif ( is_string( $current_raw ) && '' !== $current_raw ) {
+        $selected_values = array( $current_raw );
+    }
+
+    echo '<div class="oy-gmb-repeated-enum-group">';
+
+    foreach ( $value_metadata as $vm ) {
+        if ( ! is_array( $vm ) ) {
+            continue;
         }
+
+        $vm_value_raw = $vm['value'] ?? '';
+        $vm_value     = $this->normalize_value_metadata_value( $vm_value_raw );
+        $vm_display   = isset( $vm['displayName'] ) ? (string) $vm['displayName'] : $vm_value;
+
+        $vm_deprecated = ! empty( $vm['deprecated'] ) || ! empty( $vm['isDeprecated'] );
+        if ( $vm_deprecated ) {
+            continue;
+        }
+
+        if ( '' === $vm_value ) {
+            continue;
+        }
+
+        $cb_id = $field_id . '_' . sanitize_html_class( $vm_value );
+        ?>
+        <label class="oy-gmb-checkbox-option">
+            <input type="checkbox"
+                   name="<?php echo esc_attr( $field_name ); ?>[]"
+                   id="<?php echo esc_attr( $cb_id ); ?>"
+                   value="<?php echo esc_attr( $vm_value ); ?>"
+                   class="oy-gmb-more-field-input"
+                   <?php checked( in_array( $vm_value, $selected_values, true ) ); ?> />
+            <span><?php echo esc_html( $vm_display ); ?></span>
+        </label>
+        <?php
+    }
+
+    echo '</div>';
+}
 
         // =========================================================================
         // GUARDAR METABOX
@@ -1128,11 +1232,19 @@ private function build_current_values_map( $raw_attributes ) {
          * @return string
          */
 private function extract_attr_id_from_meta( $attr_meta ) {
-    // 1) attributeId directo
-    if ( ! empty( $attr_meta['attributeId'] ) ) {
-        $raw = (string) $attr_meta['attributeId'];
+    /**
+     * ✅ FIX REAL:
+     * AttributeMetadata (attributes.list) NO trae attributeId/name.
+     * Trae "parent" como identificador único del atributo, típicamente:
+     *   parent: "attributes/serves_beer"
+     *
+     * Mantenemos compatibilidad con posibles formatos alternos (attributeId / name).
+     */
 
-        // Si viene como "attributes/url_instagram" o "locations/.../attributes/url_instagram"
+    // 0) Campo correcto según API oficial: "parent"
+    if ( ! empty( $attr_meta['parent'] ) ) {
+        $raw = (string) $attr_meta['parent'];
+
         if ( false !== strpos( $raw, '/attributes/' ) ) {
             $parts = explode( '/attributes/', $raw, 2 );
             $raw   = $parts[1] ?? $raw;
@@ -1144,7 +1256,22 @@ private function extract_attr_id_from_meta( $attr_meta ) {
         return sanitize_key( $raw );
     }
 
-    // 2) derivar desde name
+    // 1) Compat: attributeId directo (si existiera)
+    if ( ! empty( $attr_meta['attributeId'] ) ) {
+        $raw = (string) $attr_meta['attributeId'];
+
+        if ( false !== strpos( $raw, '/attributes/' ) ) {
+            $parts = explode( '/attributes/', $raw, 2 );
+            $raw   = $parts[1] ?? $raw;
+        } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+            $raw = substr( $raw, strlen( 'attributes/' ) );
+        }
+
+        $raw = trim( $raw, '/' );
+        return sanitize_key( $raw );
+    }
+
+    // 2) Compat: derivar desde name (si existiera)
     if ( ! empty( $attr_meta['name'] ) ) {
         $raw = (string) $attr_meta['name'];
 
@@ -1154,7 +1281,6 @@ private function extract_attr_id_from_meta( $attr_meta ) {
         } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
             $raw = substr( $raw, strlen( 'attributes/' ) );
         } else {
-            // fallback: último segmento
             $chunks = explode( '/', $raw );
             $raw    = end( $chunks );
         }
