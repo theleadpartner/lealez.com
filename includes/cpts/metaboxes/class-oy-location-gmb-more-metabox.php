@@ -708,7 +708,7 @@ public function render_metabox( $post ) {
 
 
 
-        public function ajax_render_attributes() {
+public function ajax_render_attributes() {
     check_ajax_referer( self::NONCE_AJAX_ACTION, 'nonce' );
 
     if ( ! current_user_can( 'edit_posts' ) ) {
@@ -748,7 +748,7 @@ public function render_metabox( $post ) {
 
     $current_values = $this->build_current_values_map( $raw_attributes );
 
-    // 2) Leer overrides (precedencia)
+    // 2) Overrides (precedencia)
     $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
     $overrides      = array();
     if ( ! empty( $overrides_json ) ) {
@@ -761,8 +761,9 @@ public function render_metabox( $post ) {
         $current_values[ sanitize_text_field( $attr_id ) ] = $val;
     }
 
-    // 3) Metadata cacheada (NO llamamos a Google aquí)
+    // 3) Metadata cacheada
     $metadata = $this->get_cached_attribute_metadata( $post_id, $parent_business_id, $gmb_location_name );
+    $meta_count = is_array( $metadata ) ? count( $metadata ) : 0;
 
     if ( empty( $metadata ) || ! is_array( $metadata ) ) {
         wp_send_json_error( array(
@@ -771,14 +772,39 @@ public function render_metabox( $post ) {
         return;
     }
 
-    // 4) Renderizar HTML del contenido (grupos)
+    // 4) Renderizar HTML de grupos
     ob_start();
     $this->render_attribute_groups( $metadata, $current_values, $post_id );
-    $html = ob_get_clean();
+    $html = (string) ob_get_clean();
+
+    $html_len = strlen( trim( $html ) );
+
+    // ✅ GARANTÍA: si no hay HTML real, esto NO es success
+    if ( $html_len < 50 ) {
+        // Log opcional para debug
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY GMB More] ajax_render_attributes produced EMPTY html. post_id=%d meta=%d values=%d overrides=%d',
+                $post_id,
+                $meta_count,
+                is_array( $current_values ) ? count( $current_values ) : 0,
+                is_array( $overrides ) ? count( $overrides ) : 0
+            ) );
+        }
+
+        wp_send_json_error( array(
+            'message'    => __( 'No se generó HTML para renderizar. Revisa que metadata y render_attribute_groups estén retornando grupos válidos.', 'lealez' ),
+            'meta_count' => $meta_count,
+            'html_len'   => $html_len,
+        ) );
+        return;
+    }
 
     wp_send_json_success( array(
-        'message' => __( 'Atributos agregados/renderizados en la UI del metabox.', 'lealez' ),
-        'html'    => $html,
+        'message'    => __( 'Atributos agregados/renderizados en la UI del metabox.', 'lealez' ),
+        'html'       => $html,
+        'meta_count' => $meta_count,
+        'html_len'   => $html_len,
     ) );
 }
 
@@ -998,66 +1024,102 @@ private function get_cached_attribute_metadata( $post_id, $business_id, $locatio
          * @param array $raw_attributes
          * @return array
          */
-        private function build_current_values_map( $raw_attributes ) {
-            $map = array();
+private function build_current_values_map( $raw_attributes ) {
+    $map = array();
 
-            foreach ( $raw_attributes as $attr ) {
-                if ( ! is_array( $attr ) ) {
-                    continue;
-                }
+    foreach ( $raw_attributes as $attr ) {
+        if ( ! is_array( $attr ) ) {
+            continue;
+        }
 
-                // Normalizar ID del atributo
-                $attr_id = '';
-                if ( ! empty( $attr['attributeId'] ) ) {
-                    $attr_id = (string) $attr['attributeId'];
-                } elseif ( ! empty( $attr['name'] ) ) {
-                    $parts   = explode( '/attributes/', (string) $attr['name'], 2 );
-                    $attr_id = isset( $parts[1] ) ? trim( $parts[1], '/' ) : '';
-                }
-                if ( '' === $attr_id ) {
-                    continue;
-                }
+        /**
+         * Normalizar ID del atributo.
+         *
+         * Casos reales que soportamos:
+         * - attributeId: "attributes/serves_beer"  (o "serves_beer")
+         * - name: "locations/123/attributes/serves_beer"
+         * - name: "attributes/serves_beer"   ✅ (este era el bug)
+         */
+        $attr_id = '';
 
-                $value_type = strtoupper( isset( $attr['valueType'] ) ? (string) $attr['valueType'] : 'BOOL' );
+        if ( ! empty( $attr['attributeId'] ) ) {
+            $raw = (string) $attr['attributeId'];
 
-                switch ( $value_type ) {
-                    case 'BOOL':
-                        if ( ! empty( $attr['values'] ) && is_array( $attr['values'] ) ) {
-                            $map[ $attr_id ] = (bool) $attr['values'][0];
-                        }
-                        break;
-
-                    case 'ENUM':
-                        if ( ! empty( $attr['values'] ) && is_array( $attr['values'] ) ) {
-                            $map[ $attr_id ] = (string) $attr['values'][0];
-                        }
-                        break;
-
-                    case 'URL':
-                        if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
-                            $uri             = isset( $attr['uriValues'][0]['uri'] ) ? (string) $attr['uriValues'][0]['uri'] : '';
-                            $map[ $attr_id ] = $uri;
-                        }
-                        break;
-
-                    case 'REPEATED_ENUM':
-                        if ( ! empty( $attr['repeatedEnumValue'] ) && is_array( $attr['repeatedEnumValue'] ) ) {
-                            $set_values = isset( $attr['repeatedEnumValue']['setValues'] ) ?
-                                (array) $attr['repeatedEnumValue']['setValues'] : array();
-                            $map[ $attr_id ] = $set_values;
-                        }
-                        break;
-
-                    default:
-                        if ( ! empty( $attr['values'] ) ) {
-                            $map[ $attr_id ] = $attr['values'];
-                        }
-                        break;
-                }
+            if ( false !== strpos( $raw, '/attributes/' ) ) {
+                $parts = explode( '/attributes/', $raw, 2 );
+                $raw   = $parts[1] ?? $raw;
+            } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+                $raw = substr( $raw, strlen( 'attributes/' ) );
             }
 
-            return $map;
+            $attr_id = sanitize_key( trim( $raw, '/' ) );
+
+        } elseif ( ! empty( $attr['name'] ) ) {
+            $raw = (string) $attr['name'];
+
+            if ( false !== strpos( $raw, '/attributes/' ) ) {
+                $parts = explode( '/attributes/', $raw, 2 );
+                $raw   = $parts[1] ?? '';
+            } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+                // ✅ FIX: name="attributes/serves_beer"
+                $raw = substr( $raw, strlen( 'attributes/' ) );
+            } else {
+                // fallback: último segmento
+                $chunks = explode( '/', $raw );
+                $raw    = end( $chunks );
+            }
+
+            $attr_id = sanitize_key( trim( (string) $raw, '/' ) );
         }
+
+        if ( '' === $attr_id ) {
+            continue;
+        }
+
+        $value_type = strtoupper( isset( $attr['valueType'] ) ? (string) $attr['valueType'] : 'BOOL' );
+
+        switch ( $value_type ) {
+            case 'BOOL':
+                if ( isset( $attr['values'] ) && is_array( $attr['values'] ) && array_key_exists( 0, $attr['values'] ) ) {
+                    $map[ $attr_id ] = (bool) $attr['values'][0];
+                }
+                break;
+
+            case 'ENUM':
+                if ( isset( $attr['values'] ) && is_array( $attr['values'] ) && array_key_exists( 0, $attr['values'] ) ) {
+                    $map[ $attr_id ] = (string) $attr['values'][0];
+                }
+                break;
+
+            case 'URL':
+                if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                    $uri = '';
+                    if ( isset( $attr['uriValues'][0] ) && is_array( $attr['uriValues'][0] ) ) {
+                        $uri = isset( $attr['uriValues'][0]['uri'] ) ? (string) $attr['uriValues'][0]['uri'] : '';
+                    }
+                    $map[ $attr_id ] = $uri;
+                }
+                break;
+
+            case 'REPEATED_ENUM':
+                if ( ! empty( $attr['repeatedEnumValue'] ) && is_array( $attr['repeatedEnumValue'] ) ) {
+                    $set_values = isset( $attr['repeatedEnumValue']['setValues'] )
+                        ? (array) $attr['repeatedEnumValue']['setValues']
+                        : array();
+                    $map[ $attr_id ] = array_map( 'strval', $set_values );
+                }
+                break;
+
+            default:
+                if ( isset( $attr['values'] ) ) {
+                    $map[ $attr_id ] = $attr['values'];
+                }
+                break;
+        }
+    }
+
+    return $map;
+}
 
         /**
          * Extrae el `attributeId` desde un objeto de metadato de atributo.
