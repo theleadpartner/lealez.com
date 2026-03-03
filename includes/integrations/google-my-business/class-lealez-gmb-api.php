@@ -2329,21 +2329,20 @@ public static function get_location_attributes( $business_id, $location_name, $u
  *
  * Endpoint: GET https://mybusinessbusinessinformation.googleapis.com/v1/attributes
  *
- * ESTRATEGIA MULTI-INTENTO:
- * Google's /v1/attributes endpoint en la práctica requiere el formato completo
- * accounts/{acc}/locations/{id} para el parámetro parent, aunque la documentación
- * oficial liste solo locations/{id}. Se intentan ambos formatos en secuencia.
+ * REGLA CRÍTICA DE LA API (descubierta vía fieldViolations):
+ * Cuando se pasa el parámetro `parent` (resource name de la ubicación),
+ * Google NO permite que se envíen `regionCode` ni `languageCode` simultáneamente.
+ * Son mutuamente excluyentes: usar `parent` implica que Google ya conoce el
+ * país y el idioma del negocio desde su propia base de datos.
  *
- * DIAGNÓSTICO:
- * Con WP_DEBUG activo se loguea el raw_body de la respuesta de Google,
- * lo que permite ver los fieldViolations exactos cuando hay INVALID_ARGUMENT.
+ * Referencia del error:
+ * "Field must not be set when parent is set." para language_code y region_code.
  *
  * @param int    $business_id     WP Post ID del oy_business (para tokens OAuth).
- * @param string $location_name   Resource name completo (accounts/{acc}/locations/{id})
- *                                o corto (locations/{id}).
+ * @param string $location_name   Resource name de la ubicación (cualquier formato).
  * @param string $category_name   Categoría en formato 'categories/gcid:xxx'. Default ''.
- * @param string $region_code     ISO 3166-1 alpha-2. Default 'CO'.
- * @param string $language_code   BCP-47. Default 'es'.
+ * @param string $region_code     Ignorado cuando se usa parent. Reservado para compatibilidad.
+ * @param string $language_code   Ignorado cuando se usa parent. Reservado para compatibilidad.
  * @param bool   $use_cache       Usar caché del rate limiter. Default true.
  *
  * @return array|WP_Error Array de AttributeMetadata o WP_Error.
@@ -2351,27 +2350,13 @@ public static function get_location_attributes( $business_id, $location_name, $u
 public static function get_attribute_metadata( $business_id, $location_name, $category_name = '', $region_code = 'CO', $language_code = 'es', $use_cache = true ) {
     $business_id   = absint( $business_id );
     $location_name = trim( (string) $location_name );
-
-    // ── Sanitizar entradas — protección contra null en PHP 8 ────────────────
-    $region_code   = ( is_string( $region_code )   && '' !== $region_code )   ? $region_code   : 'CO';
-    $language_code = ( is_string( $language_code ) && '' !== $language_code ) ? $language_code : 'es';
     $category_name = is_string( $category_name ) ? $category_name : '';
-
-    // Limpiar: solo letras para region, solo letras+guion para language
-    $region_code_clean   = strtoupper( preg_replace( '/[^A-Za-z]/', '', $region_code ) );
-    $language_code_clean = preg_replace( '/[^A-Za-z\-]/', '', $language_code );
-    if ( '' === $region_code_clean ) {
-        $region_code_clean = 'CO';
-    }
-    if ( '' === $language_code_clean ) {
-        $language_code_clean = 'es';
-    }
 
     if ( ! $business_id || '' === $location_name ) {
         return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for get_attribute_metadata.', 'lealez' ) );
     }
 
-    // ── Derivar ambos formatos de parent ─────────────────────────────────────
+    // ── Normalizar location_name ──────────────────────────────────────────────
     // Eliminar sufijos no deseados (e.g. /attributes)
     $clean_name = $location_name;
     if ( false !== strpos( $clean_name, '/attributes' ) ) {
@@ -2385,39 +2370,20 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
     $parent_short = '';
 
     if ( strpos( $clean_name, 'accounts/' ) === 0 ) {
-        // Viene en formato completo — lo usamos tal cual
-        $parent_full = $clean_name; // accounts/{acc}/locations/{id}
-
-        // Derivar el corto
-        $parts = explode( '/locations/', $clean_name, 2 );
+        $parent_full  = $clean_name;
+        $parts        = explode( '/locations/', $clean_name, 2 );
         if ( ! empty( $parts[1] ) ) {
             $parent_short = 'locations/' . trim( $parts[1], '/' );
         }
     } elseif ( strpos( $clean_name, 'locations/' ) === 0 ) {
-        // Solo viene en formato corto
         $parent_short = $clean_name;
     } elseif ( preg_match( '/^\d+$/', $clean_name ) ) {
-        // Solo el ID numérico
         $parent_short = 'locations/' . $clean_name;
     } else {
-        // Formato desconocido — lo usamos como está en parent_short
         $parent_short = $clean_name;
     }
 
-    // ── Sufijo de parámetros comunes (sin parent) ────────────────────────────
-    $common_qs  = '&regionCode=' . rawurlencode( $region_code_clean );
-    $common_qs .= '&languageCode=' . rawurlencode( $language_code_clean );
-
-    // categoryName solo si viene en formato gcid correcto
-    if ( '' !== $category_name && strpos( $category_name, 'categories/' ) === 0 ) {
-        // rawurlencode codifica '/' como '%2F' — para categoryName es correcto
-        $common_qs .= '&categoryName=' . rawurlencode( $category_name );
-    }
-
-    // ── Construir la lista de parents a intentar ─────────────────────────────
-    // Intentamos primero el formato completo (más fiable en la práctica)
-    // y luego el corto (el que documenta Google).
-    // En ambos casos el slash NO se codifica porque va en el VALUE del QS.
+    // ── Lista de parents a intentar (completo primero, luego corto) ───────────
     $parents_to_try = array();
     if ( '' !== $parent_full ) {
         $parents_to_try[] = $parent_full;
@@ -2430,13 +2396,22 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         return new WP_Error( 'invalid_params', __( 'No se pudo determinar el parent para get_attribute_metadata.', 'lealez' ) );
     }
 
+    // ── REGLA CRÍTICA: cuando `parent` está presente, NO enviar regionCode
+    // ni languageCode. La API de Google los rechaza con INVALID_ARGUMENT.
+    // Solo se permite categoryName además de parent.
+    // ──────────────────────────────────────────────────────────────────────────
+    $optional_qs = '';
+    if ( '' !== $category_name && strpos( $category_name, 'categories/' ) === 0 ) {
+        $optional_qs = '&categoryName=' . rawurlencode( $category_name );
+    }
+
     $last_error = null;
 
     foreach ( $parents_to_try as $idx => $parent_value ) {
 
-        // El slash en el VALUE del query string es literal (RFC 3986 lo permite).
-        // No se usa add_query_arg() para evitar que codifique el slash como %2F.
-        $endpoint_with_qs = '/attributes?parent=' . $parent_value . $common_qs;
+        // El slash en el VALUE del QS es literal — no usar add_query_arg()
+        // para evitar que codifique el slash como %2F.
+        $endpoint_with_qs = '/attributes?parent=' . $parent_value . $optional_qs;
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
@@ -2444,9 +2419,9 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                 'info',
                 sprintf( 'Attempt %d/%d: Fetching attribute metadata.', $idx + 1, count( $parents_to_try ) ),
                 array(
-                    'parent'    => $parent_value,
-                    'category'  => $category_name,
-                    'endpoint'  => self::$business_api_base . $endpoint_with_qs,
+                    'parent'   => $parent_value,
+                    'category' => $category_name,
+                    'endpoint' => self::$business_api_base . $endpoint_with_qs,
                 )
             );
         }
@@ -2459,7 +2434,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             ) );
         }
 
-        // Pasamos $query_args vacío — el QS ya está embebido en $endpoint_with_qs.
+        // $query_args vacío — el QS ya está embebido en $endpoint_with_qs.
         $result = self::make_request(
             $business_id,
             $endpoint_with_qs,
@@ -2471,7 +2446,6 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         );
 
         if ( ! is_wp_error( $result ) ) {
-            // ── Éxito ────────────────────────────────────────────────────────
             $metadata = array();
             if ( ! empty( $result['attributeMetadata'] ) && is_array( $result['attributeMetadata'] ) ) {
                 $metadata = $result['attributeMetadata'];
@@ -2497,7 +2471,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             return $metadata;
         }
 
-        // ── Error — loguear detalladamente ───────────────────────────────────
+        // ── Error — loguear el raw_body para diagnóstico ──────────────────────
         $last_error = $result;
         $error_data = $result->get_error_data();
 
@@ -2524,23 +2498,13 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             ) );
         }
 
-        // Si NO es un error de argumento inválido, no seguimos intentando
-        // (podría ser rate limit, auth error, etc.)
-        $error_code = $result->get_error_code();
-        if ( ! in_array( $error_code, array( 'api_error' ), true ) ) {
-            break;
-        }
-
-        // Si el código HTTP es 400 (INVALID_ARGUMENT), sí probamos el siguiente parent
+        // Solo reintentar con el siguiente parent si es HTTP 400
         $http_code = is_array( $error_data ) ? ( (int) ( $error_data['code'] ?? 0 ) ) : 0;
         if ( 400 !== $http_code ) {
-            break; // Para otros errores (401, 403, 429, 5xx) no reintentamos
+            break;
         }
-
-        // Continuar con el siguiente parent
     }
 
-    // Todos los intentos fallaron
     if ( is_wp_error( $last_error ) ) {
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( '[OY GMB More] get_attribute_metadata error: ' . $last_error->get_error_message() );
