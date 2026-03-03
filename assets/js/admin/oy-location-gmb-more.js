@@ -4,6 +4,7 @@
  * Maneja las interacciones del metabox de atributos dinámicos:
  * - Detectar cambios en campos y marcar el estado "modificado"
  * - Botón "Actualizar metadatos" → AJAX refresh y recarga de página
+ * - Botón "Agregar los atributos" → AJAX render UI (sin llamar a Google) y pinta campos
  * - Botón "Enviar a Google ↑" → AJAX push a GMB API
  *
  * @package Lealez
@@ -29,6 +30,7 @@
 
         initChangeTracking();
         initRefreshButton();
+        initRenderButton();
         initPushButton();
     });
 
@@ -118,6 +120,64 @@
                     setButtonLoading(btn, false);
                     showNotice('error', (i18n.refreshError || 'Error al actualizar metadatos.') + ' (' + error + ')');
                     if (window.console) console.error('[OY GMB More] AJAX error (refresh):', status, error);
+                }
+            });
+        });
+    }
+
+    // =========================================================================
+    // RENDER ATTRIBUTES BUTTON (NEW)
+    // =========================================================================
+
+    /**
+     * Inicializa el botón "Agregar los atributos" (render UI sin llamar a Google).
+     */
+    function initRenderButton() {
+        $(document).on('click', '.oy-gmb-more-btn-render', function (e) {
+            e.preventDefault();
+
+            var btn = $(this);
+            if (btn.hasClass('is-loading') || btn.prop('disabled')) {
+                if (btn.prop('disabled')) {
+                    showNotice('error', i18n.renderNeedMeta || 'No hay metadatos cargados. Primero haz clic en "Actualizar metadatos".');
+                }
+                return;
+            }
+
+            showNotice('info', i18n.rendering || 'Agregando atributos en la UI...');
+            setButtonLoading(btn, true);
+
+            $.ajax({
+                url     : ajaxUrl,
+                method  : 'POST',
+                dataType: 'json',
+                data    : {
+                    action  : 'oy_gmb_more_render_attributes',
+                    nonce   : nonce,
+                    post_id : postId
+                },
+                success: function (response) {
+                    setButtonLoading(btn, false);
+
+                    if (response.success) {
+                        // Pintar HTML de grupos en el contenedor del metabox
+                        var contentEl = $('#oy-gmb-more-content-' + postId);
+                        if (contentEl.length && response.data && response.data.html) {
+                            contentEl.html(response.data.html);
+                        }
+
+                        showNotice('success', response.data.message || (i18n.renderDone || 'Atributos agregados en la UI.'));
+                    } else {
+                        var msg = (response.data && response.data.message)
+                            ? response.data.message
+                            : (i18n.renderError || 'No se pudieron renderizar los atributos.');
+                        showNotice('error', msg);
+                    }
+                },
+                error: function (xhr, status, error) {
+                    setButtonLoading(btn, false);
+                    showNotice('error', (i18n.renderError || 'No se pudieron renderizar los atributos.') + ' (' + error + ')');
+                    if (window.console) console.error('[OY GMB More] AJAX error (render):', status, error);
                 }
             });
         });
