@@ -98,55 +98,57 @@ if ( ! class_exists( 'OY_Location_GMB_More_Metabox' ) ) {
          *
          * @param string $hook Hook de la pantalla actual.
          */
-        public function enqueue_scripts( $hook ) {
-            if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
-                return;
-            }
-            global $post;
-            if ( ! $post || 'oy_location' !== $post->post_type ) {
-                return;
-            }
+public function enqueue_scripts( $hook ) {
+    if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
+        return;
+    }
 
-            $js_file = LEALEZ_PLUGIN_DIR . 'assets/js/admin/oy-location-gmb-more.js';
-            $js_url  = LEALEZ_PLUGIN_URL . 'assets/js/admin/oy-location-gmb-more.js';
-            $version = file_exists( $js_file ) ? filemtime( $js_file ) : LEALEZ_VERSION;
+    global $post;
+    if ( ! $post || 'oy_location' !== $post->post_type ) {
+        return;
+    }
 
-            wp_enqueue_script(
-                'oy-location-gmb-more',
-                $js_url,
-                array( 'jquery' ),
-                $version,
-                true
-            );
+    $js_file = LEALEZ_PLUGIN_DIR . 'assets/js/admin/oy-location-gmb-more.js';
+    $js_url  = LEALEZ_PLUGIN_URL . 'assets/js/admin/oy-location-gmb-more.js';
+    $version = file_exists( $js_file ) ? filemtime( $js_file ) : LEALEZ_VERSION;
 
-            wp_localize_script(
-                'oy-location-gmb-more',
-                'oyGmbMoreConfig',
-                array(
-                    'ajaxUrl'             => admin_url( 'admin-ajax.php' ),
-                    'nonce'               => wp_create_nonce( self::NONCE_AJAX_ACTION ),
-                    'postId'              => $post->ID,
-                    'i18n' => array(
-                        'refreshing'      => __( 'Actualizando metadatos...', 'lealez' ),
-                        'refreshDone'     => __( 'Metadatos actualizados.', 'lealez' ),
-                        'refreshError'    => __( 'Error al actualizar metadatos.', 'lealez' ),
-                        'pushing'         => __( 'Enviando a Google...', 'lealez' ),
-                        'pushDone'        => __( 'Atributos actualizados en Google Business Profile.', 'lealez' ),
-                        'pushError'       => __( 'Error al enviar a Google.', 'lealez' ),
-                        'confirmPush'     => __( '¿Enviar los cambios directamente a Google Business Profile?', 'lealez' ),
-                    ),
-                )
-            );
+    wp_enqueue_script(
+        'oy-location-gmb-more',
+        $js_url,
+        array( 'jquery' ),
+        $version,
+        true
+    );
 
-// ✅ CSS inline: usar un handle real registrado por el plugin (evita deprecated warnings)
-$css_handle = 'oy-location-gmb-more-inline';
-wp_register_style( $css_handle, false, array(), $version );
-wp_enqueue_style( $css_handle );
+    wp_localize_script(
+        'oy-location-gmb-more',
+        'oyGmbMoreConfig',
+        array(
+            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+            'nonce'   => wp_create_nonce( self::NONCE_AJAX_ACTION ),
+            'postId'  => $post->ID,
+            'i18n'    => array(
+                'refreshing'   => __( 'Actualizando metadatos...', 'lealez' ),
+                'refreshDone'  => __( 'Metadatos actualizados.', 'lealez' ),
+                'refreshError' => __( 'Error al actualizar metadatos.', 'lealez' ),
+                'pushing'      => __( 'Enviando a Google...', 'lealez' ),
+                'pushDone'     => __( 'Atributos actualizados en Google Business Profile.', 'lealez' ),
+                'pushError'    => __( 'Error al enviar a Google.', 'lealez' ),
+                'confirmPush'  => __( '¿Enviar los cambios directamente a Google Business Profile?', 'lealez' ),
+            ),
+        )
+    );
 
-wp_add_inline_style(
-    $css_handle,
-    $this->get_inline_styles()
-);
+    // ✅ CSS inline: usar un handle real registrado por el plugin (evita deprecated warnings)
+    $css_handle = 'oy-location-gmb-more-inline';
+    wp_register_style( $css_handle, false, array(), $version );
+    wp_enqueue_style( $css_handle );
+
+    wp_add_inline_style(
+        $css_handle,
+        $this->get_inline_styles()
+    );
+}
 
         // =========================================================================
         // RENDER
