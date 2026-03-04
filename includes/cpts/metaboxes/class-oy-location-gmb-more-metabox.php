@@ -406,6 +406,17 @@ public function render_metabox( $post ) {
          * @param array  $current_values Mapa actual de valores.
          * @param int    $post_id       ID del post.
          */
+/**
+ * Renderiza un campo de atributo individual según su `valueType`.
+ *
+ * Los atributos de tipo URL (url_whatsapp, url_facebook, url_booking, etc.)
+ * se omiten porque ya están gestionados en class-oy-location-cpt.php.
+ *
+ * @param string $attr_id        ID del atributo (e.g. 'has_women_led').
+ * @param array  $attr_meta      Metadata del atributo.
+ * @param array  $current_values Mapa actual de valores.
+ * @param int    $post_id        ID del post.
+ */
 private function render_single_attribute( $attr_id, $attr_meta, $current_values, $post_id ) {
 
     $value_type   = isset( $attr_meta['valueType'] ) ? strtoupper( (string) $attr_meta['valueType'] ) : 'BOOL';
@@ -424,6 +435,17 @@ private function render_single_attribute( $attr_id, $attr_meta, $current_values,
     }
 
     if ( $is_deprecated ) {
+        return;
+    }
+
+    /**
+     * ✅ FILTRO URLs:
+     * Los atributos de tipo URL (url_whatsapp, url_facebook, url_booking,
+     * url_menu, url_order, url_text_messaging, etc.) ya son gestionados
+     * en class-oy-location-cpt.php (campos de contacto, redes sociales,
+     * URLs de reservas/pedidos). No los mostramos aquí para evitar duplicados.
+     */
+    if ( 'URL' === $value_type ) {
         return;
     }
 
@@ -464,10 +486,6 @@ private function render_single_attribute( $attr_id, $attr_meta, $current_values,
                     $this->render_enum_field( $field_name, $field_id, $current_raw, $value_metadata );
                     break;
 
-                case 'URL':
-                    $this->render_url_field( $field_name, $field_id, $current_raw );
-                    break;
-
                 case 'REPEATED_ENUM':
                     $value_metadata = isset( $attr_meta['valueMetadata'] ) && is_array( $attr_meta['valueMetadata'] )
                         ? $attr_meta['valueMetadata']
@@ -476,7 +494,9 @@ private function render_single_attribute( $attr_id, $attr_meta, $current_values,
                     break;
 
                 default:
-                    $this->render_url_field( $field_name, $field_id, $current_raw );
+                    // Tipos no reconocidos: mostrar como texto plano de solo lectura
+                    $fallback_val = is_array( $current_raw ) ? implode( ', ', $current_raw ) : (string) $current_raw;
+                    echo '<span class="oy-gmb-more-field-unset">' . esc_html( $fallback_val ) . '</span>';
                     break;
             }
             ?>
@@ -1061,56 +1081,72 @@ private function get_cached_attribute_metadata( $post_id, $business_id, $locatio
          * @param bool   $force_refresh Si true, ignora el caché anterior.
          * @return array|WP_Error
          */
-        private function fetch_and_cache_attribute_metadata( $post_id, $business_id, $location_name, $force_refresh = false ) {
-            if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-                return new WP_Error( 'missing_class', __( 'Lealez_GMB_API no está disponible.', 'lealez' ) );
-            }
+/**
+ * Fetcha los metadatos desde la API y los guarda en post_meta.
+ *
+ * @param int    $post_id
+ * @param int    $business_id
+ * @param string $location_name
+ * @param bool   $force_refresh Si true, ignora el caché anterior.
+ * @return array|WP_Error
+ */
+private function fetch_and_cache_attribute_metadata( $post_id, $business_id, $location_name, $force_refresh = false ) {
+    if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+        return new WP_Error( 'missing_class', __( 'Lealez_GMB_API no está disponible.', 'lealez' ) );
+    }
 
-            if ( ! method_exists( 'Lealez_GMB_API', 'get_attribute_metadata' ) ) {
-                // El método aún no existe: devolver array vacío sin error fatal
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY GMB More] Lealez_GMB_API::get_attribute_metadata() no está definido.' );
-                }
-                return array();
-            }
-
-            // Obtener la categoría principal de la location (necesaria para el endpoint de metadatos)
-            $primary_category = (string) get_post_meta( $post_id, 'google_primary_category', true );
-            $region_code      = (string) get_post_meta( $post_id, 'location_country', true );
-            if ( '' === $region_code ) {
-                $region_code = 'CO'; // Default Colombia
-            }
-
-            $metadata = Lealez_GMB_API::get_attribute_metadata(
-                $business_id,
-                $location_name,
-                $primary_category,
-                $region_code,
-                'es',
-                ! $force_refresh
-            );
-
-            if ( is_wp_error( $metadata ) ) {
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY GMB More] fetch_attribute_metadata error: ' . $metadata->get_error_message() );
-                }
-                return $metadata;
-            }
-
-            if ( ! is_array( $metadata ) ) {
-                return array();
-            }
-
-            // Guardar en post_meta como caché
-            update_post_meta( $post_id, '_gmb_attrs_metadata', wp_json_encode( $metadata ) );
-            update_post_meta( $post_id, '_gmb_attrs_metadata_last_fetch', time() );
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB More] Attribute metadata cached: ' . count( $metadata ) . ' attribute(s) for post ' . $post_id );
-            }
-
-            return $metadata;
+    if ( ! method_exists( 'Lealez_GMB_API', 'get_attribute_metadata' ) ) {
+        // El método aún no existe: devolver array vacío sin error fatal
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY GMB More] Lealez_GMB_API::get_attribute_metadata() no está definido.' );
         }
+        return array();
+    }
+
+    // Obtener la categoría principal de la location (necesaria para el endpoint de metadatos)
+    $primary_category = (string) get_post_meta( $post_id, 'google_primary_category', true );
+    $region_code      = (string) get_post_meta( $post_id, 'location_country', true );
+    if ( '' === $region_code ) {
+        $region_code = 'CO'; // Default Colombia
+    }
+
+    $metadata = Lealez_GMB_API::get_attribute_metadata(
+        $business_id,
+        $location_name,
+        $primary_category,
+        $region_code,
+        'es',
+        ! $force_refresh
+    );
+
+    if ( is_wp_error( $metadata ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY GMB More] fetch_attribute_metadata error: ' . $metadata->get_error_message() );
+        }
+        return $metadata;
+    }
+
+    if ( ! is_array( $metadata ) ) {
+        return array();
+    }
+
+    // ✅ FIX UNICODE: usar JSON_UNESCAPED_UNICODE para evitar que WordPress
+    // corrompa las secuencias \uXXXX al aplicar stripslashes_deep() en get_post_meta().
+    // Con JSON_UNESCAPED_UNICODE los caracteres como ñ, á, é se almacenan directamente
+    // como UTF-8, sin secuencias de escape que WordPress pueda dañar.
+    update_post_meta(
+        $post_id,
+        '_gmb_attrs_metadata',
+        wp_json_encode( $metadata, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+    );
+    update_post_meta( $post_id, '_gmb_attrs_metadata_last_fetch', time() );
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY GMB More] Attribute metadata cached: ' . count( $metadata ) . ' attribute(s) for post ' . $post_id );
+    }
+
+    return $metadata;
+}
 
         // =========================================================================
         // HELPERS: DATOS
