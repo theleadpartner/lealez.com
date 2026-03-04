@@ -325,78 +325,100 @@ public function render_metabox( $post ) {
     <?php
 }
 
-        /**
-         * Renderiza los atributos agrupados por `groupDisplayName`.
-         *
-         * @param array $metadata       Array de AttributeMetadata objects.
-         * @param array $current_values Mapa [attr_id => value].
-         * @param int   $post_id        ID del post.
-         */
-        private function render_attribute_groups( $metadata, $current_values, $post_id ) {
-            // Organizar por grupo
-            $groups = array();
-            foreach ( $metadata as $attr_meta ) {
-                if ( ! is_array( $attr_meta ) ) {
-                    continue;
-                }
-                // Compatibilidad: attributeId puede estar en 'attributeId' o derivarse de 'name'
-                $attr_id = $this->extract_attr_id_from_meta( $attr_meta );
-                if ( '' === $attr_id ) {
-                    continue;
-                }
-
-                $group_name = ! empty( $attr_meta['groupDisplayName'] )
-                    ? (string) $attr_meta['groupDisplayName']
-                    : __( 'Otros atributos', 'lealez' );
-
-                if ( ! isset( $groups[ $group_name ] ) ) {
-                    $groups[ $group_name ] = array();
-                }
-                $groups[ $group_name ][ $attr_id ] = $attr_meta;
-            }
-
-            if ( empty( $groups ) ) {
-                echo '<p class="description">' .
-                     esc_html__( 'No se encontraron atributos disponibles para esta categoría de negocio.', 'lealez' ) .
-                     '</p>';
-                return;
-            }
-
-            // Priorizar el grupo "Información proporcionada por la empresa"
-            $priority_groups = array(
-                'Información proporcionada por la empresa',
-                'Information provided by the business',
-            );
-
-            $sorted_groups = array();
-            foreach ( $priority_groups as $pname ) {
-                if ( isset( $groups[ $pname ] ) ) {
-                    $sorted_groups[ $pname ] = $groups[ $pname ];
-                    unset( $groups[ $pname ] );
-                }
-            }
-            foreach ( $groups as $gname => $attrs ) {
-                $sorted_groups[ $gname ] = $attrs;
-            }
-
-            // Renderizar cada grupo
-            foreach ( $sorted_groups as $group_name => $attrs ) {
-                $group_id = 'oy-gmb-group-' . sanitize_title( $group_name );
-                ?>
-                <div class="oy-gmb-more-group" id="<?php echo esc_attr( $group_id ); ?>">
-                    <h4 class="oy-gmb-more-group-title">
-                        <?php echo esc_html( $group_name ); ?>
-                        <span class="oy-gmb-more-group-count"><?php echo count( $attrs ); ?></span>
-                    </h4>
-                    <div class="oy-gmb-more-group-fields">
-                        <?php foreach ( $attrs as $attr_id => $attr_meta ) : ?>
-                            <?php $this->render_single_attribute( $attr_id, $attr_meta, $current_values, $post_id ); ?>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-                <?php
-            }
+/**
+ * Renderiza los atributos agrupados por `groupDisplayName`.
+ * Los grupos que quedan vacíos tras filtrar atributos URL/deprecated se omiten,
+ * evitando que aparezca un cabezote sin contenido.
+ *
+ * @param array $metadata       Array de AttributeMetadata objects.
+ * @param array $current_values Mapa [attr_id => value].
+ * @param int   $post_id        ID del post.
+ */
+private function render_attribute_groups( $metadata, $current_values, $post_id ) {
+    // ── Organizar por grupo ──────────────────────────────────────────────────
+    $groups = array();
+    foreach ( $metadata as $attr_meta ) {
+        if ( ! is_array( $attr_meta ) ) {
+            continue;
         }
+
+        $attr_id = $this->extract_attr_id_from_meta( $attr_meta );
+        if ( '' === $attr_id ) {
+            continue;
+        }
+
+        // ── Pre-filtro: excluir deprecated ──────────────────────────────────
+        $is_deprecated = ! empty( $attr_meta['deprecated'] ) || ! empty( $attr_meta['isDeprecated'] );
+        if ( $is_deprecated ) {
+            continue;
+        }
+
+        // ── Pre-filtro: excluir atributos de tipo URL ────────────────────────
+        // Estos ya están gestionados en class-oy-location-cpt.php (redes sociales,
+        // URLs de reservas, pedidos, menú, WhatsApp, etc.). Omitirlos aquí evita
+        // duplicados y que aparezcan cabezotes de grupo vacíos.
+        $value_type = isset( $attr_meta['valueType'] ) ? strtoupper( (string) $attr_meta['valueType'] ) : 'BOOL';
+        if ( 'URL' === $value_type ) {
+            continue;
+        }
+
+        $group_name = ! empty( $attr_meta['groupDisplayName'] )
+            ? (string) $attr_meta['groupDisplayName']
+            : __( 'Otros atributos', 'lealez' );
+
+        if ( ! isset( $groups[ $group_name ] ) ) {
+            $groups[ $group_name ] = array();
+        }
+        $groups[ $group_name ][ $attr_id ] = $attr_meta;
+    }
+
+    if ( empty( $groups ) ) {
+        echo '<p class="description">' .
+             esc_html__( 'No se encontraron atributos disponibles para esta categoría de negocio.', 'lealez' ) .
+             '</p>';
+        return;
+    }
+
+    // ── Priorizar el grupo "Información proporcionada por la empresa" ────────
+    $priority_groups = array(
+        'Información proporcionada por la empresa',
+        'Information provided by the business',
+    );
+
+    $sorted_groups = array();
+    foreach ( $priority_groups as $pname ) {
+        if ( isset( $groups[ $pname ] ) ) {
+            $sorted_groups[ $pname ] = $groups[ $pname ];
+            unset( $groups[ $pname ] );
+        }
+    }
+    foreach ( $groups as $gname => $attrs ) {
+        $sorted_groups[ $gname ] = $attrs;
+    }
+
+    // ── Renderizar cada grupo (solo si tiene atributos visibles) ────────────
+    foreach ( $sorted_groups as $group_name => $attrs ) {
+        // Saltar grupos vacíos (por si quedaron tras el filtro)
+        if ( empty( $attrs ) ) {
+            continue;
+        }
+
+        $group_id = 'oy-gmb-group-' . sanitize_title( $group_name );
+        ?>
+        <div class="oy-gmb-more-group" id="<?php echo esc_attr( $group_id ); ?>">
+            <h4 class="oy-gmb-more-group-title">
+                <?php echo esc_html( $group_name ); ?>
+                <span class="oy-gmb-more-group-count"><?php echo count( $attrs ); ?></span>
+            </h4>
+            <div class="oy-gmb-more-group-fields">
+                <?php foreach ( $attrs as $attr_id => $attr_meta ) : ?>
+                    <?php $this->render_single_attribute( $attr_id, $attr_meta, $current_values, $post_id ); ?>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php
+    }
+}
 
         /**
          * Renderiza un campo de atributo individual según su `valueType`.
