@@ -125,6 +125,22 @@ public function __construct() {
             new OY_Location_GMB_More_Metabox();
         }
     }
+
+    /**
+     * ✅ Metabox externo: Horarios de Atención
+     * Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
+     *
+     * Registra, renderiza y guarda el metabox de forma independiente.
+     * Expone AJAX propio: oy_sync_location_hours_from_gmb
+     */
+    $hours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-hours-metabox.php';
+    if ( file_exists( $hours_metabox_file ) ) {
+        require_once $hours_metabox_file;
+
+        if ( class_exists( 'OY_Location_Hours_Metabox' ) ) {
+            new OY_Location_Hours_Metabox();
+        }
+    }
 }
 
 
@@ -191,122 +207,116 @@ public function register_post_type() {
     /**
      * Add meta boxes
      */
-    public function add_meta_boxes() {
+public function add_meta_boxes() {
 
-        // ── SIDEBAR ─────────────────────────────────────────────
+    // ── SIDEBAR ─────────────────────────────────────────────
 
-        // Parent Business Selection (sidebar top)
-        add_meta_box(
-            'oy_location_parent_business',
-            __( 'Empresa/Negocio', 'lealez' ),
-            array( $this, 'render_parent_business_meta_box' ),
-            $this->post_type,
-            'side',
-            'high'
-        );
+    // Parent Business Selection (sidebar top)
+    add_meta_box(
+        'oy_location_parent_business',
+        __( 'Empresa/Negocio', 'lealez' ),
+        array( $this, 'render_parent_business_meta_box' ),
+        $this->post_type,
+        'side',
+        'high'
+    );
 
-        // GMB Metrics (sidebar)
-        add_meta_box(
-            'oy_location_gmb_metrics',
-            __( 'Métricas de Google My Business', 'lealez' ),
-            array( $this, 'render_gmb_metrics_meta_box' ),
-            $this->post_type,
-            'side',
-            'default'
-        );
+    // GMB Metrics (sidebar)
+    add_meta_box(
+        'oy_location_gmb_metrics',
+        __( 'Métricas de Google My Business', 'lealez' ),
+        array( $this, 'render_gmb_metrics_meta_box' ),
+        $this->post_type,
+        'side',
+        'default'
+    );
 
-        // ── MAIN COLUMN ──────────────────────────────────────────
+    // ── MAIN COLUMN ──────────────────────────────────────────
 
-        // 1. Google My Business Integration — primero para que el import rellene los campos
-        add_meta_box(
-            'oy_location_gmb',
-            __( 'Integración Google My Business', 'lealez' ),
-            array( $this, 'render_gmb_meta_box' ),
-            $this->post_type,
-            'normal',
-            'high'
-        );
+    // 1. Google My Business Integration — primero para que el import rellene los campos
+    add_meta_box(
+        'oy_location_gmb',
+        __( 'Integración Google My Business', 'lealez' ),
+        array( $this, 'render_gmb_meta_box' ),
+        $this->post_type,
+        'normal',
+        'high'
+    );
 
-        // 2. Basic Information
-        add_meta_box(
-            'oy_location_basic_info',
-            __( 'Información Básica', 'lealez' ),
-            array( $this, 'render_basic_info_meta_box' ),
-            $this->post_type,
-            'normal',
-            'high'
-        );
+    // 2. Basic Information
+    add_meta_box(
+        'oy_location_basic_info',
+        __( 'Información Básica', 'lealez' ),
+        array( $this, 'render_basic_info_meta_box' ),
+        $this->post_type,
+        'normal',
+        'high'
+    );
 
-        // 3. Address and Geolocation
-        add_meta_box(
-            'oy_location_address',
-            __( 'Dirección y Geolocalización', 'lealez' ),
-            array( $this, 'render_address_meta_box' ),
-            $this->post_type,
-            'normal',
-            'high'
-        );
+    // 3. Address and Geolocation
+    add_meta_box(
+        'oy_location_address',
+        __( 'Dirección y Geolocalización', 'lealez' ),
+        array( $this, 'render_address_meta_box' ),
+        $this->post_type,
+        'normal',
+        'high'
+    );
 
-        // 4. Contact Information
-        add_meta_box(
-            'oy_location_contact',
-            __( 'Información de Contacto', 'lealez' ),
-            array( $this, 'render_contact_meta_box' ),
-            $this->post_type,
-            'normal',
-            'default'
-        );
+    // 4. Contact Information
+    add_meta_box(
+        'oy_location_contact',
+        __( 'Información de Contacto', 'lealez' ),
+        array( $this, 'render_contact_meta_box' ),
+        $this->post_type,
+        'normal',
+        'default'
+    );
 
-        // 5. Business Hours
-        add_meta_box(
-            'oy_location_hours',
-            __( 'Horarios de Atención', 'lealez' ),
-            array( $this, 'render_hours_meta_box' ),
-            $this->post_type,
-            'normal',
-            'default'
-        );
+    // 5. Business Hours → MOVIDO a OY_Location_Hours_Metabox (metaboxes/class-oy-location-hours-metabox.php)
+    //    Se omite aquí para evitar registro duplicado. El nuevo metabox conserva
+    //    el mismo ID 'oy_location_hours' para mantener la posición guardada por el usuario.
 
-        // 6. Attributes and Features
-        add_meta_box(
-            'oy_location_attributes',
-            __( 'Atributos y Características', 'lealez' ),
-            array( $this, 'render_attributes_meta_box' ),
-            $this->post_type,
-            'normal',
-            'default'
-        );
+    // 6. Attributes and Features
+    add_meta_box(
+        'oy_location_attributes',
+        __( 'Atributos y Características', 'lealez' ),
+        array( $this, 'render_attributes_meta_box' ),
+        $this->post_type,
+        'normal',
+        'default'
+    );
 
-        // 7. Loyalty Program Settings
-        add_meta_box(
-            'oy_location_loyalty',
-            __( 'Configuración de Lealtad', 'lealez' ),
-            array( $this, 'render_loyalty_meta_box' ),
-            $this->post_type,
-            'normal',
-            'low'
-        );
+    // 7. Loyalty Program Settings
+    add_meta_box(
+        'oy_location_loyalty',
+        __( 'Configuración de Lealtad', 'lealez' ),
+        array( $this, 'render_loyalty_meta_box' ),
+        $this->post_type,
+        'normal',
+        'low'
+    );
 
-        // 8. Staff, Social & Notes — campos manuales que NO vienen de GMB
-        add_meta_box(
-            'oy_location_staff_notes',
-            __( 'Personal, Redes Sociales & Notas', 'lealez' ),
-            array( $this, 'render_staff_notes_meta_box' ),
-            $this->post_type,
-            'normal',
-            'low'
-        );
+    // 8. Staff, Social & Notes — campos manuales que NO vienen de GMB
+    add_meta_box(
+        'oy_location_staff_notes',
+        __( 'Personal, Redes Sociales & Notas', 'lealez' ),
+        array( $this, 'render_staff_notes_meta_box' ),
+        $this->post_type,
+        'normal',
+        'low'
+    );
 
-        // 9. Technical Data / RAW — consolidado, colapsado por defecto
-        add_meta_box(
-            'oy_location_technical_data',
-            __( '🔧 Datos Técnicos / RAW Google', 'lealez' ),
-            array( $this, 'render_technical_data_meta_box' ),
-            $this->post_type,
-            'normal',
-            'low'
-        );
-    }
+    // 9. Technical Data / RAW — consolidado, colapsado por defecto
+    add_meta_box(
+        'oy_location_technical_data',
+        __( '🔧 Datos Técnicos / RAW Google', 'lealez' ),
+        array( $this, 'render_technical_data_meta_box' ),
+        $this->post_type,
+        'normal',
+        'low'
+    );
+}
 
     /**
      * Render Parent Business meta box
@@ -3595,10 +3605,6 @@ private function humanize_attribute_id( $attr_id ) {
             // NOTA: location_booking_url y location_order_url se derivan de los arrays
             // location_booking_urls / location_order_urls (guardados más abajo).
 
-            // Hours
-            'location_hours_timezone'         => 'sanitize_text_field',
-            'location_hours_status'           => 'sanitize_text_field',
-
             // GMB (existing)
             'gmb_location_id'                 => 'sanitize_text_field',
             'gmb_account_id'                  => 'sanitize_text_field',
@@ -3799,63 +3805,6 @@ private function humanize_attribute_id( $attr_id ) {
             }
             // Nota: location_menu_url_from_gmb solo se escribe a '1' durante el import de GMB.
             // Si el usuario borra el campo manualmente, se limpia el flag de GMB.
-        }
-
-        // Save hours status (alineado con GMB: open_with_hours, open_without_hours, temporarily_closed, permanently_closed)
-        $valid_hours_statuses = array( 'open_with_hours', 'open_without_hours', 'temporarily_closed', 'permanently_closed' );
-        if ( isset( $_POST['location_hours_status'] ) ) {
-            $hours_status_raw = sanitize_text_field( wp_unslash( $_POST['location_hours_status'] ) );
-            if ( in_array( $hours_status_raw, $valid_hours_statuses, true ) ) {
-                update_post_meta( $post_id, 'location_hours_status', $hours_status_raw );
-            }
-        }
-
-        // Save hours (per day) — estructura v2 con periods[]
-        // Formato POST: location_hours_{day}[closed]=1, location_hours_{day}[periods][0][open], [0][close], [1][open], etc.
-        $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
-        foreach ( $days as $day ) {
-            if ( ! isset( $_POST[ 'location_hours_' . $day ] ) ) {
-                continue;
-            }
-            $raw    = wp_unslash( $_POST[ 'location_hours_' . $day ] );
-            $closed = ! empty( $raw['closed'] );
-
-            $periods_raw = isset( $raw['periods'] ) && is_array( $raw['periods'] ) ? $raw['periods'] : array();
-
-            // Normalizar y validar cada período
-            $periods_clean = array();
-            $is_all_day    = false;
-            foreach ( $periods_raw as $praw ) {
-                if ( ! is_array( $praw ) ) { continue; }
-                $popen  = sanitize_text_field( $praw['open']  ?? '09:00' );
-                $pclose = sanitize_text_field( $praw['close'] ?? '18:00' );
-                if ( $popen === '24_hours' ) {
-                    $is_all_day     = true;
-                    $pclose         = '';
-                    $periods_clean  = array( array( 'open' => '24_hours', 'close' => '' ) );
-                    break; // 24h → un solo período, ignorar el resto
-                }
-                if ( empty( $popen ) ) { continue; }
-                $periods_clean[] = array( 'open' => $popen, 'close' => $pclose );
-            }
-
-            if ( empty( $periods_clean ) ) {
-                $periods_clean = array( array( 'open' => '09:00', 'close' => '18:00' ) );
-            }
-
-            // Backward-compat: guardar 'open'/'close' del primer período al nivel raíz
-            $first_open  = $periods_clean[0]['open']  ?? '09:00';
-            $first_close = $periods_clean[0]['close'] ?? '18:00';
-
-            $hours_data = array(
-                'closed'   => $closed,
-                'all_day'  => $is_all_day,
-                'periods'  => $periods_clean,
-                // v1 compat keys:
-                'open'     => $is_all_day ? '24_hours' : $first_open,
-                'close'    => $is_all_day ? '' : $first_close,
-            );
-            update_post_meta( $post_id, 'location_hours_' . $day, $hours_data );
         }
 
         // ✅ CORRECCIÓN: Atributos ahora vienen exclusivamente desde GMB (gmb_attributes_raw)
