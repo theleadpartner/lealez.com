@@ -141,6 +141,23 @@ public function __construct() {
             new OY_Location_Hours_Metabox();
         }
     }
+
+    /**
+     * ✅ Metabox externo: Dirección y Geolocalización
+     * Archivo: includes/cpts/metaboxes/class-oy-location-address-metabox.php
+     *
+     * Registra y renderiza el metabox de forma independiente para reducir el tamaño del CPT.
+     * IMPORTANTE: Mantiene las funciones JS window.oy_toggle_address_fields y window.oy_update_map_preview
+     * usadas por el botón "Importar Ahora" (applyLocationToForm).
+     */
+    $address_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-address-metabox.php';
+    if ( file_exists( $address_metabox_file ) ) {
+        require_once $address_metabox_file;
+
+        if ( class_exists( 'OY_Location_Address_Metabox' ) ) {
+            new OY_Location_Address_Metabox();
+        }
+    }
 }
 
 
@@ -253,15 +270,9 @@ public function add_meta_boxes() {
         'high'
     );
 
-    // 3. Address and Geolocation
-    add_meta_box(
-        'oy_location_address',
-        __( 'Dirección y Geolocalización', 'lealez' ),
-        array( $this, 'render_address_meta_box' ),
-        $this->post_type,
-        'normal',
-        'high'
-    );
+    // 3. Address and Geolocation → MOVIDO a OY_Location_Address_Metabox (metaboxes/class-oy-location-address-metabox.php)
+    //    Se omite aquí para evitar registro duplicado. El nuevo metabox conserva
+    //    el mismo ID 'oy_location_address' para mantener la posición guardada por el usuario.
 
     // 4. Contact Information
     add_meta_box(
