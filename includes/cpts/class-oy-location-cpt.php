@@ -3599,293 +3599,290 @@ public function render_technical_data_meta_box( $post ) {
     /**
      * Save meta boxes data
      */
-    public function save_meta_boxes( $post_id, $post ) {/**
- * Save meta boxes data
- */
-public function save_meta_boxes( $post_id, $post ) {
-    // Security checks
-    if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
-        return;
-    }
+    public function save_meta_boxes( $post_id, $post ) {
 
-    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-        return;
-    }
+        // Security checks
+        if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
+            return;
+        }
 
-    if ( ! current_user_can( 'edit_post', $post_id ) ) {
-        return;
-    }
+        if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+            return;
+        }
 
-    // Define all meta fields to save (solo los que vienen del formulario)
-    $meta_fields = array(
-        // Parent Business
-        'parent_business_id'              => 'sanitize_text_field',
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            return;
+        }
 
-        // Basic Info (closing_date removed from form but kept as meta)
-        'location_code'                   => 'sanitize_text_field',
-        'location_short_description'      => 'sanitize_textarea_field',
-        'location_status'                 => 'sanitize_text_field',
-        'opening_date'                    => 'sanitize_text_field',
+        // Define all meta fields to save (solo los que vienen del formulario)
+        $meta_fields = array(
+            // Parent Business
+            'parent_business_id'              => 'sanitize_text_field',
 
-        // Address (human)
-        'service_area_only'               => 'absint',
-        'show_address_to_customers'       => 'absint',
-        'location_address_line1'          => 'sanitize_text_field',
-        'location_address_line2'          => 'sanitize_text_field',
-        'location_neighborhood'           => 'sanitize_text_field',
-        'location_city'                   => 'sanitize_text_field',
-        'location_state'                  => 'sanitize_text_field',
-        'location_country'                => 'sanitize_text_field',
-        'location_postal_code'            => 'sanitize_text_field',
-        'location_latitude'               => 'sanitize_text_field',
-        'location_longitude'              => 'sanitize_text_field',
-        'location_place_id'               => 'sanitize_text_field', // kept as meta even though not in UI
-        'location_plus_code'              => 'sanitize_text_field',
+            // Basic Info (closing_date removed from form but kept as meta)
+            'location_code'                   => 'sanitize_text_field',
+            'location_short_description'      => 'sanitize_textarea_field',
+            'location_status'                 => 'sanitize_text_field',
+            'opening_date'                    => 'sanitize_text_field',
 
-        // Contact (human)
-        'location_phone'                  => 'sanitize_text_field',
-        'location_chat_url'               => 'esc_url_raw',
-        'location_email'                  => 'sanitize_email',
-        'location_website'                => 'esc_url_raw',
+            // Address (human)
+            'service_area_only'               => 'absint',
+            'show_address_to_customers'       => 'absint',
+            'location_address_line1'          => 'sanitize_text_field',
+            'location_address_line2'          => 'sanitize_text_field',
+            'location_neighborhood'           => 'sanitize_text_field',
+            'location_city'                   => 'sanitize_text_field',
+            'location_state'                  => 'sanitize_text_field',
+            'location_country'                => 'sanitize_text_field',
+            'location_postal_code'            => 'sanitize_text_field',
+            'location_latitude'               => 'sanitize_text_field',
+            'location_longitude'              => 'sanitize_text_field',
+            'location_place_id'               => 'sanitize_text_field', // kept as meta even though not in UI
+            'location_plus_code'              => 'sanitize_text_field',
 
-        // GMB (existing)
-        'gmb_location_id'                 => 'sanitize_text_field',
-        'gmb_account_id'                  => 'sanitize_text_field',
-        'gmb_verified'                    => 'absint',
-        'gmb_verification_method'         => 'sanitize_text_field',
-        'gmb_auto_sync_enabled'           => 'absint',
-        'gmb_sync_frequency'              => 'sanitize_text_field',
+            // Contact (human)
+            'location_phone'                  => 'sanitize_text_field',
+            'location_chat_url'               => 'esc_url_raw',
+            'location_email'                  => 'sanitize_email',
+            'location_website'                => 'esc_url_raw',
 
-        // ✅ NEW: selector & import flag
-        'gmb_location_name'               => 'sanitize_text_field',
-        'gmb_location_account_name'       => 'sanitize_text_field',
-        'gmb_import_on_save'              => 'absint',
+            // GMB (existing)
+            'gmb_location_id'                 => 'sanitize_text_field',
+            'gmb_account_id'                  => 'sanitize_text_field',
+            'gmb_verified'                    => 'absint',
+            'gmb_verification_method'         => 'sanitize_text_field',
+            'gmb_auto_sync_enabled'           => 'absint',
+            'gmb_sync_frequency'              => 'sanitize_text_field',
 
-        // Attributes (human)
-        'google_primary_category'         => 'sanitize_text_field',
-        'price_range'                     => 'sanitize_text_field',
+            // ✅ NEW: selector & import flag
+            'gmb_location_name'               => 'sanitize_text_field',
+            'gmb_location_account_name'       => 'sanitize_text_field',
+            'gmb_import_on_save'              => 'absint',
 
-        // Loyalty
-        'accepts_loyalty'                 => 'absint',
-        'loyalty_redemption_enabled'      => 'absint',
-        'loyalty_earning_enabled'         => 'absint',
-        'loyalty_multiplier'              => 'floatval',
-        'loyalty_terminal_id'             => 'sanitize_text_field',
+            // Attributes (human)
+            'google_primary_category'         => 'sanitize_text_field',
+            'price_range'                     => 'sanitize_text_field',
 
-        // Staff & Notes
-        'location_manager'                => 'sanitize_text_field',
-        'location_manager_email'          => 'sanitize_email',
-        'location_manager_phone'          => 'sanitize_text_field',
-        'internal_notes'                  => 'sanitize_textarea_field',
-        'manager_notes'                   => 'sanitize_textarea_field',
+            // Loyalty
+            'accepts_loyalty'                 => 'absint',
+            'loyalty_redemption_enabled'      => 'absint',
+            'loyalty_earning_enabled'         => 'absint',
+            'loyalty_multiplier'              => 'floatval',
+            'loyalty_terminal_id'             => 'sanitize_text_field',
 
-        // Address extras
-        'location_map_url'                => 'esc_url_raw',
-    );
+            // Staff & Notes
+            'location_manager'                => 'sanitize_text_field',
+            'location_manager_email'          => 'sanitize_email',
+            'location_manager_phone'          => 'sanitize_text_field',
+            'internal_notes'                  => 'sanitize_textarea_field',
+            'manager_notes'                   => 'sanitize_textarea_field',
 
-    // Save simple meta fields
-    foreach ( $meta_fields as $field_name => $sanitize_callback ) {
-        if ( isset( $_POST[ $field_name ] ) ) {
-            $value = call_user_func( $sanitize_callback, wp_unslash( $_POST[ $field_name ] ) );
-            update_post_meta( $post_id, $field_name, $value );
-        } else {
+            // Address extras
+            'location_map_url'                => 'esc_url_raw',
+        );
 
-            // ✅ Campos readonly que NO deben borrarse si no vienen en POST
-            $readonly_fields = array( 'gmb_location_id', 'gmb_account_id' );
-            if ( in_array( $field_name, $readonly_fields, true ) ) {
-                // No hacer nada, mantener el valor existente
-                continue;
-            }
+        // Save simple meta fields
+        foreach ( $meta_fields as $field_name => $sanitize_callback ) {
+            if ( isset( $_POST[ $field_name ] ) ) {
+                $value = call_user_func( $sanitize_callback, wp_unslash( $_POST[ $field_name ] ) );
+                update_post_meta( $post_id, $field_name, $value );
+            } else {
 
-            // ✅ Proteger location_latitude y location_longitude de ser borrados
-            if ( in_array( $field_name, array( 'location_latitude', 'location_longitude' ), true ) ) {
-                $existing_val = get_post_meta( $post_id, $field_name, true );
-                if ( '' !== $existing_val && false !== $existing_val ) {
+                // ✅ Campos readonly que NO deben borrarse si no vienen en POST
+                $readonly_fields = array( 'gmb_location_id', 'gmb_account_id' );
+                if ( in_array( $field_name, $readonly_fields, true ) ) {
                     continue;
                 }
-            }
 
-            // ✅ ojo: checkboxes no vienen si están off
-            if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save', 'service_area_only', 'show_address_to_customers' ), true ) ) {
-                delete_post_meta( $post_id, $field_name );
-            } else {
-                delete_post_meta( $post_id, $field_name );
+                // ✅ Proteger location_latitude y location_longitude de ser borrados
+                if ( in_array( $field_name, array( 'location_latitude', 'location_longitude' ), true ) ) {
+                    $existing_val = get_post_meta( $post_id, $field_name, true );
+                    if ( '' !== $existing_val && false !== $existing_val ) {
+                        continue;
+                    }
+                }
+
+                // ✅ ojo: checkboxes no vienen si están off
+                if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save', 'service_area_only', 'show_address_to_customers' ), true ) ) {
+                    delete_post_meta( $post_id, $field_name );
+                } else {
+                    delete_post_meta( $post_id, $field_name );
+                }
             }
         }
-    }
 
-    // ✅ NUEVO (UBICACIÓN CORRECTA): Guardar Áreas de servicio (JSON → array limpio)
-    if ( isset( $_POST['location_service_areas_json'] ) ) {
-        $raw = wp_unslash( $_POST['location_service_areas_json'] );
-        $raw = is_string( $raw ) ? trim( $raw ) : '';
+        // ✅ NUEVO (UBICACIÓN CORRECTA): Guardar Áreas de servicio (JSON → array limpio)
+        if ( isset( $_POST['location_service_areas_json'] ) ) {
+            $raw = wp_unslash( $_POST['location_service_areas_json'] );
+            $raw = is_string( $raw ) ? trim( $raw ) : '';
 
-        $arr = json_decode( $raw, true );
-        if ( ! is_array( $arr ) ) {
-            $arr = array();
+            $arr = json_decode( $raw, true );
+            if ( ! is_array( $arr ) ) {
+                $arr = array();
+            }
+
+            $clean = array();
+            $seen  = array();
+
+            foreach ( $arr as $v ) {
+                if ( ! is_string( $v ) ) {
+                    continue;
+                }
+                $s = trim( sanitize_text_field( $v ) );
+                if ( '' === $s ) {
+                    continue;
+                }
+                $k = strtolower( $s );
+                if ( isset( $seen[ $k ] ) ) {
+                    continue;
+                }
+                $seen[ $k ] = true;
+                $clean[]    = $s;
+            }
+
+            update_post_meta( $post_id, 'location_service_areas', $clean );
         }
 
-        $clean = array();
-        $seen  = array();
-
-        foreach ( $arr as $v ) {
-            if ( ! is_string( $v ) ) {
-                continue;
-            }
-            $s = trim( sanitize_text_field( $v ) );
-            if ( '' === $s ) {
-                continue;
-            }
-            $k = strtolower( $s );
-            if ( isset( $seen[ $k ] ) ) {
-                continue;
-            }
-            $seen[ $k ] = true;
-            $clean[]    = $s;
-        }
-
-        update_post_meta( $post_id, 'location_service_areas', $clean );
-    }
-
-    // ✅ Save loyalty_programs_accepted (array of IDs)
-    if ( isset( $_POST['loyalty_programs_accepted'] ) && is_array( $_POST['loyalty_programs_accepted'] ) ) {
-        $program_ids = array_map( 'absint', wp_unslash( $_POST['loyalty_programs_accepted'] ) );
-        $program_ids = array_filter( $program_ids ); // remove zeros
-        update_post_meta( $post_id, 'loyalty_programs_accepted', $program_ids );
-    } else {
-        update_post_meta( $post_id, 'loyalty_programs_accepted', array() );
-    }
-
-    // ✅ Save additional phones (dynamic list from gmb_phone_additional_list[])
-    if ( isset( $_POST['gmb_phone_additional_list'] ) && is_array( $_POST['gmb_phone_additional_list'] ) ) {
-        $additional_phones = array_map(
-            'sanitize_text_field',
-            array_map( 'wp_unslash', $_POST['gmb_phone_additional_list'] )
-        );
-        $additional_phones = array_values( array_filter( $additional_phones ) );
-        update_post_meta( $post_id, 'gmb_phone_additional_list', $additional_phones );
-
-        if ( ! empty( $additional_phones ) ) {
-            update_post_meta( $post_id, 'location_phone_additional', $additional_phones[0] );
+        // ✅ Save loyalty_programs_accepted (array of IDs)
+        if ( isset( $_POST['loyalty_programs_accepted'] ) && is_array( $_POST['loyalty_programs_accepted'] ) ) {
+            $program_ids = array_map( 'absint', wp_unslash( $_POST['loyalty_programs_accepted'] ) );
+            $program_ids = array_filter( $program_ids ); // remove zeros
+            update_post_meta( $post_id, 'loyalty_programs_accepted', $program_ids );
         } else {
+            update_post_meta( $post_id, 'loyalty_programs_accepted', array() );
+        }
+
+        // ✅ Save additional phones (dynamic list from gmb_phone_additional_list[])
+        if ( isset( $_POST['gmb_phone_additional_list'] ) && is_array( $_POST['gmb_phone_additional_list'] ) ) {
+            $additional_phones = array_map(
+                'sanitize_text_field',
+                array_map( 'wp_unslash', $_POST['gmb_phone_additional_list'] )
+            );
+            $additional_phones = array_values( array_filter( $additional_phones ) );
+            update_post_meta( $post_id, 'gmb_phone_additional_list', $additional_phones );
+
+            if ( ! empty( $additional_phones ) ) {
+                update_post_meta( $post_id, 'location_phone_additional', $additional_phones[0] );
+            } else {
+                delete_post_meta( $post_id, 'location_phone_additional' );
+            }
+        } else {
+            update_post_meta( $post_id, 'gmb_phone_additional_list', array() );
             delete_post_meta( $post_id, 'location_phone_additional' );
         }
-    } else {
-        update_post_meta( $post_id, 'gmb_phone_additional_list', array() );
-        delete_post_meta( $post_id, 'location_phone_additional' );
-    }
 
-    // ✅ Save social profiles (manual entries from dynamic list)
-    $social_networks_raw = isset( $_POST['social_profiles_manual_network'] ) && is_array( $_POST['social_profiles_manual_network'] )
-        ? array_map( 'sanitize_text_field', array_map( 'wp_unslash', $_POST['social_profiles_manual_network'] ) )
-        : array();
-    $social_urls_raw     = isset( $_POST['social_profiles_manual_url'] ) && is_array( $_POST['social_profiles_manual_url'] )
-        ? array_map( 'esc_url_raw', array_map( 'wp_unslash', $_POST['social_profiles_manual_url'] ) )
-        : array();
+        // ✅ Save social profiles (manual entries from dynamic list)
+        $social_networks_raw = isset( $_POST['social_profiles_manual_network'] ) && is_array( $_POST['social_profiles_manual_network'] )
+            ? array_map( 'sanitize_text_field', array_map( 'wp_unslash', $_POST['social_profiles_manual_network'] ) )
+            : array();
+        $social_urls_raw     = isset( $_POST['social_profiles_manual_url'] ) && is_array( $_POST['social_profiles_manual_url'] )
+            ? array_map( 'esc_url_raw', array_map( 'wp_unslash', $_POST['social_profiles_manual_url'] ) )
+            : array();
 
-    $social_profiles_manual = array();
-    foreach ( $social_networks_raw as $idx => $net ) {
-        if ( ! empty( $net ) && ! empty( $social_urls_raw[ $idx ] ) ) {
-            $social_profiles_manual[ sanitize_key( $net ) ] = $social_urls_raw[ $idx ];
+        $social_profiles_manual = array();
+        foreach ( $social_networks_raw as $idx => $net ) {
+            if ( ! empty( $net ) && ! empty( $social_urls_raw[ $idx ] ) ) {
+                $social_profiles_manual[ sanitize_key( $net ) ] = $social_urls_raw[ $idx ];
+            }
+        }
+        update_post_meta( $post_id, 'social_profiles_manual', $social_profiles_manual );
+
+        if ( isset( $social_profiles_manual['facebook'] ) ) {
+            update_post_meta( $post_id, 'social_facebook_local', $social_profiles_manual['facebook'] );
+        }
+        if ( isset( $social_profiles_manual['instagram'] ) ) {
+            update_post_meta( $post_id, 'social_instagram_local', $social_profiles_manual['instagram'] );
+        }
+
+        // ✅ Save location_booking_urls (array dinámico de URLs de Reservas)
+        $booking_urls_raw = isset( $_POST['location_booking_urls'] ) && is_array( $_POST['location_booking_urls'] )
+            ? wp_unslash( $_POST['location_booking_urls'] )
+            : array();
+
+        $booking_urls_clean = array();
+        foreach ( $booking_urls_raw as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            $burl  = esc_url_raw( (string) ( $entry['url']      ?? '' ) );
+            $blbl  = sanitize_text_field( (string) ( $entry['label']    ?? '' ) );
+            $btype = sanitize_text_field( (string) ( $entry['type']     ?? '' ) );
+            $bfgmb = absint( $entry['from_gmb'] ?? 0 );
+            if ( $burl ) {
+                $booking_urls_clean[] = array(
+                    'url'      => $burl,
+                    'label'    => $blbl,
+                    'type'     => $btype,
+                    'from_gmb' => $bfgmb,
+                );
+            }
+        }
+        update_post_meta( $post_id, 'location_booking_urls', $booking_urls_clean );
+        if ( ! empty( $booking_urls_clean ) ) {
+            update_post_meta( $post_id, 'location_booking_url', $booking_urls_clean[0]['url'] );
+        } else {
+            delete_post_meta( $post_id, 'location_booking_url' );
+        }
+
+        // ✅ Save location_order_urls (array dinámico de URLs para Ordenar Online)
+        $order_urls_raw = isset( $_POST['location_order_urls'] ) && is_array( $_POST['location_order_urls'] )
+            ? wp_unslash( $_POST['location_order_urls'] )
+            : array();
+
+        $order_urls_clean = array();
+        foreach ( $order_urls_raw as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            $ourl  = esc_url_raw( (string) ( $entry['url']      ?? '' ) );
+            $olbl  = sanitize_text_field( (string) ( $entry['label']    ?? '' ) );
+            $otype = sanitize_text_field( (string) ( $entry['type']     ?? '' ) );
+            $ofgmb = absint( $entry['from_gmb'] ?? 0 );
+            if ( $ourl ) {
+                $order_urls_clean[] = array(
+                    'url'      => $ourl,
+                    'label'    => $olbl,
+                    'type'     => $otype,
+                    'from_gmb' => $ofgmb,
+                );
+            }
+        }
+        update_post_meta( $post_id, 'location_order_urls', $order_urls_clean );
+        if ( ! empty( $order_urls_clean ) ) {
+            update_post_meta( $post_id, 'location_order_url', $order_urls_clean[0]['url'] );
+        } else {
+            delete_post_meta( $post_id, 'location_order_url' );
+        }
+
+        // ✅ Save location_menu_url desde el campo editable del contact metabox.
+        if ( isset( $_POST['location_menu_url_gmb'] ) ) {
+            $menu_url_val = esc_url_raw( wp_unslash( (string) $_POST['location_menu_url_gmb'] ) );
+            update_post_meta( $post_id, 'location_menu_url', $menu_url_val );
+            if ( '' === $menu_url_val ) {
+                delete_post_meta( $post_id, 'location_menu_url_from_gmb' );
+            }
+        }
+
+        // Save system metadata
+        update_post_meta( $post_id, 'date_modified', current_time( 'mysql' ) );
+        update_post_meta( $post_id, 'modified_by_user_id', get_current_user_id() );
+
+        if ( ! get_post_meta( $post_id, 'date_created', true ) ) {
+            update_post_meta( $post_id, 'date_created', current_time( 'mysql' ) );
+            update_post_meta( $post_id, 'created_by_user_id', get_current_user_id() );
+        }
+
+        /**
+         * ✅ Importación desde Google al guardar (si está activado y hay business + location_name)
+         */
+        $business_id     = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name   = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        $import_on_save  = (int) get_post_meta( $post_id, 'gmb_import_on_save', true );
+
+        if ( $import_on_save === 1 && $business_id && ! empty( $location_name ) ) {
+            $this->import_location_from_gmb_and_map_fields( $post_id, $business_id, $location_name );
         }
     }
-    update_post_meta( $post_id, 'social_profiles_manual', $social_profiles_manual );
-
-    if ( isset( $social_profiles_manual['facebook'] ) ) {
-        update_post_meta( $post_id, 'social_facebook_local', $social_profiles_manual['facebook'] );
-    }
-    if ( isset( $social_profiles_manual['instagram'] ) ) {
-        update_post_meta( $post_id, 'social_instagram_local', $social_profiles_manual['instagram'] );
-    }
-
-    // ✅ Save location_booking_urls (array dinámico de URLs de Reservas)
-    $booking_urls_raw = isset( $_POST['location_booking_urls'] ) && is_array( $_POST['location_booking_urls'] )
-        ? wp_unslash( $_POST['location_booking_urls'] )
-        : array();
-
-    $booking_urls_clean = array();
-    foreach ( $booking_urls_raw as $entry ) {
-        if ( ! is_array( $entry ) ) {
-            continue;
-        }
-        $burl  = esc_url_raw( (string) ( $entry['url']      ?? '' ) );
-        $blbl  = sanitize_text_field( (string) ( $entry['label']    ?? '' ) );
-        $btype = sanitize_text_field( (string) ( $entry['type']     ?? '' ) );
-        $bfgmb = absint( $entry['from_gmb'] ?? 0 );
-        if ( $burl ) {
-            $booking_urls_clean[] = array(
-                'url'      => $burl,
-                'label'    => $blbl,
-                'type'     => $btype,
-                'from_gmb' => $bfgmb,
-            );
-        }
-    }
-    update_post_meta( $post_id, 'location_booking_urls', $booking_urls_clean );
-    if ( ! empty( $booking_urls_clean ) ) {
-        update_post_meta( $post_id, 'location_booking_url', $booking_urls_clean[0]['url'] );
-    } else {
-        delete_post_meta( $post_id, 'location_booking_url' );
-    }
-
-    // ✅ Save location_order_urls (array dinámico de URLs para Ordenar Online)
-    $order_urls_raw = isset( $_POST['location_order_urls'] ) && is_array( $_POST['location_order_urls'] )
-        ? wp_unslash( $_POST['location_order_urls'] )
-        : array();
-
-    $order_urls_clean = array();
-    foreach ( $order_urls_raw as $entry ) {
-        if ( ! is_array( $entry ) ) {
-            continue;
-        }
-        $ourl  = esc_url_raw( (string) ( $entry['url']      ?? '' ) );
-        $olbl  = sanitize_text_field( (string) ( $entry['label']    ?? '' ) );
-        $otype = sanitize_text_field( (string) ( $entry['type']     ?? '' ) );
-        $ofgmb = absint( $entry['from_gmb'] ?? 0 );
-        if ( $ourl ) {
-            $order_urls_clean[] = array(
-                'url'      => $ourl,
-                'label'    => $olbl,
-                'type'     => $otype,
-                'from_gmb' => $ofgmb,
-            );
-        }
-    }
-    update_post_meta( $post_id, 'location_order_urls', $order_urls_clean );
-    if ( ! empty( $order_urls_clean ) ) {
-        update_post_meta( $post_id, 'location_order_url', $order_urls_clean[0]['url'] );
-    } else {
-        delete_post_meta( $post_id, 'location_order_url' );
-    }
-
-    // ✅ Save location_menu_url desde el campo editable del contact metabox.
-    if ( isset( $_POST['location_menu_url_gmb'] ) ) {
-        $menu_url_val = esc_url_raw( wp_unslash( (string) $_POST['location_menu_url_gmb'] ) );
-        update_post_meta( $post_id, 'location_menu_url', $menu_url_val );
-        if ( '' === $menu_url_val ) {
-            delete_post_meta( $post_id, 'location_menu_url_from_gmb' );
-        }
-    }
-
-    // Save system metadata
-    update_post_meta( $post_id, 'date_modified', current_time( 'mysql' ) );
-    update_post_meta( $post_id, 'modified_by_user_id', get_current_user_id() );
-
-    if ( ! get_post_meta( $post_id, 'date_created', true ) ) {
-        update_post_meta( $post_id, 'date_created', current_time( 'mysql' ) );
-        update_post_meta( $post_id, 'created_by_user_id', get_current_user_id() );
-    }
-
-    /**
-     * ✅ Importación desde Google al guardar (si está activado y hay business + location_name)
-     */
-    $business_id     = (int) get_post_meta( $post_id, 'parent_business_id', true );
-    $location_name   = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-    $import_on_save  = (int) get_post_meta( $post_id, 'gmb_import_on_save', true );
-
-    if ( $import_on_save === 1 && $business_id && ! empty( $location_name ) ) {
-        $this->import_location_from_gmb_and_map_fields( $post_id, $business_id, $location_name );
-    }
-}
 
     /**
      * ✅ Import a location from GMB (API) and map fields to the CPT meta.
