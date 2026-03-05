@@ -827,6 +827,76 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     }
                 };
 
+
+                /**
+ * ✅ Hook defensivo para que "Importar Ahora" SIEMPRE pinte Áreas de servicio
+ * aunque applyLocationToForm() (en el CPT) no lo llame explícitamente.
+ *
+ * Estrategia:
+ * - Si existe window.applyLocationToForm y NO está envuelta, la envolvemos.
+ * - Ejecutamos la original.
+ * - Luego llamamos window.oy_apply_service_areas(loc) para renderizar chips.
+ * - Incluye reintento por si applyLocationToForm se define después.
+ */
+(function() {
+    function wrapApplyLocationToForm() {
+        try {
+            if (typeof window.applyLocationToForm !== 'function') {
+                return false;
+            }
+            if (window.applyLocationToForm.__oy_service_area_wrapped) {
+                return true;
+            }
+
+            var original = window.applyLocationToForm;
+
+            var wrapped = function(loc) {
+                var result;
+                try {
+                    result = original.call(this, loc);
+                } catch (e1) {
+                    // Si la original falla, no bloqueamos el resto
+                    if (window.console && window.console.warn) {
+                        console.warn('[OY Address] applyLocationToForm original error:', e1);
+                    }
+                }
+
+                // ✅ Después del import: pintar áreas de servicio si existe helper
+                try {
+                    if (typeof window.oy_apply_service_areas === 'function') {
+                        window.oy_apply_service_areas(loc);
+                    }
+                } catch (e2) {
+                    if (window.console && window.console.warn) {
+                        console.warn('[OY Address] oy_apply_service_areas error:', e2);
+                    }
+                }
+
+                return result;
+            };
+
+            wrapped.__oy_service_area_wrapped = true;
+            window.applyLocationToForm = wrapped;
+
+            return true;
+        } catch (e) {
+            if (window.console && window.console.warn) {
+                console.warn('[OY Address] wrapApplyLocationToForm error:', e);
+            }
+            return false;
+        }
+    }
+
+    // Intento inmediato (normalmente applyLocationToForm ya existe)
+    if (!wrapApplyLocationToForm()) {
+        // Reintento en load por si el orden de scripts cambia
+        window.addEventListener('load', function() {
+            wrapApplyLocationToForm();
+        });
+    }
+})();
+
+                
                 jQuery(document).ready(function($){
 
                     // Toggle dirección
