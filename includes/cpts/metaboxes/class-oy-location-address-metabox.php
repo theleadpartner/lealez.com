@@ -30,6 +30,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
          */
         public function __construct() {
             add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+
+            // ✅ Guardado autocontenido del campo "Áreas de servicio" (JSON → array)
+            // Sin tocar el CPT principal.
+            add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 19, 2 );
         }
 
         /**
@@ -45,6 +49,187 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 'normal',
                 'high'
             );
+        }
+
+        /**
+         * ✅ Save meta box data (solo lo de Áreas de servicio)
+         * - Recibe JSON desde hidden input location_service_areas_json
+         * - Guarda array limpio en meta location_service_areas
+         *
+         * @param int     $post_id
+         * @param WP_Post $post
+         * @return void
+         */
+        public function save_meta_box( $post_id, $post ) {
+
+            // Security: autosave / permisos
+            if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+                return;
+            }
+
+            if ( ! $post_id || ! is_object( $post ) ) {
+                return;
+            }
+
+            if ( ! current_user_can( 'edit_post', $post_id ) ) {
+                return;
+            }
+
+            // Solo nos interesa este campo (si no viene, no borramos nada)
+            if ( ! isset( $_POST['location_service_areas_json'] ) ) {
+                return;
+            }
+
+            $raw = wp_unslash( $_POST['location_service_areas_json'] );
+            $raw = is_string( $raw ) ? trim( $raw ) : '';
+
+            $arr = json_decode( $raw, true );
+            if ( ! is_array( $arr ) ) {
+                $arr = array();
+            }
+
+            $clean = array();
+            $seen  = array();
+
+            foreach ( $arr as $v ) {
+                if ( ! is_string( $v ) ) {
+                    continue;
+                }
+                $s = trim( sanitize_text_field( $v ) );
+                if ( '' === $s ) {
+                    continue;
+                }
+                $k = strtolower( $s );
+                if ( isset( $seen[ $k ] ) ) {
+                    continue;
+                }
+                $seen[ $k ] = true;
+                $clean[]    = $s;
+            }
+
+            update_post_meta( $post_id, 'location_service_areas', $clean );
+        }
+
+        /**
+         * ✅ Extrae "Áreas de servicio" desde RAW de GMB y devuelve array de strings "humanos"
+         *
+         * Fuentes:
+         * - gmb_service_area_raw (meta)
+         * - gmb_location_raw['serviceArea'] (meta)
+         *
+         * Estructuras que tolera (defensivo):
+         * - serviceArea.places[] como strings
+         * - serviceArea.places[] como objetos con: name / placeName / placeId / displayName / title / address
+         *
+         * @param int $post_id
+         * @return array
+         */
+        private function extract_service_areas_from_gmb_raw( $post_id ) {
+            $post_id = absint( $post_id );
+            if ( ! $post_id ) {
+                return array();
+            }
+
+            $service_area_raw = get_post_meta( $post_id, 'gmb_service_area_raw', true );
+
+            // Fallback: buscar dentro del Location RAW completo
+            if ( empty( $service_area_raw ) || ! is_array( $service_area_raw ) ) {
+                $loc_raw = get_post_meta( $post_id, 'gmb_location_raw', true );
+                if ( is_array( $loc_raw ) && isset( $loc_raw['serviceArea'] ) && is_array( $loc_raw['serviceArea'] ) ) {
+                    $service_area_raw = $loc_raw['serviceArea'];
+                }
+            }
+
+            if ( empty( $service_area_raw ) || ! is_array( $service_area_raw ) ) {
+                return array();
+            }
+
+            $places = array();
+
+            // Google suele usar serviceArea.places[]
+            if ( isset( $service_area_raw['places'] ) && is_array( $service_area_raw['places'] ) ) {
+                $places = $service_area_raw['places'];
+            }
+
+            if ( empty( $places ) ) {
+                return array();
+            }
+
+            $out  = array();
+            $seen = array();
+
+            foreach ( $places as $p ) {
+
+                $label = '';
+
+                // Caso 1: string directo
+                if ( is_string( $p ) ) {
+                    $label = trim( $p );
+                }
+
+                // Caso 2: objeto/array
+                if ( '' === $label && is_array( $p ) ) {
+
+                    // Prioridades “humanas”
+                    $candidates = array(
+                        $p['displayName'] ?? '',
+                        $p['title'] ?? '',
+                        $p['name'] ?? '',
+                        $p['placeName'] ?? '',
+                        $p['placeId'] ?? '',
+                    );
+
+                    foreach ( $candidates as $cand ) {
+                        if ( is_string( $cand ) && trim( $cand ) !== '' ) {
+                            $label = trim( $cand );
+                            break;
+                        }
+                    }
+
+                    // Si hay address formateado, lo preferimos como fallback “humano”
+                    if ( '' === $label && isset( $p['address'] ) ) {
+                        if ( is_string( $p['address'] ) ) {
+                            $label = trim( $p['address'] );
+                        } elseif ( is_array( $p['address'] ) ) {
+                            // addressLines + locality + administrativeArea + regionCode
+                            $lines = array();
+                            if ( ! empty( $p['address']['addressLines'] ) && is_array( $p['address']['addressLines'] ) ) {
+                                foreach ( $p['address']['addressLines'] as $ln ) {
+                                    if ( is_string( $ln ) && trim( $ln ) !== '' ) {
+                                        $lines[] = trim( $ln );
+                                    }
+                                }
+                            }
+                            $city  = isset( $p['address']['locality'] ) ? trim( (string) $p['address']['locality'] ) : '';
+                            $state = isset( $p['address']['administrativeArea'] ) ? trim( (string) $p['address']['administrativeArea'] ) : '';
+                            $cty   = trim( implode( ', ', array_filter( array( $city, $state ) ) ) );
+                            if ( $cty ) {
+                                $lines[] = $cty;
+                            }
+                            $label = trim( implode( ' — ', array_filter( $lines ) ) );
+                        }
+                    }
+                }
+
+                $label = is_string( $label ) ? trim( $label ) : '';
+
+                // Limpieza final
+                if ( '' === $label ) {
+                    continue;
+                }
+
+                $label = sanitize_text_field( $label );
+
+                $k = strtolower( $label );
+                if ( isset( $seen[ $k ] ) ) {
+                    continue;
+                }
+
+                $seen[ $k ] = true;
+                $out[]      = $label;
+            }
+
+            return array_values( $out );
         }
 
         /**
@@ -83,10 +268,23 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
             $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
 
-            // ✅ NUEVO: Áreas de servicio (guardado como array)
+            // ✅ Áreas de servicio (guardado como array)
             $service_areas = get_post_meta( $post->ID, 'location_service_areas', true );
             if ( ! is_array( $service_areas ) ) {
                 $service_areas = array();
+            }
+
+            /**
+             * ✅ PULL AUTOMÁTICO DESDE GMB (sin predictivo)
+             * Si el post tiene RAW de GMB con serviceArea y el meta humano está vacío,
+             * lo calculamos y lo guardamos para que la UI muestre chips.
+             */
+            if ( empty( $service_areas ) ) {
+                $derived = $this->extract_service_areas_from_gmb_raw( $post->ID );
+                if ( ! empty( $derived ) ) {
+                    $service_areas = $derived;
+                    update_post_meta( $post->ID, 'location_service_areas', $service_areas );
+                }
             }
 
             // Default: show address to customers unless explicitly disabled
@@ -167,13 +365,13 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 </div>
             </div>
 
-            <?php /* ── NUEVO: Áreas de servicio (UI tipo GMB) ── */ ?>
+            <?php /* ── Áreas de servicio ── */ ?>
             <div style="border:1px solid #dadce0; border-radius:6px; padding:14px 16px; margin:0 0 18px; background:#fff;">
                 <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
                     🧭 <?php _e( 'Áreas de servicio', 'lealez' ); ?>
                 </h4>
                 <p class="description" style="margin:0 0 12px;">
-                    <?php _e( 'Define ciudades/zonas donde atiendes. Al escribir, verás sugerencias (igual que GMB).', 'lealez' ); ?>
+                    <?php _e( 'Define ciudades/zonas donde atiendes. (Aquí se muestran las importadas desde Google).', 'lealez' ); ?>
                 </p>
 
                 <div style="max-width:520px; position:relative;">
@@ -464,7 +662,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     </p>
                 </div><!-- #oy-map-preview-col -->
 
-            </div><!-- #oy-address-map-layout -->
+            </div><!-- #oy-address-map-layout ?>
 
             <script type="text/javascript">
                 // Vars para AJAX del autocomplete
@@ -488,7 +686,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         var raw = $('#location_service_areas_json').val() || '[]';
                         var arr = safeJsonParse(raw, []);
                         if (!Array.isArray(arr)) arr = [];
-                        // normalizar strings no vacíos
                         var out = [];
                         arr.forEach(function(x){
                             if (typeof x === 'string') {
@@ -501,7 +698,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                     function setAreas(arr){
                         if (!Array.isArray(arr)) arr = [];
-                        // dedupe
                         var seen = {};
                         var out = [];
                         arr.forEach(function(x){
@@ -598,7 +794,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 action: 'oy_gmb_service_area_autocomplete',
                                 nonce: window.oyServiceAreasAjax.nonce,
                                 q: q,
-                                // Para filtrar/ayudar: país ISO2 de tu campo
                                 country: ($('#location_country').val() || '').trim()
                             }, function(resp){
                                 if (!resp || !resp.success){
