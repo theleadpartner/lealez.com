@@ -26,10 +26,27 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
         private $post_type = 'oy_location';
 
         /**
+         * Nonce name/action usados por OY_Location_CPT
+         * (reutilizamos el mismo para no romper el flujo de guardado)
+         */
+        private $nonce_name   = 'oy_location_meta_nonce';
+        private $nonce_action = 'oy_location_save_meta';
+
+        /**
          * Constructor
          */
         public function __construct() {
             add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+
+            /**
+             * ✅ Guardado propio SOLO para campos de este metabox que NO están
+             * contemplados en el save_meta_boxes del CPT.
+             *
+             * Importante:
+             * - No tocamos otros metas para evitar interferencia.
+             * - Usamos el mismo nonce del CPT.
+             */
+            add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 18, 2 );
         }
 
         /**
@@ -48,13 +65,170 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
         }
 
         /**
-         * Render Address meta box
+         * ✅ Parse helper: convertir serviceArea RAW (Google) a lista "humana" de labels.
          *
-         * ⚠️ IMPORTANTE:
-         * - Este contenido es el MISMO que estaba en OY_Location_CPT::render_address_meta_box()
-         * - Se mantiene para no romper:
-         *    - Botón "Importar Ahora" (applyLocationToForm usa window.oy_toggle_address_fields / oy_update_map_preview)
-         *    - Guardado (save_meta_boxes sigue en el CPT)
+         * La API de GBP puede variar la forma:
+         * - serviceArea.places.placeInfos[] con placeName / name / placeId
+         * - serviceArea.places.placeNames[] (strings)
+         * - otros casos: usamos placeId o regionCode como fallback
+         *
+         * @param array $service_area_raw
+         * @return array array de strings (labels) únicos
+         */
+        private function parse_service_area_labels_from_raw( $service_area_raw ) {
+            if ( ! is_array( $service_area_raw ) || empty( $service_area_raw ) ) {
+                return array();
+            }
+
+            $labels = array();
+
+            // Caso A: places.placeInfos[]
+            if (
+                isset( $service_area_raw['places'] )
+                && is_array( $service_area_raw['places'] )
+                && isset( $service_area_raw['places']['placeInfos'] )
+                && is_array( $service_area_raw['places']['placeInfos'] )
+            ) {
+                foreach ( $service_area_raw['places']['placeInfos'] as $pi ) {
+                    if ( ! is_array( $pi ) ) {
+                        continue;
+                    }
+
+                    $label = '';
+                    if ( ! empty( $pi['placeName'] ) ) {
+                        $label = (string) $pi['placeName'];
+                    } elseif ( ! empty( $pi['displayName'] ) ) {
+                        $label = (string) $pi['displayName'];
+                    } elseif ( ! empty( $pi['name'] ) ) {
+                        $label = (string) $pi['name'];
+                    } elseif ( ! empty( $pi['placeId'] ) ) {
+                        $label = (string) $pi['placeId'];
+                    }
+
+                    $label = trim( $label );
+                    if ( '' !== $label ) {
+                        $labels[] = $label;
+                    }
+                }
+            }
+
+            // Caso B: places.placeNames[] (strings)
+            if (
+                isset( $service_area_raw['places'] )
+                && is_array( $service_area_raw['places'] )
+                && isset( $service_area_raw['places']['placeNames'] )
+                && is_array( $service_area_raw['places']['placeNames'] )
+            ) {
+                foreach ( $service_area_raw['places']['placeNames'] as $pn ) {
+                    $pn = trim( (string) $pn );
+                    if ( '' !== $pn ) {
+                        $labels[] = $pn;
+                    }
+                }
+            }
+
+            // Caso C: places[] directo
+            if ( isset( $service_area_raw['placeInfos'] ) && is_array( $service_area_raw['placeInfos'] ) ) {
+                foreach ( $service_area_raw['placeInfos'] as $pi ) {
+                    if ( ! is_array( $pi ) ) {
+                        continue;
+                    }
+                    $label = '';
+                    if ( ! empty( $pi['placeName'] ) ) {
+                        $label = (string) $pi['placeName'];
+                    } elseif ( ! empty( $pi['displayName'] ) ) {
+                        $label = (string) $pi['displayName'];
+                    } elseif ( ! empty( $pi['name'] ) ) {
+                        $label = (string) $pi['name'];
+                    } elseif ( ! empty( $pi['placeId'] ) ) {
+                        $label = (string) $pi['placeId'];
+                    }
+                    $label = trim( $label );
+                    if ( '' !== $label ) {
+                        $labels[] = $label;
+                    }
+                }
+            }
+
+            // Fallback: si no sacamos nada, usar regionCode/placeId
+            if ( empty( $labels ) ) {
+                if ( ! empty( $service_area_raw['regionCode'] ) ) {
+                    $labels[] = trim( (string) $service_area_raw['regionCode'] );
+                }
+                if ( ! empty( $service_area_raw['placeId'] ) ) {
+                    $labels[] = trim( (string) $service_area_raw['placeId'] );
+                }
+            }
+
+            // Normalizar: unique + limpiar
+            $labels = array_map(
+                function( $v ) {
+                    $v = trim( (string) $v );
+                    $v = preg_replace( '/\s{2,}/', ' ', $v );
+                    return $v;
+                },
+                $labels
+            );
+
+            $labels = array_values( array_filter( array_unique( $labels ) ) );
+
+            return $labels;
+        }
+
+        /**
+         * Save metabox (solo service areas)
+         *
+         * @param int     $post_id
+         * @param WP_Post $post
+         */
+        public function save_meta_box( $post_id, $post ) {
+
+            // Security checks
+            if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
+                return;
+            }
+
+            if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+                return;
+            }
+
+            if ( ! current_user_can( 'edit_post', $post_id ) ) {
+                return;
+            }
+
+            // ✅ Guardar location_service_areas[] (chips)
+            if ( isset( $_POST['location_service_areas'] ) && is_array( $_POST['location_service_areas'] ) ) {
+                $raw = wp_unslash( $_POST['location_service_areas'] );
+
+                $clean = array();
+                foreach ( $raw as $v ) {
+                    $v = sanitize_text_field( (string) $v );
+                    $v = trim( preg_replace( '/\s{2,}/', ' ', $v ) );
+                    if ( '' !== $v ) {
+                        $clean[] = $v;
+                    }
+                }
+
+                $clean = array_values( array_filter( array_unique( $clean ) ) );
+
+                update_post_meta( $post_id, 'location_service_areas', $clean );
+
+                // Si hay algo, marcamos flag (útil para UI/validaciones)
+                if ( ! empty( $clean ) ) {
+                    update_post_meta( $post_id, 'service_area_enabled', '1' );
+                } else {
+                    // Si el usuario lo dejó vacío manualmente, no borramos gmb_service_area_raw,
+                    // solo indicamos que no hay selección manual.
+                    delete_post_meta( $post_id, 'service_area_enabled' );
+                }
+            } else {
+                // Si no viene el array, no borramos nada automáticamente para evitar pérdida accidental.
+                // (ej: guardado parcial o conflicto de metaboxes)
+            }
+        }
+
+        /**
+         * Render Address meta box
          *
          * @param WP_Post $post
          */
@@ -69,17 +243,33 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
             $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
 
-            // ✅ Fallback: si location_latitude/longitude están vacíos, intenta recuperarlos de
-            // gmb_latlng_raw (guardado por import_location_from_gmb_and_map_fields cuando latlng
-            // viene en el API response). Esto sincroniza ambos meta keys y asegura que los campos
-            // del formulario muestren las coordenadas aunque el save haya ocurrido en una versión
-            // anterior que no guardaba por separado.
+            // ✅ Service areas (campo humano)
+            $service_areas = get_post_meta( $post->ID, 'location_service_areas', true );
+            if ( ! is_array( $service_areas ) ) {
+                $service_areas = array();
+            }
+
+            // ✅ Fallback: si no hay lista humana, intentar derivarla de RAW de GMB
+            if ( empty( $service_areas ) ) {
+                $gmb_service_area_raw = get_post_meta( $post->ID, 'gmb_service_area_raw', true );
+                if ( is_array( $gmb_service_area_raw ) ) {
+                    $derived = $this->parse_service_area_labels_from_raw( $gmb_service_area_raw );
+                    if ( ! empty( $derived ) ) {
+                        $service_areas = $derived;
+
+                        // Persistimos para que ya quede “humano” en el post
+                        update_post_meta( $post->ID, 'location_service_areas', $service_areas );
+                        update_post_meta( $post->ID, 'service_area_enabled', '1' );
+                    }
+                }
+            }
+
+            // ✅ Fallback coords desde gmb_latlng_raw
             if ( ( $latitude === '' || $latitude === false ) || ( $longitude === '' || $longitude === false ) ) {
                 $latlng_raw = get_post_meta( $post->ID, 'gmb_latlng_raw', true );
                 if ( is_array( $latlng_raw ) ) {
                     if ( ( $latitude === '' || $latitude === false ) && ! empty( $latlng_raw['latitude'] ) ) {
                         $latitude = (string) $latlng_raw['latitude'];
-                        // Re-sync al meta principal para que el siguiente save lo tenga disponible
                         update_post_meta( $post->ID, 'location_latitude', sanitize_text_field( $latitude ) );
                     }
                     if ( ( $longitude === '' || $longitude === false ) && ! empty( $latlng_raw['longitude'] ) ) {
@@ -94,7 +284,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
             $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
 
-            // Default: show address to customers unless explicitly disabled
             if ( '' === $show_address ) {
                 $show_address = '1';
             }
@@ -109,15 +298,11 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $address_hidden     = $is_service_area && ! $is_show_address;
             $show_address_row   = $is_service_area;
 
-            // Build initial map embed URL (iframe embed — no API key required)
-            // ✅ Preferencia de embed URL (de más confiable a menos):
-            //   1. CID de location_map_url  → maps.google.com/maps?cid=XXX&output=embed  (más estable)
-            //   2. Coordenadas GPS          → maps.google.com/maps?q=LAT,LNG&output=embed
+            // Build initial map embed URL
             $has_coords   = ( $latitude && $longitude );
             $embed_url    = '';
             $map_link_url = $map_url;
 
-            // Opción 1: extraer CID de la URL guardada de GMB (metadata.mapsUri → ?cid=XXXXXX)
             $has_embed = false;
             if ( $map_url && strpos( $map_url, 'cid=' ) !== false ) {
                 $parsed_cid = '';
@@ -131,23 +316,20 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 }
             }
 
-            // Opción 2: fallback a coordenadas GPS si no hay CID
             if ( ! $has_embed && $has_coords ) {
                 $embed_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude ) . '&z=17&output=embed';
                 $has_embed = true;
             }
 
-            // map_link_url para botón "Ajustar" — siempre construir si no viene de DB
             if ( empty( $map_link_url ) && $has_coords ) {
                 $map_link_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude );
             }
 
-            // $has_coords se usa para saber si mostrar iframe o placeholder en PHP
             $has_coords = $has_embed;
             ?>
 
             <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
-            <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
+            <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:16px;">
                 <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
                     📍 <?php _e( 'Ubicación de la empresa', 'lealez' ); ?>
                 </h4>
@@ -175,6 +357,44 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
                     </label>
                 </div>
+            </div>
+
+            <?php /* ── Áreas de servicio (UI tipo GMB) ── */ ?>
+            <div style="background:#fff; border:1px solid #e2e4e7; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
+                <h4 style="margin:0 0 6px; font-size:14px; color:#1d2327;">
+                    🗺️ <?php _e( 'Áreas de servicio (Google)', 'lealez' ); ?>
+                </h4>
+                <p class="description" style="margin:0 0 12px;">
+                    <?php _e( 'Define en qué ciudades / regiones / países prestas servicio. Se sincroniza desde GMB (<code>serviceArea</code>) y puedes ajustarlo manualmente aquí. La UI está preparada para múltiples áreas, igual que en Google.', 'lealez' ); ?>
+                </p>
+
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                    <input type="text"
+                           id="oy-service-area-input"
+                           class="regular-text"
+                           placeholder="<?php esc_attr_e( 'Ej: Barranquilla, Atlántico, Colombia', 'lealez' ); ?>"
+                           style="min-width:280px; flex:1;">
+                    <button type="button" class="button" id="oy-service-area-add">+ <?php _e( 'Agregar', 'lealez' ); ?></button>
+                </div>
+
+                <div id="oy-service-area-tags" style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <?php if ( ! empty( $service_areas ) ) : ?>
+                        <?php foreach ( $service_areas as $sa ) :
+                            $sa = trim( (string) $sa );
+                            if ( '' === $sa ) { continue; }
+                            ?>
+                            <span class="oy-sa-tag" data-value="<?php echo esc_attr( $sa ); ?>" style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">
+                                <span class="oy-sa-text"><?php echo esc_html( $sa ); ?></span>
+                                <button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>
+                                <input type="hidden" name="location_service_areas[]" value="<?php echo esc_attr( $sa ); ?>">
+                            </span>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+
+                <p class="description" style="margin-top:10px;">
+                    <?php _e( 'Tip: si presionas Enter en el campo, también se agrega el área.', 'lealez' ); ?>
+                </p>
             </div>
 
             <?php /* ── Layout de dos columnas: Campos | Mapa (igual a la UI de GMB) ── */ ?>
@@ -389,7 +609,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             ></iframe>
                         <?php endif; ?>
 
-                        <?php /* Botón "Ajustar" al estilo GMB — abre Google Maps en nueva pestaña */ ?>
                         <?php if ( $map_link_url ) : ?>
                             <a href="<?php echo esc_url( $map_link_url ); ?>"
                                id="oy-map-adjust-btn"
@@ -445,24 +664,18 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             <script type="text/javascript">
                 /**
                  * oy_toggle_address_fields
-                 * Controla visibilidad del bloque de dirección y del row "mostrar dirección".
-                 * Se declara en window para que applyLocationToForm (GMB metabox) pueda llamarla.
-                 * NOTA: Coordenadas GPS y URL en Google Maps se muestran SIEMPRE (#oy-coords-map-wrap).
                  */
                 window.oy_toggle_address_fields = function() {
                     var $ = jQuery;
                     var isServiceAreaOnly  = $('#service_area_only').is(':checked');
                     var showAddressChecked = $('#show_address_to_customers').is(':checked');
 
-                    // Mostrar/ocultar el row "mostrar dirección" solo cuando service_area_only está activo
                     if ( isServiceAreaOnly ) {
                         $('#oy-show-address-row').css('display', 'flex');
                     } else {
                         $('#oy-show-address-row').css('display', 'none');
                     }
 
-                    // Ocultar campos de dirección si: solo servicio Y no mostrar dirección
-                    // Coordenadas y Maps URL (#oy-coords-map-wrap) quedan siempre visibles
                     if ( isServiceAreaOnly && ! showAddressChecked ) {
                         $('#oy-address-fields-wrap').hide();
                     } else {
@@ -472,8 +685,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                 /**
                  * oy_update_map_preview
-                 * Actualiza el mapa embebido cuando cambian las coordenadas GPS.
-                 * También actualiza el botón "Ajustar" y el enlace "Ver en Maps".
                  */
                 window.oy_update_map_preview = function() {
                     var $ = jQuery;
@@ -483,14 +694,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                     var hasCoords  = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
 
-                    // ✅ Preferencia de embed URL (igual que en PHP):
-                    //   1. CID de location_map_url  → más estable en Google Maps
-                    //   2. Coordenadas GPS          → fallback
                     var embedUrl = '';
                     var mapsUrl  = savedMapUrl || '';
 
                     if ( savedMapUrl && savedMapUrl.indexOf('cid=') !== -1 ) {
-                        // Extraer CID de la URL guardada de GMB (metadata.mapsUri → ?cid=XXXXXX)
                         var cidMatch = savedMapUrl.match(/[?&]cid=([^&]+)/);
                         if ( cidMatch && cidMatch[1] ) {
                             embedUrl = 'https://maps.google.com/maps?cid=' + encodeURIComponent(cidMatch[1]) + '&output=embed';
@@ -506,7 +713,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     }
 
                     if ( ! embedUrl ) {
-                        // Sin URL de embed válida: mostrar placeholder
                         $('#oy-map-iframe').hide().attr('src', '');
                         $('#oy-map-placeholder').show();
                         $('#oy-map-preview-wrap').css({ 'display': 'flex' });
@@ -515,24 +721,119 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         return;
                     }
 
-                    // Actualizar iframe
                     $('#oy-map-placeholder').hide();
                     $('#oy-map-iframe').attr('src', embedUrl).css('display', 'block');
                     $('#oy-map-preview-wrap').css({ 'display': 'block' });
 
-                    // Actualizar botón Ajustar
                     if ( mapsUrl ) {
                         $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
                         $('#oy-maps-open-link').attr('href', mapsUrl).show();
                     }
                 };
 
+                /**
+                 * ✅ UI helper: Service Areas (chips)
+                 * Exponemos una función global para que applyLocationToForm pueda usarla.
+                 */
+                window.oy_apply_service_areas = function(loc) {
+                    try {
+                        var $ = jQuery;
+                        if (!loc) return;
+
+                        var labels = [];
+
+                        var sa = loc.serviceArea || null;
+
+                        // Estructuras posibles
+                        if (sa && typeof sa === 'object') {
+
+                            // Caso A: sa.places.placeInfos[]
+                            if (sa.places && sa.places.placeInfos && Array.isArray(sa.places.placeInfos)) {
+                                sa.places.placeInfos.forEach(function(pi){
+                                    if(!pi) return;
+                                    var l = '';
+                                    if (pi.placeName) l = String(pi.placeName);
+                                    else if (pi.displayName) l = String(pi.displayName);
+                                    else if (pi.name) l = String(pi.name);
+                                    else if (pi.placeId) l = String(pi.placeId);
+                                    l = l.trim();
+                                    if (l) labels.push(l);
+                                });
+                            }
+
+                            // Caso B: sa.places.placeNames[]
+                            if (sa.places && sa.places.placeNames && Array.isArray(sa.places.placeNames)) {
+                                sa.places.placeNames.forEach(function(pn){
+                                    pn = String(pn || '').trim();
+                                    if (pn) labels.push(pn);
+                                });
+                            }
+
+                            // Caso C: sa.placeInfos[]
+                            if (sa.placeInfos && Array.isArray(sa.placeInfos)) {
+                                sa.placeInfos.forEach(function(pi){
+                                    if(!pi) return;
+                                    var l = '';
+                                    if (pi.placeName) l = String(pi.placeName);
+                                    else if (pi.displayName) l = String(pi.displayName);
+                                    else if (pi.name) l = String(pi.name);
+                                    else if (pi.placeId) l = String(pi.placeId);
+                                    l = l.trim();
+                                    if (l) labels.push(l);
+                                });
+                            }
+
+                            // Fallback regionCode/placeId
+                            if (!labels.length) {
+                                if (sa.regionCode) labels.push(String(sa.regionCode).trim());
+                                if (sa.placeId) labels.push(String(sa.placeId).trim());
+                            }
+                        }
+
+                        // Normalizar unique
+                        var map = {};
+                        var out = [];
+                        labels.forEach(function(v){
+                            v = String(v || '').trim().replace(/\s{2,}/g,' ');
+                            if (!v) return;
+                            if (map[v]) return;
+                            map[v] = true;
+                            out.push(v);
+                        });
+
+                        // Pintar chips
+                        var $wrap = $('#oy-service-area-tags');
+                        if (!$wrap.length) return;
+
+                        // Limpiar chips actuales
+                        $wrap.find('.oy-sa-tag').remove();
+
+                        // Render
+                        out.forEach(function(v){
+                            var chip =
+                                '<span class="oy-sa-tag" data-value="'+ $('<div>').text(v).html() +'" ' +
+                                'style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">' +
+                                    '<span class="oy-sa-text">'+ $('<div>').text(v).html() +'</span>' +
+                                    '<button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>' +
+                                    '<input type="hidden" name="location_service_areas[]" value="'+ $('<div>').text(v).html() +'">' +
+                                '</span>';
+                            $wrap.append(chip);
+                        });
+
+                    } catch(e) {
+                        if (window.console && window.console.warn) {
+                            console.warn('[OY Address] oy_apply_service_areas error:', e);
+                        }
+                    }
+                };
+
                 jQuery(document).ready(function($){
-                    // Toggle de dirección
+
+                    // Toggle dirección
                     $('#service_area_only').on('change', window.oy_toggle_address_fields);
                     $('#show_address_to_customers').on('change', window.oy_toggle_address_fields);
 
-                    // Actualizar mapa al cambiar coordenadas (con debounce de 600ms para no recargar en cada tecla)
+                    // Actualizar mapa al cambiar coordenadas (debounce)
                     var oy_map_debounce_timer;
                     $('#location_latitude, #location_longitude').on('input change', function() {
                         clearTimeout(oy_map_debounce_timer);
@@ -541,7 +842,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }, 600);
                     });
 
-                    // Actualizar botón Ajustar cuando cambia la URL de Maps manualmente
+                    // Ajustar links si cambia URL Maps manualmente
                     $('#location_map_url').on('input change', function() {
                         var mapUrl = $.trim( $(this).val() );
                         if ( mapUrl ) {
@@ -550,31 +851,68 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }
                     });
 
-                    // Ejecutar al cargar la página
+                    // ✅ Service Areas UI: add/remove
+                    function oyServiceAreaAdd(value) {
+                        value = String(value || '').trim().replace(/\s{2,}/g,' ');
+                        if (!value) return;
+
+                        // Evitar duplicados
+                        var exists = false;
+                        $('#oy-service-area-tags .oy-sa-tag').each(function(){
+                            var v = String($(this).attr('data-value') || '').trim();
+                            if (v === value) { exists = true; return false; }
+                        });
+                        if (exists) return;
+
+                        var chip =
+                            '<span class="oy-sa-tag" data-value="'+ $('<div>').text(value).html() +'" ' +
+                            'style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">' +
+                                '<span class="oy-sa-text">'+ $('<div>').text(value).html() +'</span>' +
+                                '<button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>' +
+                                '<input type="hidden" name="location_service_areas[]" value="'+ $('<div>').text(value).html() +'">' +
+                            '</span>';
+
+                        $('#oy-service-area-tags').append(chip);
+                    }
+
+                    $('#oy-service-area-add').on('click', function(e){
+                        e.preventDefault();
+                        var v = $('#oy-service-area-input').val();
+                        oyServiceAreaAdd(v);
+                        $('#oy-service-area-input').val('').focus();
+                    });
+
+                    $('#oy-service-area-input').on('keydown', function(e){
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            $('#oy-service-area-add').trigger('click');
+                        }
+                    });
+
+                    $(document).on('click', '.oy-sa-remove', function(e){
+                        e.preventDefault();
+                        $(this).closest('.oy-sa-tag').remove();
+                    });
+
+                    // Ejecutar al cargar
                     window.oy_toggle_address_fields();
 
-                    // Inicializar el mapa al cargar: si hay coordenadas ya guardadas, renderizar iframe.
-                    // Se llama a oy_update_map_preview() para unificar la lógica de iframe, botones y enlaces.
-                    // Esto también cubre el caso en que el iframe ya venía de PHP pero los botones necesitan
-                    // sincronizar sus href con la URL de Maps guardada.
+                    // Inicializar mapa
                     (function() {
                         var lat = $.trim( $('#location_latitude').val() );
                         var lng = $.trim( $('#location_longitude').val() );
                         if ( lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng)) ) {
-                            // Si el iframe ya tiene src (renderizado por PHP), solo sincronizar botones/links.
                             var iframeSrc = $('#oy-map-iframe').attr('src');
                             var savedMapUrl = $.trim( $('#location_map_url').val() );
                             var mapsUrl = savedMapUrl || 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
 
                             if ( iframeSrc && iframeSrc.length > 5 ) {
-                                // iframe ya renderizado por PHP, solo sincronizar botones
                                 $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
                                 $('#oy-maps-open-link').attr('href', mapsUrl).show();
                                 $('#oy-map-placeholder').hide();
                                 $('#oy-map-iframe').css('display', 'block');
                                 $('#oy-map-preview-wrap').css('display', 'block');
                             } else {
-                                // Sin iframe de PHP (coords no disponibles al cargar en PHP), generar ahora.
                                 window.oy_update_map_preview();
                             }
                         }
