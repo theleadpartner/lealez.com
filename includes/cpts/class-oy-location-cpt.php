@@ -2256,6 +2256,26 @@ if(loc.latlng){
     }
 }
 
+        // ✅ NUEVO: Pintar Áreas de servicio en el metabox de Dirección (si existe helper)
+try {
+    var areas = [];
+    if (loc && loc.serviceArea) {
+        // intentos defensivos: places[] puede venir como strings o como objetos
+        if (Array.isArray(loc.serviceArea.places)) {
+            loc.serviceArea.places.forEach(function(pl){
+                if (typeof pl === 'string') {
+                    if (pl.trim()) areas.push(pl.trim());
+                } else if (pl && typeof pl === 'object') {
+                    if (pl.name && String(pl.name).trim()) areas.push(String(pl.name).trim());
+                }
+            });
+        }
+    }
+    if (areas.length && typeof window.oy_service_areas_set === 'function') {
+        window.oy_service_areas_set(areas);
+    }
+} catch(e) {}
+
         // Category
         if(loc.categories && loc.categories.primaryCategory){
             var pc = loc.categories.primaryCategory;
@@ -3470,6 +3490,63 @@ private function humanize_attribute_id( $attr_id ) {
                 'rows'  => 6,
                 'data'  => $gmb_storefront_address_raw,
             ),
+
+// ✅ NUEVO: serviceArea (RAW + map a location_service_areas)
+$service_area_raw = isset( $data['serviceArea'] ) && is_array( $data['serviceArea'] )
+    ? $data['serviceArea']
+    : array();
+
+if ( ! empty( $service_area_raw ) ) {
+    update_post_meta( $post_id, 'gmb_service_area_raw', $service_area_raw );
+}
+
+// Intento de extracción defensiva (Google puede devolver formatos distintos)
+$areas = array();
+
+if ( is_array( $service_area_raw ) ) {
+    // Caso común: serviceArea.places[] con nombres/ids
+    if ( isset( $service_area_raw['places'] ) && is_array( $service_area_raw['places'] ) ) {
+        foreach ( $service_area_raw['places'] as $pl ) {
+            if ( is_string( $pl ) ) {
+                $s = trim( $pl );
+                if ( $s ) $areas[] = $s;
+            } elseif ( is_array( $pl ) ) {
+                // a veces: { "name": "...", "placeId": "..." }
+                $nm = isset( $pl['name'] ) ? trim( (string) $pl['name'] ) : '';
+                if ( $nm ) $areas[] = $nm;
+            }
+        }
+    }
+
+    // Fallback: serviceArea.regionCode / administrativeArea / etc (si existiera)
+    if ( empty( $areas ) ) {
+        foreach ( array( 'regionCode', 'administrativeArea', 'locality' ) as $k ) {
+            if ( ! empty( $service_area_raw[ $k ] ) && is_string( $service_area_raw[ $k ] ) ) {
+                $areas[] = trim( $service_area_raw[ $k ] );
+            }
+        }
+    }
+}
+
+// Limpiar y guardar
+$clean = array();
+$seen  = array();
+foreach ( $areas as $a ) {
+    $a = trim( sanitize_text_field( (string) $a ) );
+    if ( '' === $a ) continue;
+    $key = strtolower( $a );
+    if ( isset( $seen[ $key ] ) ) continue;
+    $seen[ $key ] = true;
+    $clean[] = $a;
+}
+
+if ( ! empty( $clean ) ) {
+    update_post_meta( $post_id, 'location_service_areas', $clean );
+} else {
+    // Si GMB no trae áreas, no borro las existentes (pueden ser manuales)
+}
+
+            
             'gmb_phone_numbers_raw'      => array(
                 'label' => __( 'phoneNumbers', 'lealez' ),
                 'rows'  => 5,
