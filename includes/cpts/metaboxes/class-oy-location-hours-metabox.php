@@ -256,7 +256,8 @@ class OY_Location_Hours_Metabox {
                 addSpecial:   '<?php echo esc_js( __( 'Agregar horario especial', 'lealez' ) ); ?>',
                 specialTitle: '<?php echo esc_js( __( 'Horario especial', 'lealez' ) ); ?>',
                 closedLabel:  '<?php echo esc_js( __( 'Cerrado', 'lealez' ) ); ?>',
-                dateLabel:    '<?php echo esc_js( __( 'Fecha', 'lealez' ) ); ?>'
+                dateLabel:    '<?php echo esc_js( __( 'Fecha', 'lealez' ) ); ?>',
+                removeLabel:  '<?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?>'
             };
             </script>
 
@@ -609,7 +610,7 @@ class OY_Location_Hours_Metabox {
                           '</div>';
 
                 html +=   '<div style="padding-top:18px;">' +
-                            '<button type="button" class="button oy-remove-special" style="color:#dc3232;">✕ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?></button>' +
+                            '<button type="button" class="button oy-remove-special" style="color:#dc3232;">✕ ' + oyHoursI18n.removeLabel + '</button>' +
                           '</div>';
 
                 html += '</div>';
@@ -699,7 +700,7 @@ class OY_Location_Hours_Metabox {
                             }
                         }
 
-                        // ✅ Nuevo: Horario especial
+                        // ✅ Horario especial
                         if (d.special_hours && Array.isArray(d.special_hours)) {
                             rebuildSpecialHours(d.special_hours);
                         }
@@ -806,7 +807,6 @@ class OY_Location_Hours_Metabox {
         }
 
         // ── Guardar Horario especial (Nuevo) ───────────────────────────────────
-        // POST: location_special_hours[idx][date|closed|open|close]
         $special_raw = isset( $_POST['location_special_hours'] ) && is_array( $_POST['location_special_hours'] )
             ? wp_unslash( $_POST['location_special_hours'] )
             : array();
@@ -825,7 +825,6 @@ class OY_Location_Hours_Metabox {
                 continue;
             }
 
-            // Validación mínima YYYY-MM-DD
             if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date ) ) {
                 continue;
             }
@@ -834,7 +833,6 @@ class OY_Location_Hours_Metabox {
             $open   = isset( $row['open'] ) ? sanitize_text_field( (string) $row['open'] ) : '09:00';
             $close  = isset( $row['close'] ) ? sanitize_text_field( (string) $row['close'] ) : '18:00';
 
-            // Si está cerrado, no nos importa open/close
             if ( $closed ) {
                 $open  = '09:00';
                 $close = '18:00';
@@ -848,7 +846,6 @@ class OY_Location_Hours_Metabox {
             );
         }
 
-        // Ordenar por fecha ascendente para que se vea igual a GMB
         usort( $special_clean, function( $a, $b ) {
             return strcmp( (string) $a['date'], (string) $b['date'] );
         } );
@@ -930,17 +927,13 @@ class OY_Location_Hours_Metabox {
             }
         }
 
-        // ── Horario especial (Nuevo) ──────────────────────────────────────────
+        // ── Horario especial ──────────────────────────────────────────
         $special_meta = array();
         if ( ! empty( $special_raw ) ) {
-            // Guardar RAW tal cual (para metabox RAW)
             update_post_meta( $post_id, 'gmb_special_hours_raw', $special_raw );
-
-            // Mapear y guardar vista editable
             $special_meta = $this->map_gmb_special_hours_to_meta( $special_raw );
             update_post_meta( $post_id, 'location_special_hours', $special_meta );
         } else {
-            // Si Google no trae specialHours (o está vacío), dejamos RAW vacío y limpiamos vista editable
             update_post_meta( $post_id, 'gmb_special_hours_raw', array() );
             update_post_meta( $post_id, 'location_special_hours', array() );
         }
@@ -1095,23 +1088,9 @@ class OY_Location_Hours_Metabox {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Helpers privados de mapeo GMB → meta (HORARIO ESPECIAL)  ✅ NUEVO
+    // Helpers privados de mapeo GMB → meta (HORARIO ESPECIAL)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Mapea specialHours.specialHourPeriods de GMB a una lista plana por fecha para UI.
-     *
-     * Retorna: [
-     *   ['date'=>'YYYY-MM-DD','closed'=>0|1,'open'=>'HH:MM','close'=>'HH:MM'],
-     *   ...
-     * ]
-     *
-     * Soporta:
-     * - periodos por una fecha
-     * - periodos por rango (startDate/endDate) → se expanden día a día
-     * - closed=true
-     * - closeTime.hours=24 → normaliza a 00:00
-     */
     private function map_gmb_special_hours_to_meta( $special_raw ) {
         if ( ! is_array( $special_raw ) ) {
             return array();
@@ -1121,7 +1100,6 @@ class OY_Location_Hours_Metabox {
         if ( isset( $special_raw['specialHourPeriods'] ) && is_array( $special_raw['specialHourPeriods'] ) ) {
             $periods = $special_raw['specialHourPeriods'];
         } elseif ( isset( $special_raw['periods'] ) && is_array( $special_raw['periods'] ) ) {
-            // Compatibilidad si algún wrapper devuelve "periods"
             $periods = $special_raw['periods'];
         }
 
@@ -1138,7 +1116,6 @@ class OY_Location_Hours_Metabox {
 
             $is_closed = ! empty( $p['closed'] );
 
-            // Fecha inicio/fin (puede ser 1 día o rango)
             $start = isset( $p['startDate'] ) && is_array( $p['startDate'] ) ? $p['startDate'] : null;
             $end   = isset( $p['endDate'] )   && is_array( $p['endDate'] )   ? $p['endDate']   : null;
 
@@ -1159,8 +1136,7 @@ class OY_Location_Hours_Metabox {
                 }
             }
 
-            // open/close
-            $open = '09:00';
+            $open  = '09:00';
             $close = '18:00';
 
             if ( ! $is_closed ) {
@@ -1173,13 +1149,11 @@ class OY_Location_Hours_Metabox {
                 $ch = ( null !== $close_time && isset( $close_time['hours'] ) ) ? (int) $close_time['hours'] : 18;
                 $cm = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
 
-                // Normalizar closeTime.hours = 24 → 00:00
                 if ( 24 === $ch ) {
                     $ch = 0;
                     $cm = 0;
                 }
 
-                // Caso raro: si open=00:00 y close=00:00 sin closed → interpretar 24h (UI lo soporta)
                 if ( 0 === $oh && 0 === $om && 0 === $ch && 0 === $cm && null !== $close_time ) {
                     $open  = '24_hours';
                     $close = '';
@@ -1189,7 +1163,6 @@ class OY_Location_Hours_Metabox {
                 }
             }
 
-            // Expandir rango start→end (inclusive)
             $dates = $this->expand_date_range_ymd( $start_str, $end_str );
             foreach ( $dates as $ymd ) {
                 $out[] = array(
@@ -1201,7 +1174,6 @@ class OY_Location_Hours_Metabox {
             }
         }
 
-        // De-duplicar por fecha (si Google manda repetidos, gana el último)
         $by_date = array();
         foreach ( $out as $row ) {
             if ( ! is_array( $row ) || empty( $row['date'] ) ) { continue; }
@@ -1210,7 +1182,6 @@ class OY_Location_Hours_Metabox {
 
         $out = array_values( $by_date );
 
-        // Ordenar por fecha ascendente
         usort( $out, function( $a, $b ) {
             return strcmp( (string) $a['date'], (string) $b['date'] );
         } );
@@ -1218,9 +1189,6 @@ class OY_Location_Hours_Metabox {
         return $out;
     }
 
-    /**
-     * Convierte un objeto Date de GMB {year,month,day} a YYYY-MM-DD
-     */
     private function gmb_date_to_ymd( $date_obj ) {
         if ( ! is_array( $date_obj ) ) {
             return '';
@@ -1234,9 +1202,6 @@ class OY_Location_Hours_Metabox {
         return sprintf( '%04d-%02d-%02d', $y, $m, $d );
     }
 
-    /**
-     * Expande rango YYYY-MM-DD inclusive.
-     */
     private function expand_date_range_ymd( $start_ymd, $end_ymd ) {
         $start_ymd = (string) $start_ymd;
         $end_ymd   = (string) $end_ymd;
@@ -1264,7 +1229,6 @@ class OY_Location_Hours_Metabox {
         while ( $cur <= $end ) {
             $out[] = $cur->format( 'Y-m-d' );
             $cur->modify( '+1 day' );
-            // Seguridad: evitar loops absurdos si algo viene mal
             if ( count( $out ) > 400 ) {
                 break;
             }
