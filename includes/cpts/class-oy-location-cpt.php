@@ -87,6 +87,9 @@ public function __construct() {
     add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
     add_action( 'wp_ajax_oy_sync_location_food_menus', array( $this, 'ajax_sync_location_food_menus' ) );
 
+    // ✅ NUEVO: Autocomplete de “Áreas de servicio”
+    add_action( 'wp_ajax_oy_gmb_service_area_autocomplete', array( $this, 'ajax_gmb_service_area_autocomplete' ) );
+
     /**
      * ✅ Metabox externo: Fotos del propietario (GBP Media)
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-media-metabox.php
@@ -129,9 +132,6 @@ public function __construct() {
     /**
      * ✅ Metabox externo: Horarios de Atención
      * Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
-     *
-     * Registra, renderiza y guarda el metabox de forma independiente.
-     * Expone AJAX propio: oy_sync_location_hours_from_gmb
      */
     $hours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-hours-metabox.php';
     if ( file_exists( $hours_metabox_file ) ) {
@@ -145,10 +145,6 @@ public function __construct() {
     /**
      * ✅ Metabox externo: Dirección y Geolocalización
      * Archivo: includes/cpts/metaboxes/class-oy-location-address-metabox.php
-     *
-     * Registra y renderiza el metabox de forma independiente para reducir el tamaño del CPT.
-     * IMPORTANTE: Mantiene las funciones JS window.oy_toggle_address_fields y window.oy_update_map_preview
-     * usadas por el botón "Importar Ahora" (applyLocationToForm).
      */
     $address_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-address-metabox.php';
     if ( file_exists( $address_metabox_file ) ) {
@@ -3664,6 +3660,42 @@ private function humanize_attribute_id( $attr_id ) {
                     continue;
                 }
 
+                // ✅ NUEVO: Guardar Áreas de servicio (JSON → array limpio)
+if ( isset( $_POST['location_service_areas_json'] ) ) {
+    $raw = wp_unslash( $_POST['location_service_areas_json'] );
+    $raw = is_string( $raw ) ? trim( $raw ) : '';
+
+    $arr = json_decode( $raw, true );
+    if ( ! is_array( $arr ) ) {
+        $arr = array();
+    }
+
+    $clean = array();
+    $seen  = array();
+
+    foreach ( $arr as $v ) {
+        if ( ! is_string( $v ) ) {
+            continue;
+        }
+        $s = trim( sanitize_text_field( $v ) );
+        if ( '' === $s ) {
+            continue;
+        }
+        $k = strtolower( $s );
+        if ( isset( $seen[ $k ] ) ) {
+            continue;
+        }
+        $seen[ $k ] = true;
+        $clean[]    = $s;
+    }
+
+    update_post_meta( $post_id, 'location_service_areas', $clean );
+} else {
+    // Si no viene el campo, NO lo borro a la fuerza (evita borrar por saves parciales)
+    // Si quieres que se borre cuando el usuario lo deje vacío, el hidden siempre viene,
+    // así que aquí no hace falta borrar.
+}
+
                 // ✅ Proteger location_latitude y location_longitude de ser borrados
                 // cuando el campo llega vacío en POST (ej: carga de página sin import activo).
                 // Solo se borran si el usuario explícitamente escribió un valor y lo borra.
@@ -5816,6 +5848,121 @@ public function ajax_get_gmb_location_details() {
         'location'    => $found,
         'location_id' => $location_id,
         'account_id'  => $account_id,
+    ) );
+}
+
+
+
+
+    public function ajax_gmb_service_area_autocomplete() {
+    $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+    }
+
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( array( 'message' => __( 'No autorizado.', 'lealez' ) ) );
+    }
+
+    $q = isset( $_POST['q'] ) ? sanitize_text_field( wp_unslash( $_POST['q'] ) ) : '';
+    $q = trim( (string) $q );
+
+    $country = isset( $_POST['country'] ) ? sanitize_text_field( wp_unslash( $_POST['country'] ) ) : '';
+    $country = strtoupper( trim( (string) $country ) );
+
+    if ( strlen( $q ) < 2 ) {
+        wp_send_json_success( array( 'suggestions' => array() ) );
+    }
+
+    /**
+     * ✅ API KEY requerido (Google Places API)
+     * - Opción 1: definir en wp-config.php: define('LEALEZ_GOOGLE_MAPS_API_KEY', 'xxx');
+     * - Opción 2: guardar en options: lealez_google_maps_api_key
+     */
+    $api_key = '';
+    if ( defined( 'LEALEZ_GOOGLE_MAPS_API_KEY' ) && LEALEZ_GOOGLE_MAPS_API_KEY ) {
+        $api_key = (string) LEALEZ_GOOGLE_MAPS_API_KEY;
+    } else {
+        $api_key = (string) get_option( 'lealez_google_maps_api_key', '' );
+    }
+    $api_key = trim( $api_key );
+
+    if ( '' === $api_key ) {
+        wp_send_json_error( array(
+            'message' => __( 'Falta configurar Google Maps API Key (Places).', 'lealez' ),
+        ) );
+    }
+
+    // Autocomplete regions: ciudades / divisiones / países
+    $endpoint = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
+
+    $args = array(
+        'input'    => $q,
+        'key'      => $api_key,
+        'language' => 'es',
+        'types'    => '(regions)',
+    );
+
+    // Si hay país ISO2, acotamos para que sugiera cosas relevantes
+    if ( $country && preg_match( '/^[A-Z]{2}$/', $country ) ) {
+        $args['components'] = 'country:' . $country;
+    }
+
+    $url  = add_query_arg( $args, $endpoint );
+    $resp = wp_remote_get( $url, array( 'timeout' => 15 ) );
+
+    if ( is_wp_error( $resp ) ) {
+        wp_send_json_error( array(
+            'message' => $resp->get_error_message(),
+        ) );
+    }
+
+    $code = (int) wp_remote_retrieve_response_code( $resp );
+    $body = (string) wp_remote_retrieve_body( $resp );
+
+    if ( 200 !== $code ) {
+        wp_send_json_error( array(
+            'message' => __( 'Error consultando Places Autocomplete.', 'lealez' ),
+            'http'    => $code,
+        ) );
+    }
+
+    $data = json_decode( $body, true );
+    if ( ! is_array( $data ) ) {
+        wp_send_json_error( array(
+            'message' => __( 'Respuesta inválida de Places.', 'lealez' ),
+        ) );
+    }
+
+    $predictions = isset( $data['predictions'] ) && is_array( $data['predictions'] )
+        ? $data['predictions']
+        : array();
+
+    $out = array();
+    foreach ( $predictions as $p ) {
+        if ( ! is_array( $p ) ) {
+            continue;
+        }
+        $desc = isset( $p['description'] ) ? (string) $p['description'] : '';
+        $pid  = isset( $p['place_id'] ) ? (string) $p['place_id'] : '';
+        $desc = trim( $desc );
+
+        if ( '' === $desc ) {
+            continue;
+        }
+
+        $out[] = array(
+            'description' => $desc,
+            'place_id'    => $pid,
+        );
+
+        if ( count( $out ) >= 10 ) {
+            break;
+        }
+    }
+
+    wp_send_json_success( array(
+        'suggestions' => $out,
     ) );
 }
 
