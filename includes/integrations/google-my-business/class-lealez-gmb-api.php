@@ -1459,22 +1459,22 @@ public static function get_locations( $business_id, $account_name, $force_refres
      * si Google los rechaza, hacemos fallback SIN ellos pero SIEMPRE con metadata.
      * latlng se conserva hasta el mask 5 como fallback de URL via coordenadas.
      */
-    $read_masks = array(
-// Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
-'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode,profile',
-// Mask 2 - sin campos deprecated pero con metadata + latlng
-'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,languageCode,profile',
-// Mask 3 - reducido pero manteniendo metadata + latlng
-'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,languageCode,profile',
-// Mask 4 - más reducido, todavía con metadata + latlng
-'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
-// Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
-'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
-// Mask 6 - solo metadata esencial
-'name,title,metadata,profile',
-// Mask 7 - absoluto último recurso sin metadata
-'name,title,profile',
-    );
+$read_masks = array(
+    // Mask 1
+    'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,serviceArea,openInfo,locationState,metadata,languageCode,profile',
+    // Mask 2
+    'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,serviceArea,metadata,languageCode,profile',
+    // Mask 3
+    'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,serviceArea,metadata,languageCode,profile',
+    // Mask 4
+    'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,serviceArea,metadata,profile',
+    // Mask 5
+    'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,serviceArea,metadata,profile',
+    // Mask 6
+    'name,title,serviceArea,metadata,profile',
+    // Mask 7
+    'name,title,profile',
+);
 
     $all_locations = array();
     $page_token    = '';
@@ -1965,23 +1965,22 @@ public static function sync_location_data( $business_id, $location_name ) {
      * openInfo y locationState son campos deprecated que pueden causar rechazo; se eliminan en
      * el fallback pero metadata se preserva siempre para garantizar location_map_url.
      */
-    $read_masks = array(
-// Mask 1 - completo con campos legacy (openInfo, locationState) + metadata
-'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,openInfo,locationState,metadata,languageCode,profile',
-// Mask 2 - sin campos deprecated pero con metadata + latlng
-'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,metadata,languageCode,profile',
-// Mask 3 - reducido pero manteniendo metadata + latlng
-'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,languageCode,profile',
-// Mask 4 - más reducido, todavía con metadata + latlng
-'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,metadata,profile',
-// Mask 5 - mínimo con metadata (sin latlng pero al menos tenemos mapsUri)
-'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,metadata,profile',
-// Mask 6 - solo metadata esencial
-'name,title,metadata,profile',
-// Mask 7 - absoluto último recurso sin metadata
-'name,title,profile',
-'name,title',
-    );
+$read_masks = array(
+    // Mask 1
+    'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,serviceArea,openInfo,locationState,metadata,languageCode,profile',
+    // Mask 2
+    'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,regularHours,specialHours,moreHours,categories,latlng,serviceArea,metadata,languageCode,profile',
+    // Mask 3
+    'name,title,storeCode,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,serviceArea,metadata,languageCode,profile',
+    // Mask 4
+    'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,latlng,serviceArea,metadata,profile',
+    // Mask 5
+    'name,title,storefrontAddress,phoneNumbers,websiteUri,categories,serviceArea,metadata,profile',
+    // Mask 6
+    'name,title,serviceArea,metadata,profile',
+    // Mask 7
+    'name,title,profile',
+);
 
     $last_error = null;
 
