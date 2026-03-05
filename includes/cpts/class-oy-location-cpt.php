@@ -87,9 +87,6 @@ public function __construct() {
     add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
     add_action( 'wp_ajax_oy_sync_location_food_menus', array( $this, 'ajax_sync_location_food_menus' ) );
 
-    // ✅ NUEVO: Autocomplete de “Áreas de servicio”
-    add_action( 'wp_ajax_oy_gmb_service_area_autocomplete', array( $this, 'ajax_gmb_service_area_autocomplete' ) );
-
     /**
      * ✅ Metabox externo: Fotos del propietario (GBP Media)
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-media-metabox.php
@@ -132,6 +129,9 @@ public function __construct() {
     /**
      * ✅ Metabox externo: Horarios de Atención
      * Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
+     *
+     * Registra, renderiza y guarda el metabox de forma independiente.
+     * Expone AJAX propio: oy_sync_location_hours_from_gmb
      */
     $hours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-hours-metabox.php';
     if ( file_exists( $hours_metabox_file ) ) {
@@ -145,6 +145,10 @@ public function __construct() {
     /**
      * ✅ Metabox externo: Dirección y Geolocalización
      * Archivo: includes/cpts/metaboxes/class-oy-location-address-metabox.php
+     *
+     * Registra y renderiza el metabox de forma independiente para reducir el tamaño del CPT.
+     * IMPORTANTE: Mantiene las funciones JS window.oy_toggle_address_fields y window.oy_update_map_preview
+     * usadas por el botón "Importar Ahora" (applyLocationToForm).
      */
     $address_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-address-metabox.php';
     if ( file_exists( $address_metabox_file ) ) {
@@ -2256,26 +2260,6 @@ if(loc.latlng){
     }
 }
 
-        // ✅ NUEVO: Pintar Áreas de servicio en el metabox de Dirección (si existe helper)
-try {
-    var areas = [];
-    if (loc && loc.serviceArea) {
-        // intentos defensivos: places[] puede venir como strings o como objetos
-        if (Array.isArray(loc.serviceArea.places)) {
-            loc.serviceArea.places.forEach(function(pl){
-                if (typeof pl === 'string') {
-                    if (pl.trim()) areas.push(pl.trim());
-                } else if (pl && typeof pl === 'object') {
-                    if (pl.name && String(pl.name).trim()) areas.push(String(pl.name).trim());
-                }
-            });
-        }
-    }
-    if (areas.length && typeof window.oy_service_areas_set === 'function') {
-        window.oy_service_areas_set(areas);
-    }
-} catch(e) {}
-
         // Category
         if(loc.categories && loc.categories.primaryCategory){
             var pc = loc.categories.primaryCategory;
@@ -3465,142 +3449,123 @@ private function humanize_attribute_id( $attr_id ) {
         <?php
     }
 
-/**
- * Render Technical Data / RAW Google metabox
- * Consolidates all RAW JSON objects from Google APIs for debugging/homologation
- */
-public function render_technical_data_meta_box( $post ) {
-    $gmb_storefront_address_raw = get_post_meta( $post->ID, 'gmb_storefront_address_raw', true );
-    $gmb_phone_numbers_raw      = get_post_meta( $post->ID, 'gmb_phone_numbers_raw', true );
-    $gmb_regular_hours_raw      = get_post_meta( $post->ID, 'gmb_regular_hours_raw', true );
-    $gmb_special_hours_raw      = get_post_meta( $post->ID, 'gmb_special_hours_raw', true );
-    $gmb_more_hours_raw         = get_post_meta( $post->ID, 'gmb_more_hours_raw', true );
-    $gmb_categories_raw         = get_post_meta( $post->ID, 'gmb_categories_raw', true );
-    $gmb_attributes_raw         = get_post_meta( $post->ID, 'gmb_attributes_raw', true );
-    $gmb_location_raw           = get_post_meta( $post->ID, 'gmb_location_raw', true );
+    /**
+     * Render Technical Data / RAW Google metabox
+     * Consolidates all RAW JSON objects from Google APIs for debugging/homologation
+     */
+    public function render_technical_data_meta_box( $post ) {
+        $gmb_storefront_address_raw = get_post_meta( $post->ID, 'gmb_storefront_address_raw', true );
+        $gmb_phone_numbers_raw      = get_post_meta( $post->ID, 'gmb_phone_numbers_raw', true );
+        $gmb_regular_hours_raw      = get_post_meta( $post->ID, 'gmb_regular_hours_raw', true );
+        $gmb_special_hours_raw      = get_post_meta( $post->ID, 'gmb_special_hours_raw', true );
+        $gmb_more_hours_raw         = get_post_meta( $post->ID, 'gmb_more_hours_raw', true );
+        $gmb_categories_raw         = get_post_meta( $post->ID, 'gmb_categories_raw', true );
+        $gmb_attributes_raw         = get_post_meta( $post->ID, 'gmb_attributes_raw', true );
+        $gmb_location_raw           = get_post_meta( $post->ID, 'gmb_location_raw', true );
 
-    // ✅ NUEVO: RAW serviceArea + mapeo humano ya guardado
-    $gmb_service_area_raw       = get_post_meta( $post->ID, 'gmb_service_area_raw', true );
-    $location_service_areas     = get_post_meta( $post->ID, 'location_service_areas', true );
-    if ( ! is_array( $location_service_areas ) ) {
-        $location_service_areas = array();
-    }
-
-    $raw_sections = array(
-        'gmb_location_raw'           => array(
-            'label' => __( 'Location Resource (Business Information API) — completo', 'lealez' ),
-            'rows'  => 12,
-            'data'  => $gmb_location_raw,
-        ),
-        'gmb_storefront_address_raw' => array(
-            'label' => __( 'storefrontAddress', 'lealez' ),
-            'rows'  => 6,
-            'data'  => $gmb_storefront_address_raw,
-        ),
-
-        // ✅ NUEVO: serviceArea RAW + listado humano
-        'gmb_service_area_raw'       => array(
-            'label' => __( 'serviceArea (RAW) + location_service_areas (humano)', 'lealez' ),
-            'rows'  => 8,
-            'data'  => array(
-                'serviceArea_raw'        => $gmb_service_area_raw,
-                'location_service_areas' => $location_service_areas,
+        $raw_sections = array(
+            'gmb_location_raw'           => array(
+                'label' => __( 'Location Resource (Business Information API) — completo', 'lealez' ),
+                'rows'  => 12,
+                'data'  => $gmb_location_raw,
             ),
-        ),
+            'gmb_storefront_address_raw' => array(
+                'label' => __( 'storefrontAddress', 'lealez' ),
+                'rows'  => 6,
+                'data'  => $gmb_storefront_address_raw,
+            ),
+            'gmb_phone_numbers_raw'      => array(
+                'label' => __( 'phoneNumbers', 'lealez' ),
+                'rows'  => 5,
+                'data'  => $gmb_phone_numbers_raw,
+            ),
+            'gmb_regular_hours_raw'      => array(
+                'label' => __( 'regularHours', 'lealez' ),
+                'rows'  => 8,
+                'data'  => $gmb_regular_hours_raw,
+            ),
+            'gmb_special_hours_raw'      => array(
+                'label' => __( 'specialHours', 'lealez' ),
+                'rows'  => 6,
+                'data'  => $gmb_special_hours_raw,
+            ),
+            'gmb_more_hours_raw'         => array(
+                'label' => __( 'moreHours', 'lealez' ),
+                'rows'  => 6,
+                'data'  => $gmb_more_hours_raw,
+            ),
+            'gmb_categories_raw'         => array(
+                'label' => __( 'categories (primaryCategory + additionalCategories)', 'lealez' ),
+                'rows'  => 6,
+                'data'  => $gmb_categories_raw,
+            ),
+            'gmb_attributes_raw'         => array(
+                'label' => __( 'attributes (array completo)', 'lealez' ),
+                'rows'  => 8,
+                'data'  => $gmb_attributes_raw,
+            ),
+        );
 
-        'gmb_phone_numbers_raw'      => array(
-            'label' => __( 'phoneNumbers', 'lealez' ),
-            'rows'  => 5,
-            'data'  => $gmb_phone_numbers_raw,
-        ),
-        'gmb_regular_hours_raw'      => array(
-            'label' => __( 'regularHours', 'lealez' ),
-            'rows'  => 8,
-            'data'  => $gmb_regular_hours_raw,
-        ),
-        'gmb_special_hours_raw'      => array(
-            'label' => __( 'specialHours', 'lealez' ),
-            'rows'  => 6,
-            'data'  => $gmb_special_hours_raw,
-        ),
-        'gmb_more_hours_raw'         => array(
-            'label' => __( 'moreHours', 'lealez' ),
-            'rows'  => 6,
-            'data'  => $gmb_more_hours_raw,
-        ),
-        'gmb_categories_raw'         => array(
-            'label' => __( 'categories (primaryCategory + additionalCategories)', 'lealez' ),
-            'rows'  => 6,
-            'data'  => $gmb_categories_raw,
-        ),
-        'gmb_attributes_raw'         => array(
-            'label' => __( 'attributes (array completo)', 'lealez' ),
-            'rows'  => 8,
-            'data'  => $gmb_attributes_raw,
-        ),
-    );
-
-    $has_data = false;
-    foreach ( $raw_sections as $sec ) {
-        if ( ! empty( $sec['data'] ) ) {
-            $has_data = true;
-            break;
+        $has_data = false;
+        foreach ( $raw_sections as $sec ) {
+            if ( ! empty( $sec['data'] ) ) {
+                $has_data = true;
+                break;
+            }
         }
-    }
-    ?>
-    <style>
-    .oy-raw-section { margin-bottom: 20px; }
-    .oy-raw-section summary {
-        cursor: pointer;
-        font-weight: 600;
-        color: #2271b1;
-        padding: 6px 0;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-        font-size: 12px;
-    }
-    .oy-raw-section summary:hover { color: #135e96; }
-    .oy-raw-section textarea {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-        font-size: 12px;
-        margin-top: 4px;
-    }
-    </style>
+        ?>
+        <style>
+        .oy-raw-section { margin-bottom: 20px; }
+        .oy-raw-section summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #2271b1;
+            padding: 6px 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .oy-raw-section summary:hover { color: #135e96; }
+        .oy-raw-section textarea {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 12px;
+            margin-top: 4px;
+        }
+        </style>
 
-    <?php if ( ! $has_data ) : ?>
-        <p class="description">
-            <em><?php _e( 'No hay datos RAW disponibles todavía. Los datos RAW se llenan automáticamente al importar la ubicación desde Google My Business.', 'lealez' ); ?></em>
-        </p>
-    <?php else : ?>
-        <p class="description" style="margin-bottom:12px;">
-            <?php _e( 'Datos JSON exactamente como los retorna Google Business Information API. Solo lectura. Se actualizan al importar o sincronizar.', 'lealez' ); ?>
-        </p>
-        <?php foreach ( $raw_sections as $key => $sec ) :
-            $json_value = ! empty( $sec['data'] ) ? wp_json_encode( $sec['data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '';
-            $is_empty = empty( $json_value );
-            ?>
-            <details class="oy-raw-section" <?php echo ! $is_empty ? 'open' : ''; ?>>
-                <summary>
-                    <?php echo esc_html( $sec['label'] ); ?>
-                    <?php if ( $is_empty ) : ?>
-                        <span style="color:#999; font-weight:400;"> — <?php _e( 'sin datos', 'lealez' ); ?></span>
+        <?php if ( ! $has_data ) : ?>
+            <p class="description">
+                <em><?php _e( 'No hay datos RAW disponibles todavía. Los datos RAW se llenan automáticamente al importar la ubicación desde Google My Business.', 'lealez' ); ?></em>
+            </p>
+        <?php else : ?>
+            <p class="description" style="margin-bottom:12px;">
+                <?php _e( 'Datos JSON exactamente como los retorna Google Business Information API. Solo lectura. Se actualizan al importar o sincronizar.', 'lealez' ); ?>
+            </p>
+            <?php foreach ( $raw_sections as $key => $sec ) :
+                $json_value = ! empty( $sec['data'] ) ? wp_json_encode( $sec['data'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE ) : '';
+                $is_empty = empty( $json_value );
+                ?>
+                <details class="oy-raw-section" <?php echo ! $is_empty ? 'open' : ''; ?>>
+                    <summary>
+                        <?php echo esc_html( $sec['label'] ); ?>
+                        <?php if ( $is_empty ) : ?>
+                            <span style="color:#999; font-weight:400;"> — <?php _e( 'sin datos', 'lealez' ); ?></span>
+                        <?php endif; ?>
+                    </summary>
+                    <?php if ( ! $is_empty ) : ?>
+                        <textarea readonly
+                                  class="large-text"
+                                  rows="<?php echo esc_attr( $sec['rows'] ); ?>"><?php echo esc_textarea( $json_value ); ?></textarea>
                     <?php endif; ?>
-                </summary>
-                <?php if ( ! $is_empty ) : ?>
-                    <textarea readonly
-                              class="large-text"
-                              rows="<?php echo esc_attr( $sec['rows'] ); ?>"><?php echo esc_textarea( $json_value ); ?></textarea>
-                <?php endif; ?>
-            </details>
-        <?php endforeach; ?>
-    <?php endif; ?>
-    <?php
-}
+                </details>
+            <?php endforeach; ?>
+        <?php endif; ?>
+        <?php
+    }
 
     /**
      * Save meta boxes data
      */
     public function save_meta_boxes( $post_id, $post ) {
-
         // Security checks
         if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
             return;
@@ -3645,6 +3610,11 @@ public function render_technical_data_meta_box( $post ) {
             'location_chat_url'               => 'esc_url_raw',
             'location_email'                  => 'sanitize_email',
             'location_website'                => 'esc_url_raw',
+            // NOTA: location_menu_url se guarda más abajo desde location_menu_url_gmb (POST name distinto
+            // para evitar conflicto con el hidden field del menu metabox que corre en prioridad 15).
+            // save_meta_boxes corre en prioridad 20, por lo que GANA sobre el menu metabox.
+            // NOTA: location_booking_url y location_order_url se derivan de los arrays
+            // location_booking_urls / location_order_urls (guardados más abajo).
 
             // GMB (existing)
             'gmb_location_id'                 => 'sanitize_text_field',
@@ -3687,60 +3657,33 @@ public function render_technical_data_meta_box( $post ) {
                 $value = call_user_func( $sanitize_callback, wp_unslash( $_POST[ $field_name ] ) );
                 update_post_meta( $post_id, $field_name, $value );
             } else {
-
-                // ✅ Campos readonly que NO deben borrarse si no vienen en POST
+// ✅ Campos readonly que NO deben borrarse si no vienen en POST
                 $readonly_fields = array( 'gmb_location_id', 'gmb_account_id' );
                 if ( in_array( $field_name, $readonly_fields, true ) ) {
+                    // No hacer nada, mantener el valor existente
                     continue;
                 }
 
                 // ✅ Proteger location_latitude y location_longitude de ser borrados
+                // cuando el campo llega vacío en POST (ej: carga de página sin import activo).
+                // Solo se borran si el usuario explícitamente escribió un valor y lo borra.
+                // Esto evita que un save sin import limpie coordenadas guardadas por la API.
                 if ( in_array( $field_name, array( 'location_latitude', 'location_longitude' ), true ) ) {
                     $existing_val = get_post_meta( $post_id, $field_name, true );
                     if ( '' !== $existing_val && false !== $existing_val ) {
+                        // Mantener valor existente si el POST viene vacío
                         continue;
                     }
                 }
-
+                
                 // ✅ ojo: checkboxes no vienen si están off
                 if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save', 'service_area_only', 'show_address_to_customers' ), true ) ) {
                     delete_post_meta( $post_id, $field_name );
                 } else {
+                    // Para el resto, mantenemos comportamiento original
                     delete_post_meta( $post_id, $field_name );
                 }
             }
-        }
-
-        // ✅ NUEVO (UBICACIÓN CORRECTA): Guardar Áreas de servicio (JSON → array limpio)
-        if ( isset( $_POST['location_service_areas_json'] ) ) {
-            $raw = wp_unslash( $_POST['location_service_areas_json'] );
-            $raw = is_string( $raw ) ? trim( $raw ) : '';
-
-            $arr = json_decode( $raw, true );
-            if ( ! is_array( $arr ) ) {
-                $arr = array();
-            }
-
-            $clean = array();
-            $seen  = array();
-
-            foreach ( $arr as $v ) {
-                if ( ! is_string( $v ) ) {
-                    continue;
-                }
-                $s = trim( sanitize_text_field( $v ) );
-                if ( '' === $s ) {
-                    continue;
-                }
-                $k = strtolower( $s );
-                if ( isset( $seen[ $k ] ) ) {
-                    continue;
-                }
-                $seen[ $k ] = true;
-                $clean[]    = $s;
-            }
-
-            update_post_meta( $post_id, 'location_service_areas', $clean );
         }
 
         // ✅ Save loyalty_programs_accepted (array of IDs)
@@ -3749,6 +3692,7 @@ public function render_technical_data_meta_box( $post ) {
             $program_ids = array_filter( $program_ids ); // remove zeros
             update_post_meta( $post_id, 'loyalty_programs_accepted', $program_ids );
         } else {
+            // No programs selected (all checkboxes unchecked)
             update_post_meta( $post_id, 'loyalty_programs_accepted', array() );
         }
 
@@ -3761,6 +3705,7 @@ public function render_technical_data_meta_box( $post ) {
             $additional_phones = array_values( array_filter( $additional_phones ) );
             update_post_meta( $post_id, 'gmb_phone_additional_list', $additional_phones );
 
+            // Backward compat: fill location_phone_additional with first entry
             if ( ! empty( $additional_phones ) ) {
                 update_post_meta( $post_id, 'location_phone_additional', $additional_phones[0] );
             } else {
@@ -3787,6 +3732,7 @@ public function render_technical_data_meta_box( $post ) {
         }
         update_post_meta( $post_id, 'social_profiles_manual', $social_profiles_manual );
 
+        // Backward compat: keep old social_facebook_local / social_instagram_local
         if ( isset( $social_profiles_manual['facebook'] ) ) {
             update_post_meta( $post_id, 'social_facebook_local', $social_profiles_manual['facebook'] );
         }
@@ -3795,6 +3741,7 @@ public function render_technical_data_meta_box( $post ) {
         }
 
         // ✅ Save location_booking_urls (array dinámico de URLs de Reservas)
+        // Estructura: [ ['url'=>'...','label'=>'...','type'=>'...','from_gmb'=>0], ... ]
         $booking_urls_raw = isset( $_POST['location_booking_urls'] ) && is_array( $_POST['location_booking_urls'] )
             ? wp_unslash( $_POST['location_booking_urls'] )
             : array();
@@ -3818,6 +3765,7 @@ public function render_technical_data_meta_box( $post ) {
             }
         }
         update_post_meta( $post_id, 'location_booking_urls', $booking_urls_clean );
+        // Backward compat: mantener location_booking_url con la primera entrada
         if ( ! empty( $booking_urls_clean ) ) {
             update_post_meta( $post_id, 'location_booking_url', $booking_urls_clean[0]['url'] );
         } else {
@@ -3848,6 +3796,7 @@ public function render_technical_data_meta_box( $post ) {
             }
         }
         update_post_meta( $post_id, 'location_order_urls', $order_urls_clean );
+        // Backward compat: mantener location_order_url con la primera entrada
         if ( ! empty( $order_urls_clean ) ) {
             update_post_meta( $post_id, 'location_order_url', $order_urls_clean[0]['url'] );
         } else {
@@ -3855,13 +3804,22 @@ public function render_technical_data_meta_box( $post ) {
         }
 
         // ✅ Save location_menu_url desde el campo editable del contact metabox.
+        // POST name: location_menu_url_gmb (distinto del hidden field del menu metabox que usa
+        // location_menu_url). Al correr en prioridad 20 (después del menu metabox en prioridad 15),
+        // este valor SIEMPRE gana, preservando el control manual del usuario.
         if ( isset( $_POST['location_menu_url_gmb'] ) ) {
             $menu_url_val = esc_url_raw( wp_unslash( (string) $_POST['location_menu_url_gmb'] ) );
             update_post_meta( $post_id, 'location_menu_url', $menu_url_val );
+            // Marcar si fue ingresado manualmente (vs auto-sync de GMB) — se limpia en gmb import
             if ( '' === $menu_url_val ) {
                 delete_post_meta( $post_id, 'location_menu_url_from_gmb' );
             }
+            // Nota: location_menu_url_from_gmb solo se escribe a '1' durante el import de GMB.
+            // Si el usuario borra el campo manualmente, se limpia el flag de GMB.
         }
+
+        // ✅ CORRECCIÓN: Atributos ahora vienen exclusivamente desde GMB (gmb_attributes_raw)
+        // Ya no se guardan manualmente desde checkboxes
 
         // Save system metadata
         update_post_meta( $post_id, 'date_modified', current_time( 'mysql' ) );
@@ -5858,121 +5816,6 @@ public function ajax_get_gmb_location_details() {
         'location'    => $found,
         'location_id' => $location_id,
         'account_id'  => $account_id,
-    ) );
-}
-
-
-
-
-    public function ajax_gmb_service_area_autocomplete() {
-    $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
-    if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
-        wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
-    }
-
-    if ( ! current_user_can( 'edit_posts' ) ) {
-        wp_send_json_error( array( 'message' => __( 'No autorizado.', 'lealez' ) ) );
-    }
-
-    $q = isset( $_POST['q'] ) ? sanitize_text_field( wp_unslash( $_POST['q'] ) ) : '';
-    $q = trim( (string) $q );
-
-    $country = isset( $_POST['country'] ) ? sanitize_text_field( wp_unslash( $_POST['country'] ) ) : '';
-    $country = strtoupper( trim( (string) $country ) );
-
-    if ( strlen( $q ) < 2 ) {
-        wp_send_json_success( array( 'suggestions' => array() ) );
-    }
-
-    /**
-     * ✅ API KEY requerido (Google Places API)
-     * - Opción 1: definir en wp-config.php: define('LEALEZ_GOOGLE_MAPS_API_KEY', 'xxx');
-     * - Opción 2: guardar en options: lealez_google_maps_api_key
-     */
-    $api_key = '';
-    if ( defined( 'LEALEZ_GOOGLE_MAPS_API_KEY' ) && LEALEZ_GOOGLE_MAPS_API_KEY ) {
-        $api_key = (string) LEALEZ_GOOGLE_MAPS_API_KEY;
-    } else {
-        $api_key = (string) get_option( 'lealez_google_maps_api_key', '' );
-    }
-    $api_key = trim( $api_key );
-
-    if ( '' === $api_key ) {
-        wp_send_json_error( array(
-            'message' => __( 'Falta configurar Google Maps API Key (Places).', 'lealez' ),
-        ) );
-    }
-
-    // Autocomplete regions: ciudades / divisiones / países
-    $endpoint = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
-
-    $args = array(
-        'input'    => $q,
-        'key'      => $api_key,
-        'language' => 'es',
-        'types'    => '(regions)',
-    );
-
-    // Si hay país ISO2, acotamos para que sugiera cosas relevantes
-    if ( $country && preg_match( '/^[A-Z]{2}$/', $country ) ) {
-        $args['components'] = 'country:' . $country;
-    }
-
-    $url  = add_query_arg( $args, $endpoint );
-    $resp = wp_remote_get( $url, array( 'timeout' => 15 ) );
-
-    if ( is_wp_error( $resp ) ) {
-        wp_send_json_error( array(
-            'message' => $resp->get_error_message(),
-        ) );
-    }
-
-    $code = (int) wp_remote_retrieve_response_code( $resp );
-    $body = (string) wp_remote_retrieve_body( $resp );
-
-    if ( 200 !== $code ) {
-        wp_send_json_error( array(
-            'message' => __( 'Error consultando Places Autocomplete.', 'lealez' ),
-            'http'    => $code,
-        ) );
-    }
-
-    $data = json_decode( $body, true );
-    if ( ! is_array( $data ) ) {
-        wp_send_json_error( array(
-            'message' => __( 'Respuesta inválida de Places.', 'lealez' ),
-        ) );
-    }
-
-    $predictions = isset( $data['predictions'] ) && is_array( $data['predictions'] )
-        ? $data['predictions']
-        : array();
-
-    $out = array();
-    foreach ( $predictions as $p ) {
-        if ( ! is_array( $p ) ) {
-            continue;
-        }
-        $desc = isset( $p['description'] ) ? (string) $p['description'] : '';
-        $pid  = isset( $p['place_id'] ) ? (string) $p['place_id'] : '';
-        $desc = trim( $desc );
-
-        if ( '' === $desc ) {
-            continue;
-        }
-
-        $out[] = array(
-            'description' => $desc,
-            'place_id'    => $pid,
-        );
-
-        if ( count( $out ) >= 10 ) {
-            break;
-        }
-    }
-
-    wp_send_json_success( array(
-        'suggestions' => $out,
     ) );
 }
 
