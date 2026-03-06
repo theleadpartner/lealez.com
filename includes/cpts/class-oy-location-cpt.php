@@ -192,6 +192,22 @@ public function __construct() {
     }
 
 
+    /**
+ * ✅ Metabox externo: Panel de Rendimiento — Business Profile Performance API
+ * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-performance-metabox.php
+ *
+ * Dashboard completo de métricas diarias, comparativas, gráficas y keywords de búsqueda.
+ * Expone AJAX propio: oy_gmb_perf_fetch, oy_gmb_perf_keywords
+ */
+$performance_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-performance-metabox.php';
+if ( file_exists( $performance_metabox_file ) ) {
+    require_once $performance_metabox_file;
+
+    if ( class_exists( 'OY_Location_GMB_Performance_Metabox' ) ) {
+        new OY_Location_GMB_Performance_Metabox();
+    }
+}
+
 }
 
 
