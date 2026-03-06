@@ -3508,9 +3508,347 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
     }
 
 
-}
+    // =========================================================================
+    // REVIEWS – Google My Business API v4
+    // =========================================================================
+
+    /**
+     * Obtiene las reseñas de una ubicación desde GMB API v4.
+     *
+     * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews
+     *
+     * Soporta paginación manual mediante $page_token.
+     * La primera llamada sin page_token usa caché de 30 min (configurable).
+     *
+     * @param int    $business_id  ID del post oy_business
+     * @param string $location_any Resource name completo o location_id numérico
+     * @param string $page_token   Token de paginación ('' para primera página)
+     * @param int    $page_size    Máx reseñas por página (1-50, defecto 50)
+     * @param string $order_by     Campo de ordenamiento (ej: 'updateTimestamp desc', 'rating desc')
+     * @param bool   $use_cache    Si usar transient cache (ignorado cuando hay page_token)
+     * @return array|WP_Error      Estructura: {reviews, averageRating, totalReviewCount, nextPageToken}
+     */
+    public static function get_location_reviews(
+        $business_id,
+        $location_any,
+        $page_token  = '',
+        $page_size   = 50,
+        $order_by    = 'updateTimestamp desc',
+        $use_cache   = true
+    ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+
+        if ( ! $business_id || empty( $location_any ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing business_id or location for reviews.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        // Intentar resolver account_id si solo tenemos location_id
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            return new WP_Error(
+                'missing_params',
+                __( 'Could not resolve accountId or locationId for reviews.', 'lealez' ),
+                array(
+                    'location_any' => $location_any,
+                    'account_id'   => $account_id,
+                    'location_id'  => $location_id,
+                )
+            );
+        }
+
+        // Cache solo en primera página (sin page_token)
+        $cache_key    = 'oy_reviews_' . $business_id . '_' . md5( $account_id . $location_id . $order_by );
+        $cache_expiry = 30 * MINUTE_IN_SECONDS;
+
+        if ( $use_cache && empty( $page_token ) ) {
+            $cached = get_transient( $cache_key );
+            if ( false !== $cached && is_array( $cached ) ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'success', 'Reviews: using transient cache.' );
+                }
+                return $cached;
+            }
+        }
+
+        $page_size = max( 1, min( 50, absint( $page_size ) ) );
+
+        $endpoint = '/accounts/' . rawurlencode( $account_id )
+                  . '/locations/' . rawurlencode( $location_id )
+                  . '/reviews';
+
+        $query_args = array( 'pageSize' => $page_size );
+
+        if ( ! empty( $page_token ) ) {
+            $query_args['pageToken'] = $page_token;
+        }
+
+        // GMB v4 solo acepta 'updateTimestamp' y 'rating' como campos de orderBy
+        $allowed_order = array( 'updateTimestamp desc', 'updateTimestamp asc', 'rating desc', 'rating asc' );
+        if ( in_array( $order_by, $allowed_order, true ) ) {
+            $query_args['orderBy'] = $order_by;
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'GET',
+            array(),
+            false, // No usamos el caché interno de make_request; lo controlamos aquí
+            $query_args
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'warning', 'Reviews API error.', array(
+                    'account_id'  => $account_id,
+                    'location_id' => $location_id,
+                    'error'       => $result->get_error_message(),
+                    'error_code'  => $result->get_error_code(),
+                ) );
+            }
+            return $result;
+        }
+
+        $page_data = is_array( $result ) ? $result : array();
+
+        $response = array(
+            'reviews'          => isset( $page_data['reviews'] ) && is_array( $page_data['reviews'] )
+                                    ? $page_data['reviews']
+                                    : array(),
+            'averageRating'    => $page_data['averageRating']    ?? null,
+            'totalReviewCount' => $page_data['totalReviewCount'] ?? 0,
+            'nextPageToken'    => $page_data['nextPageToken']     ?? '',
+        );
+
+        // Solo guarda en caché si es primera página
+        if ( empty( $page_token ) ) {
+            set_transient( $cache_key, $response, $cache_expiry );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                'Reviews: fetched ' . count( $response['reviews'] ) . ' reviews.'
+                . ( ! empty( $response['nextPageToken'] ) ? ' (has next page)' : '' )
+            );
+        }
+
+        return $response;
+    }
+
+    /**
+     * Crea o actualiza la respuesta de propietario a una reseña.
+     *
+     * Endpoint: PUT https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews/{r}/reply
+     *
+     * @param int    $business_id  ID del post oy_business
+     * @param string $location_any Resource name o location_id de la ubicación
+     * @param string $review_id    ID numérico de la reseña (último segmento del resource name)
+     * @param string $comment      Texto de la respuesta (máx 4000 chars)
+     * @param string $review_name  Resource name completo de la reseña (opcional, para mayor precisión)
+     * @return array|WP_Error      ReviewReply actualizado {comment, updateTime} o WP_Error
+     */
+    public static function reply_to_review(
+        $business_id,
+        $location_any,
+        $review_id,
+        $comment,
+        $review_name = ''
+    ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+        $review_id    = trim( (string) $review_id );
+        $comment      = trim( (string) $comment );
+
+        if ( ! $business_id || empty( $location_any ) || empty( $review_id ) || empty( $comment ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for reply to review.', 'lealez' ) );
+        }
+
+        if ( mb_strlen( $comment ) > 4000 ) {
+            return new WP_Error( 'comment_too_long', __( 'Reply comment exceeds 4,000 characters.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            return new WP_Error( 'missing_params', __( 'Could not resolve accountId/locationId for reply.', 'lealez' ) );
+        }
+
+        // Si tenemos el resource name completo de la reseña lo usamos directamente
+        if ( ! empty( $review_name ) && false !== strpos( $review_name, '/reviews/' ) ) {
+            $endpoint = '/' . ltrim( $review_name, '/' ) . '/reply';
+        } else {
+            $endpoint = '/accounts/' . rawurlencode( $account_id )
+                      . '/locations/' . rawurlencode( $location_id )
+                      . '/reviews/' . rawurlencode( $review_id )
+                      . '/reply';
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'PUT',
+            array( 'comment' => $comment ),
+            false
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'error', 'Reply to review failed.', array(
+                    'review_id' => $review_id,
+                    'error'     => $result->get_error_message(),
+                ) );
+            }
+            return $result;
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'success', 'Review reply created/updated for review: ' . $review_id );
+        }
+
+        // Si la respuesta de la API es null/vacío (HTTP 200 sin body), construimos la respuesta
+        if ( empty( $result ) || ! is_array( $result ) ) {
+            $result = array(
+                'comment'    => $comment,
+                'updateTime' => gmdate( 'Y-m-d\TH:i:s\Z' ),
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Elimina la respuesta de propietario a una reseña.
+     *
+     * Endpoint: DELETE https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews/{r}/reply
+     *
+     * @param int    $business_id  ID del post oy_business
+     * @param string $location_any Resource name o location_id de la ubicación
+     * @param string $review_id    ID numérico de la reseña
+     * @param string $review_name  Resource name completo (opcional)
+     * @return true|WP_Error
+     */
+    public static function delete_review_reply(
+        $business_id,
+        $location_any,
+        $review_id,
+        $review_name = ''
+    ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+        $review_id    = trim( (string) $review_id );
+
+        if ( ! $business_id || empty( $location_any ) || empty( $review_id ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for delete review reply.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            return new WP_Error( 'missing_params', __( 'Could not resolve accountId/locationId for delete reply.', 'lealez' ) );
+        }
+
+        if ( ! empty( $review_name ) && false !== strpos( $review_name, '/reviews/' ) ) {
+            $endpoint = '/' . ltrim( $review_name, '/' ) . '/reply';
+        } else {
+            $endpoint = '/accounts/' . rawurlencode( $account_id )
+                      . '/locations/' . rawurlencode( $location_id )
+                      . '/reviews/' . rawurlencode( $review_id )
+                      . '/reply';
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'DELETE',
+            array(),
+            false
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'error', 'Delete review reply failed.', array(
+                    'review_id' => $review_id,
+                    'error'     => $result->get_error_message(),
+                ) );
+            }
+            return $result;
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'success', 'Review reply deleted for review: ' . $review_id );
+        }
+
+        return true;
+    }
+
+    /**
+     * Invalida el transient de caché de reseñas para una ubicación.
+     *
+     * Llamar después de create/update/delete de una respuesta.
+     *
+     * @param int    $business_id
+     * @param string $location_any
+     */
+    public static function clear_reviews_cache( $business_id, $location_any ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+
+        if ( ! $business_id || empty( $location_any ) ) {
+            return;
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' !== $account_id && '' !== $location_id ) {
+            // Borra todas las variantes de sort conocidas
+            $sort_variants = array(
+                'updateTimestamp desc',
+                'updateTimestamp asc',
+                'rating desc',
+                'rating asc',
+            );
+            foreach ( $sort_variants as $sort ) {
+                $cache_key = 'oy_reviews_' . $business_id . '_' . md5( $account_id . $location_id . $sort );
+                delete_transient( $cache_key );
+            }
+        }
+    }
+
+} // fin clase Lealez_GMB_API
 
 // WP-Cron hook for scheduled refresh
-add_action( 'lealez_gmb_scheduled_refresh', array( 'Lealez_GMB_API', 'run_scheduled_refresh' ), 10, 1 );
+add_action( 'lealez_gmb_scheduled_refresh', ...
 
 
