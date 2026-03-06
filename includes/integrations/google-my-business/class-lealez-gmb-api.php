@@ -3932,7 +3932,178 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
         }
     } // cierre clear_reviews_cache()
 
-     * @param int   $business_id    ID del post oy_business.
+    // =========================================================================
+    // Business Profile Performance API v1
+    // https://developers.google.com/my-business/reference/performance/rest
+    // =========================================================================
+
+    /**
+     * Recupera múltiples métricas diarias de rendimiento (Business Profile Performance API v1).
+     *
+     * Endpoint: GET /v1/{location}:fetchMultiDailyMetricsTimeSeries
+     *
+     * Métricas disponibles (DailyMetric enum):
+     *   BUSINESS_IMPRESSIONS_DESKTOP_MAPS   — Vistas en Maps (escritorio)
+     *   BUSINESS_IMPRESSIONS_DESKTOP_SEARCH — Vistas en Búsqueda (escritorio)
+     *   BUSINESS_IMPRESSIONS_MOBILE_MAPS    — Vistas en Maps (móvil)
+     *   BUSINESS_IMPRESSIONS_MOBILE_SEARCH  — Vistas en Búsqueda (móvil)
+     *   BUSINESS_CONVERSATIONS              — Mensajes / Conversaciones
+     *   BUSINESS_DIRECTION_REQUESTS         — Solicitudes de cómo llegar
+     *   CALL_CLICKS                         — Clics en llamada telefónica
+     *   WEBSITE_CLICKS                      — Clics en sitio web
+     *   BUSINESS_BOOKINGS                   — Reservas
+     *   BUSINESS_FOOD_ORDERS                — Pedidos de comida
+     *   BUSINESS_FOOD_MENU_CLICKS           — Clics en menú
+     *
+     * @param int    $business_id   ID del post oy_business (propietario del OAuth).
+     * @param string $location_name gmb_location_id (acepta: "locations/123", "accounts/x/locations/123", "123").
+     * @param array  $metrics       Array de DailyMetric strings. Mínimo 1.
+     * @param array  $start_date    ['year'=>int, 'month'=>int, 'day'=>int]
+     * @param array  $end_date      ['year'=>int, 'month'=>int, 'day'=>int]
+     * @param bool   $use_cache     Usar transient cache (TTL: 6 horas).
+     * @return array|WP_Error       Array con 'multiDailyMetricTimeSeries' o WP_Error.
+     */
+    public static function get_location_performance_metrics(
+        $business_id,
+        $location_name,
+        array $metrics,
+        array $start_date,
+        array $end_date,
+        $use_cache = true
+    ) {
+        // ── Extract numeric location ID ──────────────────────────────────
+        $location_id = self::extract_location_id_from_any( $location_name );
+
+        if ( '' === $location_id ) {
+            return new WP_Error(
+                'invalid_location',
+                __( 'No se pudo determinar el Location ID para la Performance API.', 'lealez' )
+            );
+        }
+
+        // ── Validate metrics ─────────────────────────────────────────────
+        $allowed_metrics = array(
+            'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
+            'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+            'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
+            'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
+            'BUSINESS_CONVERSATIONS',
+            'BUSINESS_DIRECTION_REQUESTS',
+            'CALL_CLICKS',
+            'WEBSITE_CLICKS',
+            'BUSINESS_BOOKINGS',
+            'BUSINESS_FOOD_ORDERS',
+            'BUSINESS_FOOD_MENU_CLICKS',
+        );
+
+        $clean_metrics = array();
+        foreach ( $metrics as $m ) {
+            $m = strtoupper( trim( (string) $m ) );
+            if ( in_array( $m, $allowed_metrics, true ) ) {
+                $clean_metrics[] = $m;
+            }
+        }
+
+        if ( empty( $clean_metrics ) ) {
+            return new WP_Error( 'invalid_metrics', __( 'No se proporcionaron métricas válidas.', 'lealez' ) );
+        }
+
+        // ── Transient cache key ──────────────────────────────────────────
+        $cache_key = 'oy_perf_multi_' . $business_id . '_' . md5(
+            $location_id . serialize( $clean_metrics ) . serialize( $start_date ) . serialize( $end_date )
+        );
+
+        if ( $use_cache ) {
+            $cached = get_transient( $cache_key );
+            if ( ! empty( $cached ) ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'success', 'Performance metrics: cache hit for location ' . $location_id );
+                }
+                return $cached;
+            }
+        }
+
+        // ── Build endpoint ───────────────────────────────────────────────
+        // The Performance API requires repeated params: ?dailyMetrics=A&dailyMetrics=B
+        $location_resource = 'locations/' . $location_id;
+        $endpoint          = '/' . $location_resource . ':fetchMultiDailyMetricsTimeSeries';
+
+        $qs_parts = array();
+        foreach ( $clean_metrics as $metric ) {
+            $qs_parts[] = 'dailyMetrics=' . rawurlencode( $metric );
+        }
+
+        $qs_parts[] = 'dailyRange.startDate.year='  . (int) ( $start_date['year']  ?? 0 );
+        $qs_parts[] = 'dailyRange.startDate.month=' . (int) ( $start_date['month'] ?? 0 );
+        $qs_parts[] = 'dailyRange.startDate.day='   . (int) ( $start_date['day']   ?? 0 );
+        $qs_parts[] = 'dailyRange.endDate.year='    . (int) ( $end_date['year']    ?? 0 );
+        $qs_parts[] = 'dailyRange.endDate.month='   . (int) ( $end_date['month']   ?? 0 );
+        $qs_parts[] = 'dailyRange.endDate.day='     . (int) ( $end_date['day']     ?? 0 );
+
+        $endpoint_with_qs = $endpoint . '?' . implode( '&', $qs_parts );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                sprintf(
+                    'Performance API: fetching %d metrics for location %s [%s → %s]',
+                    count( $clean_metrics ),
+                    $location_id,
+                    sprintf( '%04d-%02d-%02d', $start_date['year'] ?? 0, $start_date['month'] ?? 0, $start_date['day'] ?? 0 ),
+                    sprintf( '%04d-%02d-%02d', $end_date['year'] ?? 0, $end_date['month'] ?? 0, $end_date['day'] ?? 0 )
+                )
+            );
+        }
+
+        // ── API Request ──────────────────────────────────────────────────
+        $result = self::make_request(
+            $business_id,
+            $endpoint_with_qs,
+            'https://businessprofileperformance.googleapis.com/v1',
+            'GET',
+            array(),
+            false // cache gestionado arriba con transients
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'error',
+                    'Performance API error: ' . $result->get_error_message()
+                );
+            }
+            return $result;
+        }
+
+        // ── Store and return ─────────────────────────────────────────────
+        // TTL: 6 horas. Los datos de rendimiento tienen latencia de ~1-2 días en Google.
+        set_transient( $cache_key, $result, 6 * HOUR_IN_SECONDS );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            $series_count = isset( $result['multiDailyMetricTimeSeries'] )
+                ? count( $result['multiDailyMetricTimeSeries'] )
+                : 0;
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'Performance API: received %d time series for location %s', $series_count, $location_id )
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Recupera las palabras clave de búsqueda mensual (Business Profile Performance API v1).
+     *
+     * Endpoint: GET /v1/{location}/searchkeywords/impressions/monthly
+     *
+     * Devuelve las palabras clave de Búsqueda de Google que se usaron para encontrar el negocio.
+     * Nota: La API devuelve hasta 20 keywords por página. Máximo recomendado: 6 meses de rango.
+     *
+     * @param int    $business_id   ID del post oy_business.
      * @param string $location_name gmb_location_id.
      * @param array  $start_month   ['year'=>int, 'month'=>int]
      * @param array  $end_month     ['year'=>int, 'month'=>int]
@@ -4087,5 +4258,3 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
 
 // WP-Cron hook for scheduled refresh
 add_action( 'lealez_gmb_scheduled_refresh', array( 'Lealez_GMB_API', 'run_scheduled_refresh' ), 10, 1 );
-
-
