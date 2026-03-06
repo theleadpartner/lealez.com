@@ -175,6 +175,23 @@ public function __construct() {
         }
     }
 
+/**
+     * ✅ Metabox externo: Reseñas de Google My Business
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-reviews-metabox.php
+     *
+     * Muestra y gestiona las reseñas del perfil GBP de la ubicación.
+     * Expone AJAX propio: oy_gmb_reviews_fetch, oy_gmb_reviews_reply, oy_gmb_reviews_delete_reply
+     */
+    $reviews_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-reviews-metabox.php';
+    if ( file_exists( $reviews_metabox_file ) ) {
+        require_once $reviews_metabox_file;
+
+        if ( class_exists( 'OY_Location_GMB_Reviews_Metabox' ) ) {
+            new OY_Location_GMB_Reviews_Metabox();
+        }
+    }
+
+
 }
 
 
