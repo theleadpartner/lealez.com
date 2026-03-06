@@ -513,7 +513,18 @@ if(data.averageRating){updateHeaderRating(data.averageRating,data.totalReviewCou
 updateLastSyncLine();
 }else{
 var msg=(response.data&&response.data.message)?response.data.message:'Error desconocido al obtener rese\u00f1as.';
-$error.text('Error: '+msg).show();
+var debugHtml='';
+if(response.data&&response.data.debug){
+var d=response.data.debug;
+debugHtml='<br><small style="opacity:.75;word-break:break-all;">'
++'<strong>DEBUG (WP_DEBUG=true):</strong><br>'
++(d.wp_error_code?'Code: '+d.wp_error_code+'<br>':'')
++(d.http_code?'HTTP: '+d.http_code+'<br>':'')
++(d.api_base&&d.endpoint?'URL: '+d.api_base+d.endpoint+'<br>':'')
++(d.raw_body?'Google response: '+d.raw_body:'')
++'</small>';
+}
+$error.html('Error: '+escHtml(msg)+debugHtml).show();
 }
 },
 error:function(xhr){$error.text('Error de conexi\u00f3n HTTP '+xhr.status+'. Intenta de nuevo.').show();},
@@ -634,65 +645,102 @@ $(document).on('keydown',function(e){if(e.key==='Escape')$('#oy-modal-get-review
         <?php
     }
 
-    public function ajax_fetch_reviews() {
-        if ( ! check_ajax_referer( $this->nonce_action, 'security', false ) ) {
-            wp_send_json_error( array( 'message' => __( 'Nonce invalido.', 'lealez' ) ), 403 );
+public function ajax_fetch_reviews() {
+    if ( ! check_ajax_referer( $this->nonce_action, 'security', false ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce invalido.', 'lealez' ) ), 403 );
+    }
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ), 403 );
+    }
+
+    $post_id       = absint( $_POST['post_id']      ?? 0 );
+    $business_id   = absint( $_POST['business_id']  ?? 0 );
+    $location      = sanitize_text_field( $_POST['location']     ?? '' );
+    $page_token    = sanitize_text_field( $_POST['page_token']   ?? '' );
+    $order_by      = sanitize_text_field( $_POST['order_by']     ?? 'updateTimestamp desc' );
+    $force_refresh = ( '1' === ( $_POST['force_refresh'] ?? '0' ) );
+
+    if ( ! $post_id || ! $business_id || empty( $location ) ) {
+        $msg = sprintf(
+            'Parametros incompletos. post_id=%d, business_id=%d, location="%s"',
+            $post_id,
+            $business_id,
+            $location
+        );
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez Reviews AJAX] ' . $msg );
         }
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ), 403 );
-        }
+        wp_send_json_error( array( 'message' => $msg ) );
+    }
 
-        $post_id       = absint( $_POST['post_id']      ?? 0 );
-        $business_id   = absint( $_POST['business_id']  ?? 0 );
-        $location      = sanitize_text_field( $_POST['location']     ?? '' );
-        $page_token    = sanitize_text_field( $_POST['page_token']   ?? '' );
-        $order_by      = sanitize_text_field( $_POST['order_by']     ?? 'updateTimestamp desc' );
-        $force_refresh = ( '1' === ( $_POST['force_refresh'] ?? '0' ) );
+    if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+        wp_send_json_error( array( 'message' => 'Lealez_GMB_API no disponible.' ) );
+    }
 
-        if ( ! $post_id || ! $business_id || empty( $location ) ) {
-            wp_send_json_error( array(
-                'message' => sprintf(
-                    'Parametros incompletos. post_id=%d, business_id=%d, location=%s',
-                    $post_id,
-                    $business_id,
-                    $location
-                ),
-            ) );
-        }
-
-        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-            wp_send_json_error( array( 'message' => 'Lealez_GMB_API no disponible.' ) );
-        }
-
-        // force_refresh=true omite cache transient (accion del boton Sincronizar desde Google)
-        $use_cache = ! $force_refresh && empty( $page_token );
-
-        $result = Lealez_GMB_API::get_location_reviews(
+    // ✅ WP_DEBUG: registrar parametros recibidos
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[Lealez Reviews AJAX] fetch | post_id=%d | business_id=%d | location="%s" | order_by="%s" | force=%s | page_token="%s"',
+            $post_id,
             $business_id,
             $location,
-            $page_token,
-            50,
             $order_by,
-            $use_cache
+            $force_refresh ? 'true' : 'false',
+            $page_token
+        ) );
+    }
+
+    // force_refresh=true omite cache transient (accion del boton Sincronizar desde Google)
+    $use_cache = ! $force_refresh && empty( $page_token );
+
+    $result = Lealez_GMB_API::get_location_reviews(
+        $business_id,
+        $location,
+        $page_token,
+        50,
+        $order_by,
+        $use_cache
+    );
+
+    if ( is_wp_error( $result ) ) {
+        $error_response = array(
+            'message' => $result->get_error_message(),
+            'code'    => $result->get_error_code(),
         );
 
-        if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array(
-                'message' => $result->get_error_message(),
-                'code'    => $result->get_error_code(),
-            ) );
+        // ✅ WP_DEBUG: incluir detalles tecnicos en la respuesta para mostrar en UI
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $err_data = $result->get_error_data();
+            $debug_info = array(
+                'wp_error_code' => $result->get_error_code(),
+                'location_sent' => $location,
+                'order_by_sent' => $order_by,
+            );
+            if ( is_array( $err_data ) ) {
+                $debug_info['http_code'] = $err_data['code']     ?? null;
+                $debug_info['endpoint']  = $err_data['endpoint'] ?? null;
+                $debug_info['api_base']  = $err_data['api_base'] ?? null;
+                $debug_info['raw_body']  = isset( $err_data['raw_body'] )
+                    ? substr( (string) $err_data['raw_body'], 0, 500 )
+                    : null;
+            }
+            $error_response['debug'] = $debug_info;
+            error_log( '[Lealez Reviews AJAX] Error response: ' . wp_json_encode( $debug_info ) );
         }
 
-        if ( ! empty( $result['averageRating'] ) ) {
-            update_post_meta( $post_id, '_gmb_reviews_stats_cache', array(
-                'averageRating'    => $result['averageRating'],
-                'totalReviewCount' => $result['totalReviewCount'] ?? 0,
-            ) );
-        }
-        update_post_meta( $post_id, '_gmb_reviews_last_sync', time() );
-
-        wp_send_json_success( $result );
+        wp_send_json_error( $error_response );
     }
+
+    if ( ! empty( $result['averageRating'] ) ) {
+        update_post_meta( $post_id, '_gmb_reviews_stats_cache', array(
+            'averageRating'    => $result['averageRating'],
+            'totalReviewCount' => $result['totalReviewCount'] ?? 0,
+        ) );
+    }
+    update_post_meta( $post_id, '_gmb_reviews_last_sync', time() );
+
+    wp_send_json_success( $result );
+}
 
     public function ajax_reply_to_review() {
         if ( ! check_ajax_referer( $this->nonce_action, 'security', false ) ) {
