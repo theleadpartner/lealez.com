@@ -140,24 +140,24 @@ class OY_Location_GMB_Performance_Metabox {
             <div class="oy-perf-toolbar">
                 <div class="oy-perf-toolbar__left">
 
-                    <!-- Period selector -->
+                    <!-- Period selector - Month/Year based -->
                     <div class="oy-perf-field-group">
                         <label for="oy-perf-period"><?php esc_html_e( 'Período', 'lealez' ); ?></label>
                         <select id="oy-perf-period" class="oy-perf-select">
-                            <option value="7"><?php esc_html_e( 'Últimos 7 días', 'lealez' ); ?></option>
-                            <option value="30" selected><?php esc_html_e( 'Últimos 30 días', 'lealez' ); ?></option>
-                            <option value="90"><?php esc_html_e( 'Últimos 90 días', 'lealez' ); ?></option>
-                            <option value="180"><?php esc_html_e( 'Últimos 180 días', 'lealez' ); ?></option>
-                            <option value="custom"><?php esc_html_e( 'Rango personalizado', 'lealez' ); ?></option>
+                            <option value="this_month"><?php esc_html_e( 'Este mes', 'lealez' ); ?></option>
+                            <option value="3months" selected><?php esc_html_e( 'Últimos 3 meses', 'lealez' ); ?></option>
+                            <option value="6months"><?php esc_html_e( 'Últimos 6 meses', 'lealez' ); ?></option>
+                            <option value="12months"><?php esc_html_e( 'Últimos 12 meses', 'lealez' ); ?></option>
+                            <option value="month_range"><?php esc_html_e( 'Rango por mes', 'lealez' ); ?></option>
                         </select>
                     </div>
 
-                    <!-- Custom date range (hidden by default) -->
-                    <div id="oy-perf-custom-range" class="oy-perf-field-group" style="display:none;">
-                        <label for="oy-perf-date-from"><?php esc_html_e( 'Desde', 'lealez' ); ?></label>
-                        <input type="date" id="oy-perf-date-from" class="oy-perf-date-input" />
-                        <label for="oy-perf-date-to"><?php esc_html_e( 'Hasta', 'lealez' ); ?></label>
-                        <input type="date" id="oy-perf-date-to" class="oy-perf-date-input" />
+                    <!-- Month range picker (hidden by default) -->
+                    <div id="oy-perf-month-range" class="oy-perf-field-group" style="display:none;">
+                        <label for="oy-perf-month-from"><?php esc_html_e( 'Desde', 'lealez' ); ?></label>
+                        <select id="oy-perf-month-from" class="oy-perf-select-month"></select>
+                        <label for="oy-perf-month-to"><?php esc_html_e( 'Hasta', 'lealez' ); ?></label>
+                        <select id="oy-perf-month-to" class="oy-perf-select-month"></select>
                     </div>
 
                     <!-- Chart type -->
@@ -261,25 +261,43 @@ class OY_Location_GMB_Performance_Metabox {
             <!-- KEYWORDS SECTION -->
             <div id="oy-perf-keywords-wrap" class="oy-perf-keywords-wrap" style="display:none;">
                 <div class="oy-perf-section-header">
-                    <h4><?php esc_html_e( '🔍 Palabras clave de búsqueda (mensual)', 'lealez' ); ?></h4>
-                    <button type="button" id="oy-perf-btn-keywords" class="button button-small">
-                        <span class="dashicons dashicons-search" style="vertical-align:middle;margin-top:-2px;"></span>
-                        <?php esc_html_e( 'Cargar keywords', 'lealez' ); ?>
-                    </button>
+                    <h4><?php esc_html_e( '🔍 Palabras clave de búsqueda', 'lealez' ); ?></h4>
+                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                        <select id="oy-kw-month-filter" class="oy-perf-select" style="min-width:140px;font-size:12px;">
+                            <option value=""><?php esc_html_e( 'Todos los meses', 'lealez' ); ?></option>
+                        </select>
+                        <button type="button" id="oy-perf-btn-keywords" class="button button-small">
+                            <span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:-2px;"></span>
+                            <?php esc_html_e( 'Actualizar', 'lealez' ); ?>
+                        </button>
+                    </div>
                 </div>
                 <div id="oy-perf-keywords-status" class="oy-perf-status" style="display:none;"></div>
+                <!-- KPI top 3 keywords -->
+                <div id="oy-kw-kpis" class="oy-kw-kpis" style="display:none;"></div>
+                <!-- Keywords chart -->
+                <div id="oy-kw-chart-wrap" class="oy-kw-chart-wrap" style="display:none;">
+                    <div class="oy-perf-chart-container" style="height:220px;">
+                        <canvas id="oy-kw-chart"></canvas>
+                    </div>
+                </div>
+                <!-- Keywords table -->
                 <div id="oy-perf-keywords-content" style="display:none;">
-                    <table class="wp-list-table widefat striped oy-perf-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th><?php esc_html_e( 'Palabra clave', 'lealez' ); ?></th>
-                                <th><?php esc_html_e( 'Impresiones mensuales', 'lealez' ); ?></th>
-                                <th><?php esc_html_e( 'Mes', 'lealez' ); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody id="oy-perf-keywords-body"></tbody>
-                    </table>
+                    <div class="oy-perf-table-scroll">
+                        <table class="wp-list-table widefat striped oy-perf-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th><?php esc_html_e( 'Palabra clave', 'lealez' ); ?></th>
+                                    <th><?php esc_html_e( 'Total impresiones', 'lealez' ); ?></th>
+                                    <th><?php esc_html_e( 'Mejor mes', 'lealez' ); ?></th>
+                                    <th><?php esc_html_e( 'Meses con datos', 'lealez' ); ?></th>
+                                    <th><?php esc_html_e( 'Tendencia', 'lealez' ); ?></th>
+                                </tr>
+                            </thead>
+                            <tbody id="oy-perf-keywords-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div><!-- /.keywords-wrap -->
 
@@ -329,10 +347,10 @@ class OY_Location_GMB_Performance_Metabox {
                 'default' => true,
             ),
             'BUSINESS_CONVERSATIONS'              => array(
-                'label'   => __( 'Mensajes / Conversaciones', 'lealez' ),
+                'label'   => __( 'Clics en el Chat (Mensajes)', 'lealez' ),
                 'group'   => 'actions',
                 'color'   => '#6A1B9A',
-                'default' => false,
+                'default' => true,
             ),
             'BUSINESS_DIRECTION_REQUESTS'         => array(
                 'label'   => __( 'Cómo llegar', 'lealez' ),
@@ -506,6 +524,10 @@ class OY_Location_GMB_Performance_Metabox {
     /**
      * AJAX handler: keywords de búsqueda mensual
      * Action: oy_gmb_perf_keywords
+     *
+     * POST params (optional):
+     *   kw_month_from  YYYY-MM  start month (defaults to 6 months ago)
+     *   kw_month_to    YYYY-MM  end month   (defaults to current month)
      */
     public function ajax_fetch_keywords() {
         check_ajax_referer( 'oy_gmb_performance_nonce', 'nonce' );
@@ -514,8 +536,10 @@ class OY_Location_GMB_Performance_Metabox {
             wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
         }
 
-        $post_id = absint( $_POST['post_id'] ?? 0 );
-        $force   = ! empty( $_POST['force_refresh'] );
+        $post_id   = absint( $_POST['post_id'] ?? 0 );
+        $force     = ! empty( $_POST['force_refresh'] );
+        $kw_from   = sanitize_text_field( $_POST['kw_month_from'] ?? '' );
+        $kw_to     = sanitize_text_field( $_POST['kw_month_to'] ?? '' );
 
         if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
             wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
@@ -528,11 +552,23 @@ class OY_Location_GMB_Performance_Metabox {
             wp_send_json_error( array( 'message' => __( 'Faltan datos de configuración GMB.', 'lealez' ) ) );
         }
 
-        // Keywords: use last 6 months
-        $end_month   = array( 'year' => (int) gmdate( 'Y' ), 'month' => (int) gmdate( 'n' ) );
-        // Subtract 5 months for start
-        $start_ts    = mktime( 0, 0, 0, $end_month['month'] - 5, 1, $end_month['year'] );
-        $start_month = array( 'year' => (int) gmdate( 'Y', $start_ts ), 'month' => (int) gmdate( 'n', $start_ts ) );
+        // Build month range from POST params or fall back to last 6 months
+        if ( $kw_from && $kw_to ) {
+            $parts_from  = explode( '-', $kw_from );
+            $parts_to    = explode( '-', $kw_to );
+            if ( count( $parts_from ) === 2 && count( $parts_to ) === 2 ) {
+                $start_month = array( 'year' => (int) $parts_from[0], 'month' => (int) $parts_from[1] );
+                $end_month   = array( 'year' => (int) $parts_to[0],   'month' => (int) $parts_to[1] );
+            } else {
+                wp_send_json_error( array( 'message' => __( 'Formato de mes inválido. Usa YYYY-MM.', 'lealez' ) ) );
+                return;
+            }
+        } else {
+            // Default: last 6 months
+            $end_month   = array( 'year' => (int) gmdate( 'Y' ), 'month' => (int) gmdate( 'n' ) );
+            $start_ts    = mktime( 0, 0, 0, $end_month['month'] - 5, 1, $end_month['year'] );
+            $start_month = array( 'year' => (int) gmdate( 'Y', $start_ts ), 'month' => (int) gmdate( 'n', $start_ts ) );
+        }
 
         $result = Lealez_GMB_API::get_location_search_keywords(
             $business_id,
@@ -546,11 +582,80 @@ class OY_Location_GMB_Performance_Metabox {
             wp_send_json_error( array( 'message' => $result->get_error_message() ) );
         }
 
+        // Build aggregated keyword data (total impressions per keyword + monthly breakdown)
+        $aggregated = $this->aggregate_keywords( $result );
+
         wp_send_json_success( array(
-            'keywords'  => $result,
-            'period'    => array( 'start' => $start_month, 'end' => $end_month ),
-            'cached_at' => current_time( 'mysql' ),
+            'keywords'   => $result,
+            'aggregated' => $aggregated,
+            'period'     => array( 'start' => $start_month, 'end' => $end_month ),
+            'cached_at'  => current_time( 'mysql' ),
         ) );
+    }
+
+    /**
+     * Aggregate raw keyword API response into totals and monthly breakdowns.
+     *
+     * @param array $keywords  Raw keyword response from Lealez_GMB_API::get_location_search_keywords
+     * @return array  [ ['keyword'=>string, 'total'=>int, 'monthly'=>['YYYY-MM'=>int, ...]], ... ]
+     *                Sorted by total descending.
+     */
+    private function aggregate_keywords( $keywords ) {
+        if ( ! is_array( $keywords ) ) {
+            return array();
+        }
+
+        $agg = array();
+
+        foreach ( $keywords as $kw ) {
+            // Extract keyword text (handle both API response shapes)
+            $text = '';
+            if ( ! empty( $kw['searchKeyword']['insightsValue']['value'] ) ) {
+                $text = (string) $kw['searchKeyword']['insightsValue']['value'];
+            } elseif ( ! empty( $kw['insightsValue']['value'] ) ) {
+                $text = (string) $kw['insightsValue']['value'];
+            }
+
+            if ( '' === $text ) {
+                continue;
+            }
+
+            if ( ! isset( $agg[ $text ] ) ) {
+                $agg[ $text ] = array( 'total' => 0, 'monthly' => array() );
+            }
+
+            // Monthly breakdown
+            if ( ! empty( $kw['monthlyMetrics'] ) && is_array( $kw['monthlyMetrics'] ) ) {
+                foreach ( $kw['monthlyMetrics'] as $mm ) {
+                    $val = isset( $mm['monthlyMetrics'] ) ? (int) $mm['monthlyMetrics'] : 0;
+                    $agg[ $text ]['total'] += $val;
+                    if ( isset( $mm['month']['year'], $mm['month']['month'] ) ) {
+                        $key = sprintf( '%04d-%02d', (int) $mm['month']['year'], (int) $mm['month']['month'] );
+                        $agg[ $text ]['monthly'][ $key ] = ( $agg[ $text ]['monthly'][ $key ] ?? 0 ) + $val;
+                    }
+                }
+            } elseif ( isset( $kw['impressionsValue']['value'] ) ) {
+                // Single-value fallback (no monthly breakdown)
+                $agg[ $text ]['total'] += (int) $kw['impressionsValue']['value'];
+            }
+        }
+
+        // Sort by total descending
+        uasort( $agg, function( $a, $b ) {
+            return $b['total'] - $a['total'];
+        } );
+
+        // Convert to indexed array
+        $result = array();
+        foreach ( $agg as $text => $data ) {
+            $result[] = array(
+                'keyword' => $text,
+                'total'   => $data['total'],
+                'monthly' => $data['monthly'],
+            );
+        }
+
+        return $result;
     }
 
     // -----------------------------------------------------------------------
@@ -560,29 +665,86 @@ class OY_Location_GMB_Performance_Metabox {
     /**
      * Build start/end date range from period selector or custom dates.
      *
-     * @param string $period   '7', '30', '90', '180', 'custom'
-     * @param string $date_from Y-m-d
-     * @param string $date_to   Y-m-d
-     * @return array|WP_Error  ['start' => ['year'=>,'month'=>,'day'=>], 'end' => [...], 'label' => '']
+     * Supported period values:
+     *  - 'this_month'  → 1st of current month to yesterday
+     *  - '3months'     → 1st of 3 months ago to yesterday
+     *  - '6months'     → 1st of 6 months ago to yesterday
+     *  - '12months'    → 1st of 12 months ago to yesterday
+     *  - 'month_range' → date_from/date_to as 'YYYY-MM' strings
+     *  - 'custom'      → date_from/date_to as 'Y-m-d' strings (legacy)
+     *  - numeric       → last N days (legacy fallback)
+     *
+     * @param string $period
+     * @param string $date_from  'YYYY-MM' for month_range, 'Y-m-d' for custom
+     * @param string $date_to    'YYYY-MM' for month_range, 'Y-m-d' for custom
+     * @return array|WP_Error
      */
     private function build_date_range( $period, $date_from = '', $date_to = '' ) {
-        if ( 'custom' === $period ) {
-            if ( ! $date_from || ! $date_to ) {
-                return new WP_Error( 'invalid_range', __( 'Debes especificar fecha de inicio y fin para el rango personalizado.', 'lealez' ) );
-            }
-            $start_ts = strtotime( $date_from );
-            $end_ts   = strtotime( $date_to );
-            if ( ! $start_ts || ! $end_ts || $start_ts > $end_ts ) {
-                return new WP_Error( 'invalid_range', __( 'Rango de fechas inválido.', 'lealez' ) );
-            }
-        } else {
-            $days     = absint( $period );
-            if ( ! $days ) {
-                $days = 30;
-            }
-            // End = yesterday (Performance API data lags ~1-2 days)
-            $end_ts   = strtotime( '-1 day' );
-            $start_ts = strtotime( '-' . $days . ' days', $end_ts );
+        $now       = current_time( 'timestamp' );
+        $yesterday = strtotime( '-1 day', $now );
+
+        switch ( $period ) {
+
+            case 'this_month':
+                $start_ts = mktime( 0, 0, 0, (int) gmdate( 'n', $now ), 1, (int) gmdate( 'Y', $now ) );
+                $end_ts   = $yesterday;
+                break;
+
+            case '3months':
+                $start_ts = mktime( 0, 0, 0, (int) gmdate( 'n', $now ) - 2, 1, (int) gmdate( 'Y', $now ) );
+                $end_ts   = $yesterday;
+                break;
+
+            case '6months':
+                $start_ts = mktime( 0, 0, 0, (int) gmdate( 'n', $now ) - 5, 1, (int) gmdate( 'Y', $now ) );
+                $end_ts   = $yesterday;
+                break;
+
+            case '12months':
+                $start_ts = mktime( 0, 0, 0, (int) gmdate( 'n', $now ) - 11, 1, (int) gmdate( 'Y', $now ) );
+                $end_ts   = $yesterday;
+                break;
+
+            case 'month_range':
+                if ( ! $date_from || ! $date_to ) {
+                    return new WP_Error( 'invalid_range', __( 'Debes especificar mes de inicio y fin (YYYY-MM).', 'lealez' ) );
+                }
+                $parts_from = explode( '-', $date_from );
+                $parts_to   = explode( '-', $date_to );
+                if ( count( $parts_from ) !== 2 || count( $parts_to ) !== 2 ) {
+                    return new WP_Error( 'invalid_range', __( 'Formato de mes inválido. Usa YYYY-MM.', 'lealez' ) );
+                }
+                $start_ts = mktime( 0, 0, 0, (int) $parts_from[1], 1, (int) $parts_from[0] );
+                // Last day of the to-month: day 0 of the next month = last day of to-month
+                $end_ts   = mktime( 23, 59, 59, (int) $parts_to[1] + 1, 0, (int) $parts_to[0] );
+                // Cap at yesterday (Performance API has ~2-day lag)
+                if ( $end_ts > $yesterday ) {
+                    $end_ts = $yesterday;
+                }
+                if ( $start_ts >= $end_ts ) {
+                    return new WP_Error( 'invalid_range', __( 'El mes de inicio debe ser anterior al mes de fin.', 'lealez' ) );
+                }
+                break;
+
+            case 'custom':
+                // Legacy: full Y-m-d dates
+                if ( ! $date_from || ! $date_to ) {
+                    return new WP_Error( 'invalid_range', __( 'Debes especificar fecha de inicio y fin para el rango personalizado.', 'lealez' ) );
+                }
+                $start_ts = strtotime( $date_from );
+                $end_ts   = strtotime( $date_to );
+                if ( ! $start_ts || ! $end_ts || $start_ts > $end_ts ) {
+                    return new WP_Error( 'invalid_range', __( 'Rango de fechas inválido.', 'lealez' ) );
+                }
+                break;
+
+            default:
+                // Legacy: numeric days (7, 30, 90, 180…)
+                $days     = absint( $period );
+                $days     = $days ? $days : 30;
+                $end_ts   = $yesterday;
+                $start_ts = strtotime( '-' . $days . ' days', $end_ts );
+                break;
         }
 
         $start = array(
@@ -604,7 +766,7 @@ class OY_Location_GMB_Performance_Metabox {
                 gmdate( 'd/m/Y', $start_ts ),
                 gmdate( 'd/m/Y', $end_ts )
             ),
-            'days'  => round( ( $end_ts - $start_ts ) / DAY_IN_SECONDS ),
+            'days'  => max( 1, (int) round( ( $end_ts - $start_ts ) / DAY_IN_SECONDS ) ),
         );
     }
 
@@ -1093,8 +1255,6 @@ class OY_Location_GMB_Performance_Metabox {
     // -----------------------------------------------------------------------
 
     private function get_inline_js() {
-        $metrics_def_json = wp_json_encode( $this->get_all_metrics_definition() );
-
         $impressions_keys = wp_json_encode( array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' ) );
         $actions_keys     = wp_json_encode( array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' ) );
 
@@ -1104,38 +1264,36 @@ class OY_Location_GMB_Performance_Metabox {
     'use strict';
 
     var OyPerf = {
-        postId       : oyPerfConfig.postId,
-        nonce        : oyPerfConfig.nonce,
-        ajaxUrl      : oyPerfConfig.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php',
-        chartInstance: null,
-        metricsDef   : oyPerfConfig.metricsDef,
-        impKeys      : oyPerfConfig.impKeys,
-        actKeys      : oyPerfConfig.actKeys,
-        lastData     : null,
-        sortAsc      : true,
+        postId          : oyPerfConfig.postId,
+        nonce           : oyPerfConfig.nonce,
+        ajaxUrl         : oyPerfConfig.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php',
+        chartInstance   : null,
+        kwChartInstance : null,
+        metricsDef      : oyPerfConfig.metricsDef,
+        impKeys         : oyPerfConfig.impKeys,
+        actKeys         : oyPerfConfig.actKeys,
+        lastData        : null,
+        lastKeywordsData: null,
+        sortAsc         : true,
+
+        // Month names in Spanish
+        monthNames: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
 
         init: function(){
             var self = this;
 
+            // Populate month selects before first fetch
+            self.populateMonthSelects();
+
             // Load automatically on page open with defaults
             self.fetchMetrics(false);
 
-            // Period change → show/hide custom range
+            // Period change → show/hide month range picker
             $('#oy-perf-period').on('change', function(){
-                if ('custom' === $(this).val()) {
-                    $('#oy-perf-custom-range').show();
-                    var today = new Date();
-                    var y  = today.getFullYear();
-                    var m  = String(today.getMonth()+1).padStart(2,'0');
-                    var d  = String(today.getDate()).padStart(2,'0');
-                    var d30 = new Date(today); d30.setDate(d30.getDate()-31);
-                    var y2 = d30.getFullYear();
-                    var m2 = String(d30.getMonth()+1).padStart(2,'0');
-                    var d2 = String(d30.getDate()).padStart(2,'0');
-                    $('#oy-perf-date-from').val(y2+'-'+m2+'-'+d2);
-                    $('#oy-perf-date-to').val(y+'-'+m+'-'+d);
+                if ('month_range' === $(this).val()) {
+                    $('#oy-perf-month-range').show();
                 } else {
-                    $('#oy-perf-custom-range').hide();
+                    $('#oy-perf-month-range').hide();
                 }
             });
 
@@ -1201,9 +1359,74 @@ class OY_Location_GMB_Performance_Metabox {
                 if (self.lastData) self.exportCSV(self.lastData);
             });
 
-            // Keywords
-            $('#oy-perf-btn-keywords').on('click', function(){ self.fetchKeywords(false); });
+            // Keywords refresh button (force)
+            $('#oy-perf-btn-keywords').on('click', function(){ self.fetchKeywords(true); });
+
+            // Keyword month filter
+            $('#oy-kw-month-filter').on('change', function(){
+                if (self.lastKeywordsData) {
+                    var selectedMonth = $(this).val();
+                    self.buildKeywordsTableEnhanced(self.lastKeywordsData.aggregated, selectedMonth);
+                }
+            });
         },
+
+        // ----------------------------------------------------------------
+        // Month selects helpers
+        // ----------------------------------------------------------------
+
+        populateMonthSelects: function(){
+            var self = this;
+            var now  = new Date();
+            var opts = '';
+
+            // Build 24 months, newest first
+            for (var i = 0; i <= 23; i++) {
+                var d  = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                var y  = d.getFullYear();
+                var m  = d.getMonth() + 1;
+                var v  = y + '-' + String(m).padStart(2,'0');
+                var lb = self.monthNames[m-1] + ' ' + y;
+                opts += '<option value="'+v+'">'+lb+'</option>';
+            }
+
+            var $from = $('#oy-perf-month-from');
+            var $to   = $('#oy-perf-month-to');
+            $from.html(opts);
+            $to.html(opts);
+
+            // Default: from = 6 months ago, to = current month
+            var fromDate = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+            $from.val(fromDate.getFullYear() + '-' + String(fromDate.getMonth()+1).padStart(2,'0'));
+            $to.val(now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0'));
+        },
+
+        getMonthRangeForKeywords: function(){
+            var self   = this;
+            var period = $('#oy-perf-period').val();
+            var now    = new Date();
+            var toVal  = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+
+            if ('month_range' === period) {
+                return {
+                    from: $('#oy-perf-month-from').val(),
+                    to  : $('#oy-perf-month-to').val(),
+                };
+            }
+
+            var monthsBack = {this_month: 0, '3months': 2, '6months': 5, '12months': 11}[period];
+            if (monthsBack === undefined) { monthsBack = 5; }
+
+            var fromDate = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+            return {
+                from: fromDate.getFullYear() + '-' + String(fromDate.getMonth()+1).padStart(2,'0'),
+                to  : toVal,
+            };
+        },
+
+        // ----------------------------------------------------------------
+        // Core fetch
+        // ----------------------------------------------------------------
 
         getSelectedMetrics: function(){
             var metrics = [];
@@ -1232,9 +1455,9 @@ class OY_Location_GMB_Performance_Metabox {
                 force_refresh : forceRefresh ? 1 : 0,
             };
 
-            if ('custom' === period) {
-                data.date_from = $('#oy-perf-date-from').val();
-                data.date_to   = $('#oy-perf-date-to').val();
+            if ('month_range' === period) {
+                data.date_from = $('#oy-perf-month-from').val();
+                data.date_to   = $('#oy-perf-month-to').val();
             }
 
             self.showStatus('loading', 'Consultando datos en Google Business Profile...');
@@ -1253,7 +1476,7 @@ class OY_Location_GMB_Performance_Metabox {
                 // If API returned no series, surface debug info automatically
                 var hasSeries = pd.data && pd.data.series && Object.keys(pd.data.series).length > 0;
                 if (!hasSeries && pd.debug) {
-                    var dbg = pd.debug;
+                    var dbg  = pd.debug;
                     var hint = '⚠️ La API respondió HTTP 200 pero no devolvió datos de series. ';
                     hint += 'Location ID: <code>' + self.escHtml(dbg.location_id || '?') + '</code> | ';
                     hint += 'Outer wrappers: <code>' + dbg.outer_count + '</code> | ';
@@ -1284,17 +1507,26 @@ class OY_Location_GMB_Performance_Metabox {
                 $('#oy-perf-cache-info').text(' | ' + totalDays + ' días de datos');
                 $('#oy-perf-footer').show();
 
-                // Show keywords section prompt
+                // Show keywords section and auto-load
                 $('#oy-perf-keywords-wrap').show();
+                self.fetchKeywords(false);
 
             }).fail(function(xhr){
                 self.showStatus('error', 'Error de conexión: ' + (xhr.statusText || 'unknown'));
             });
         },
 
+        // ----------------------------------------------------------------
+        // Keywords
+        // ----------------------------------------------------------------
+
         fetchKeywords: function(forceRefresh){
-            var self = this;
+            var self      = this;
+            var kwRange   = self.getMonthRangeForKeywords();
+
             self.showKeywordsStatus('loading', 'Cargando palabras clave...');
+            $('#oy-kw-kpis').hide();
+            $('#oy-kw-chart-wrap').hide();
             $('#oy-perf-keywords-content').hide();
 
             $.post(self.ajaxUrl, {
@@ -1302,6 +1534,8 @@ class OY_Location_GMB_Performance_Metabox {
                 nonce         : self.nonce,
                 post_id       : self.postId,
                 force_refresh : forceRefresh ? 1 : 0,
+                kw_month_from : kwRange.from,
+                kw_month_to   : kwRange.to,
             }, function(resp){
                 self.hideKeywordsStatus();
                 if (!resp.success) {
@@ -1309,19 +1543,208 @@ class OY_Location_GMB_Performance_Metabox {
                     return;
                 }
 
-                var keywords = resp.data.keywords || [];
-                if (!keywords.length) {
+                var aggregated = resp.data.aggregated || [];
+                var period     = resp.data.period || {};
+
+                if (!aggregated.length) {
                     self.showKeywordsStatus('info', 'No se encontraron palabras clave para el período.');
                     return;
                 }
 
-                self.buildKeywordsTable(keywords, resp.data.period);
-                $('#oy-perf-keywords-content').show();
+                self.lastKeywordsData = resp.data;
+
+                // Populate month filter
+                if (period.start && period.end) {
+                    self.buildKeywordsMonthFilter(period.start, period.end);
+                }
+
+                // KPI top 3
+                self.buildKeywordsKPIs(aggregated);
+
+                // Chart top 10
+                self.buildKeywordsChart(aggregated);
+
+                // Table
+                self.buildKeywordsTableEnhanced(aggregated, '');
 
             }).fail(function(xhr){
                 self.showKeywordsStatus('error', 'Error de conexión: ' + (xhr.statusText || 'unknown'));
             });
         },
+
+        buildKeywordsMonthFilter: function(startMonth, endMonth){
+            var self = this;
+            var opts = '<option value="">Todos los meses</option>';
+            var allMonths = [];
+            var y = startMonth.year;
+            var m = startMonth.month;
+
+            while ( y < endMonth.year || (y === endMonth.year && m <= endMonth.month) ) {
+                var val = y + '-' + String(m).padStart(2,'0');
+                allMonths.push({ val: val, label: self.monthNames[m-1] + ' ' + y });
+                m++;
+                if (m > 12) { m = 1; y++; }
+            }
+
+            // Newest first
+            allMonths.reverse();
+            $.each(allMonths, function(i, mo){
+                opts += '<option value="'+mo.val+'">'+mo.label+'</option>';
+            });
+            $('#oy-kw-month-filter').html(opts);
+        },
+
+        buildKeywordsKPIs: function(aggregated){
+            var self  = this;
+            var top3  = aggregated.slice(0, 3);
+            var $kpis = $('#oy-kw-kpis');
+            $kpis.empty();
+
+            if (!top3.length) { $kpis.hide(); return; }
+
+            var colors = ['#4285f4','#34a853','#fbbc05'];
+            $.each(top3, function(i, kw){
+                $kpis.append(
+                    '<div class="oy-kw-kpi" style="border-top:3px solid '+colors[i]+';">' +
+                        '<div class="oy-kw-kpi__rank">#'+(i+1)+'</div>' +
+                        '<div class="oy-kw-kpi__keyword" title="'+self.escHtml(kw.keyword)+'">'+self.escHtml(kw.keyword)+'</div>' +
+                        '<div class="oy-kw-kpi__value">'+self.formatNum(kw.total)+' <span>imp.</span></div>' +
+                    '</div>'
+                );
+            });
+            $kpis.show();
+        },
+
+        buildKeywordsChart: function(aggregated){
+            var self   = this;
+            var top10  = aggregated.slice(0, 10);
+            var $wrap  = $('#oy-kw-chart-wrap');
+
+            if (!top10.length) { $wrap.hide(); return; }
+
+            if (self.kwChartInstance) {
+                self.kwChartInstance.destroy();
+                self.kwChartInstance = null;
+            }
+
+            var labels  = top10.map(function(kw){ return kw.keyword; });
+            var values  = top10.map(function(kw){ return kw.total; });
+            var palette = ['#4285f4','#34a853','#fbbc05','#ea4335','#9c27b0','#00bcd4','#ff9800','#795548','#607d8b','#e91e63'];
+            var bgColors = labels.map(function(l, i){ return palette[i % palette.length]; });
+
+            var ctx = document.getElementById('oy-kw-chart');
+            if (!ctx) { return; }
+
+            self.kwChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels  : labels,
+                    datasets: [{
+                        label          : 'Impresiones',
+                        data           : values,
+                        backgroundColor: bgColors,
+                        borderRadius   : 4,
+                    }]
+                },
+                options: {
+                    indexAxis : 'y',
+                    responsive: true,
+                    plugins: {
+                        legend : { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx){
+                                    return ' ' + self.formatNum(ctx.raw) + ' imp.';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            ticks: { callback: function(v){ return self.formatNum(v); } }
+                        },
+                        y: {
+                            ticks: {
+                                font: { size: 11 },
+                                callback: function(v){
+                                    // Truncate long keywords in Y axis
+                                    return String(v).length > 28 ? String(v).substring(0,25)+'…' : v;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            $wrap.show();
+        },
+
+        buildKeywordsTableEnhanced: function(aggregated, selectedMonth){
+            var self  = this;
+            var $tbody = $('#oy-perf-keywords-body');
+            var html  = '';
+            var data  = aggregated;
+
+            // Filter by month if selected
+            if (selectedMonth && selectedMonth !== '') {
+                data = [];
+                $.each(aggregated, function(i, kw){
+                    var monthVal = kw.monthly && kw.monthly[selectedMonth] ? kw.monthly[selectedMonth] : 0;
+                    if (monthVal > 0) {
+                        data.push({
+                            keyword: kw.keyword,
+                            total  : monthVal,
+                            monthly: kw.monthly,
+                        });
+                    }
+                });
+                data.sort(function(a,b){ return b.total - a.total; });
+            }
+
+            $.each(data, function(i, kw){
+                // Best month
+                var monthlyObj = kw.monthly || {};
+                var monthKeys  = Object.keys(monthlyObj).sort();
+                var bestMonth  = '—';
+                var bestVal    = 0;
+                $.each(monthlyObj, function(mk, mv){
+                    if (mv > bestVal) { bestVal = mv; bestMonth = mk; }
+                });
+                if (bestMonth !== '—') {
+                    var bp = bestMonth.split('-');
+                    bestMonth = self.monthNames[parseInt(bp[1],10)-1] + ' ' + bp[0] + ' (' + self.formatNum(bestVal) + ')';
+                }
+
+                var monthCount = monthKeys.length;
+
+                // Trend: compare last 2 available months
+                var trend = '';
+                if (monthKeys.length >= 2) {
+                    var last = monthlyObj[monthKeys[monthKeys.length-1]] || 0;
+                    var prev = monthlyObj[monthKeys[monthKeys.length-2]] || 0;
+                    if (last > prev)      trend = '<span style="color:#2e7d32;font-weight:700;">▲</span>';
+                    else if (last < prev) trend = '<span style="color:#c62828;font-weight:700;">▼</span>';
+                    else                  trend = '<span style="color:#999;">→</span>';
+                }
+
+                html += '<tr>' +
+                    '<td>'+(i+1)+'</td>' +
+                    '<td><strong>'+self.escHtml(String(kw.keyword))+'</strong></td>' +
+                    '<td>'+self.formatNum(kw.total)+'</td>' +
+                    '<td style="font-size:11px;color:#555;">'+self.escHtml(bestMonth)+'</td>' +
+                    '<td style="text-align:center;">'+monthCount+'</td>' +
+                    '<td style="text-align:center;">'+trend+'</td>' +
+                    '</tr>';
+            });
+
+            $tbody.html(html || '<tr><td colspan="6">Sin datos disponibles para este período/mes.</td></tr>');
+            $('#oy-perf-keywords-content').show();
+        },
+
+        // ----------------------------------------------------------------
+        // Diagnostic (unchanged)
+        // ----------------------------------------------------------------
 
         diagMetrics: function(){
             var self    = this;
@@ -1331,7 +1754,7 @@ class OY_Location_GMB_Performance_Metabox {
             $btn.prop('disabled', true);
             $status.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
                    .addClass('oy-perf-status--loading')
-                   .html('🔍 Ejecutando diagnóstico de API...')
+                   .html('⏳ Ejecutando diagnóstico...')
                    .show();
 
             $.post(self.ajaxUrl, {
@@ -1401,6 +1824,10 @@ class OY_Location_GMB_Performance_Metabox {
             });
         },
 
+        // ----------------------------------------------------------------
+        // Sync (unchanged)
+        // ----------------------------------------------------------------
+
         syncMetrics: function(){
             var self    = this;
             var $btn    = $('#oy-perf-btn-sync');
@@ -1427,9 +1854,9 @@ class OY_Location_GMB_Performance_Metabox {
                 var saved   = resp.data.saved || {};
                 var msg     = '✅ Métricas guardadas correctamente.';
                 var details = [];
-                if (saved.gmb_profile_views_30d !== undefined) details.push('Vistas 30d: ' + saved.gmb_profile_views_30d);
-                if (saved.gmb_calls_30d        !== undefined) details.push('Llamadas 30d: ' + saved.gmb_calls_30d);
-                if (saved.gmb_website_clicks_30d !== undefined) details.push('Web clicks 30d: ' + saved.gmb_website_clicks_30d);
+                if (saved.gmb_profile_views_30d  !== undefined) details.push('Vistas 30d: ' + saved.gmb_profile_views_30d);
+                if (saved.gmb_calls_30d           !== undefined) details.push('Llamadas 30d: ' + saved.gmb_calls_30d);
+                if (saved.gmb_website_clicks_30d  !== undefined) details.push('Web clicks 30d: ' + saved.gmb_website_clicks_30d);
                 if (details.length) msg += ' (' + details.join(', ') + ')';
                 if (resp.data.synced_at) msg += ' — ' + resp.data.synced_at;
                 $status.removeClass('oy-perf-status--loading')
@@ -1443,6 +1870,10 @@ class OY_Location_GMB_Performance_Metabox {
             });
         },
 
+        // ----------------------------------------------------------------
+        // Build KPIs / Chart / Table / Comparison (unchanged)
+        // ----------------------------------------------------------------
+
         buildKPIs: function(pd){
             var self    = this;
             var series  = pd.data.series || {};
@@ -1454,13 +1885,13 @@ class OY_Location_GMB_Performance_Metabox {
                 $kpis.html('<p>No hay datos disponibles para el período.</p>');
             } else {
                 $.each(keys, function(i, k){
-                    var s  = series[k];
-                    var c  = pd.comparison && pd.comparison[k] ? pd.comparison[k] : null;
-                    var chg = '';
+                    var s        = series[k];
+                    var c        = pd.comparison && pd.comparison[k] ? pd.comparison[k] : null;
+                    var chg      = '';
                     var chgClass = '';
 
                     if (c && c.prev_total > 0) {
-                        var pct = ((s.total - c.prev_total) / c.prev_total * 100).toFixed(1);
+                        var pct  = ((s.total - c.prev_total) / c.prev_total * 100).toFixed(1);
                         var sign = pct > 0 ? '+' : '';
                         chgClass = pct > 0 ? 'oy-perf-kpi__change--up' : (pct < 0 ? 'oy-perf-kpi__change--down' : 'oy-perf-kpi__change--flat');
                         chg = '<span class="oy-perf-kpi__change '+chgClass+'">'+sign+pct+'%</span>';
@@ -1492,7 +1923,6 @@ class OY_Location_GMB_Performance_Metabox {
                 return;
             }
 
-            // Destroy previous chart
             if (self.chartInstance) {
                 self.chartInstance.destroy();
                 self.chartInstance = null;
@@ -1537,9 +1967,7 @@ class OY_Location_GMB_Performance_Metabox {
                         x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
                         y: {
                             beginAtZero: true,
-                            ticks: {
-                                callback: function(v){ return self.formatNum(v); }
-                            }
+                            ticks: { callback: function(v){ return self.formatNum(v); } }
                         }
                     }
                 }
@@ -1561,7 +1989,6 @@ class OY_Location_GMB_Performance_Metabox {
 
             if (!self.sortAsc) { dates.reverse(); }
 
-            // Header
             var $thead = $('#oy-perf-table-head');
             var $tfoot = $('#oy-perf-table-foot');
             var headHtml = '<tr><th>Fecha</th>';
@@ -1569,7 +1996,6 @@ class OY_Location_GMB_Performance_Metabox {
             headHtml += '</tr>';
             $thead.html(headHtml);
 
-            // Body
             var bodyHtml = '';
             $.each(dates, function(i, d){
                 bodyHtml += '<tr><td><strong>'+d+'</strong></td>';
@@ -1581,7 +2007,6 @@ class OY_Location_GMB_Performance_Metabox {
             });
             $('#oy-perf-table-body').html(bodyHtml);
 
-            // Footer totals
             var footHtml = '<tr><th>TOTAL</th>';
             $.each(keys, function(i, k){ footHtml += '<th>'+self.formatNum(series[k].total)+'</th>'; });
             footHtml += '</tr>';
@@ -1612,9 +2037,9 @@ class OY_Location_GMB_Performance_Metabox {
                 var chgHtml = '';
 
                 if (prev > 0) {
-                    var pct = ((curr - prev) / prev * 100).toFixed(1);
-                    var sign = pct > 0 ? '+' : '';
-                    var cls  = pct > 0 ? 'up' : (pct < 0 ? 'down' : 'flat');
+                    var pct   = ((curr - prev) / prev * 100).toFixed(1);
+                    var sign  = pct > 0 ? '+' : '';
+                    var cls   = pct > 0 ? 'up' : (pct < 0 ? 'down' : 'flat');
                     var arrow = pct > 0 ? '▲' : (pct < 0 ? '▼' : '→');
                     chgHtml = '<span class="oy-perf-comp__arrow oy-perf-comp__arrow--'+cls+'">'+arrow+' '+sign+pct+'%</span>';
                 } else if (curr > 0) {
@@ -1639,42 +2064,9 @@ class OY_Location_GMB_Performance_Metabox {
             $('#oy-perf-comparison-wrap').show();
         },
 
-        buildKeywordsTable: function(keywords, period){
-            var self    = this;
-            var $tbody  = $('#oy-perf-keywords-body');
-            var html    = '';
-            var allRows = [];
-
-            // Flatten: each keyword can have multiple monthly impressions
-            $.each(keywords, function(i, kw){
-                var searchKeyword  = (kw.searchKeyword && kw.searchKeyword.insightsValue && kw.searchKeyword.insightsValue.value) ? kw.searchKeyword.insightsValue.value : (kw.insightsValue && kw.insightsValue.value ? kw.insightsValue.value : '—');
-                var impressions    = kw.impressionsValue ? kw.impressionsValue.value || 0 : 0;
-                var monthlyImpr    = kw.monthlyMetrics || [];
-
-                if (monthlyImpr.length > 0) {
-                    $.each(monthlyImpr, function(mi, mm){
-                        var monthStr = mm.month ? (mm.month.year + '/' + String(mm.month.month).padStart(2,'0')) : '—';
-                        allRows.push({ keyword: searchKeyword, impressions: mm.monthlyMetrics || impressions, month: monthStr });
-                    });
-                } else {
-                    allRows.push({ keyword: searchKeyword, impressions: impressions, month: '—' });
-                }
-            });
-
-            // Sort by impressions desc
-            allRows.sort(function(a,b){ return b.impressions - a.impressions; });
-
-            $.each(allRows, function(i, row){
-                html += '<tr>' +
-                    '<td>'+(i+1)+'</td>' +
-                    '<td><strong>'+self.escHtml(String(row.keyword))+'</strong></td>' +
-                    '<td>'+self.formatNum(row.impressions)+'</td>' +
-                    '<td>'+self.escHtml(String(row.month))+'</td>' +
-                    '</tr>';
-            });
-
-            $tbody.html(html || '<tr><td colspan="4">Sin datos disponibles</td></tr>');
-        },
+        // ----------------------------------------------------------------
+        // CSV Export (unchanged)
+        // ----------------------------------------------------------------
 
         exportCSV: function(pd){
             var dates  = (pd.data.dates || []).slice().sort();
@@ -1694,27 +2086,29 @@ class OY_Location_GMB_Performance_Metabox {
                 rows.push(row.join(','));
             });
 
-            // Totals row
-            var totRow = ['TOTAL'];
-            $.each(keys, function(i, k){ totRow.push(series[k].total); });
-            rows.push(totRow.join(','));
+            var totals = ['TOTAL'];
+            $.each(keys, function(i, k){ totals.push(series[k].total); });
+            rows.push(totals.join(','));
 
-            var csvContent = rows.join('\n');
-            var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            var blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
             var url  = URL.createObjectURL(blob);
-            var link = document.createElement('a');
-            link.setAttribute('href', url);
-            link.setAttribute('download', 'gmb-performance-'+pd.period.label.replace(/[^0-9a-zA-Z]/g,'-')+'.csv');
-            link.style.display = 'none';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            var a    = document.createElement('a');
+            a.href     = url;
+            a.download = 'gmb-performance-' + (pd.period ? pd.period.label.replace(/[^a-z0-9]/gi,'_') : 'export') + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         },
+
+        // ----------------------------------------------------------------
+        // Status helpers
+        // ----------------------------------------------------------------
 
         showStatus: function(type, msg){
             var icons = { loading: '⏳', error: '❌', info: 'ℹ️', success: '✅' };
-            var $el = $('#oy-perf-status');
-            $el.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
+            $('#oy-perf-status')
+               .removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
                .addClass('oy-perf-status--'+type)
                .html((icons[type]||'') + ' ' + msg)
                .show();
@@ -1903,6 +2297,33 @@ JS;
 .oy-perf-keywords-wrap {
     background:#fff; border:1px solid #ddd; border-radius:6px;
     padding:14px; margin-bottom:16px;
+}
+
+/* Month-range selector */
+.oy-perf-select-month { min-width:120px; }
+
+/* Keyword KPI top 3 */
+.oy-kw-kpis {
+    display:grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap:8px; margin-bottom:12px;
+}
+.oy-kw-kpi {
+    background:#f9f9f9; border:1px solid #e0e0e0; border-radius:6px;
+    padding:10px 12px; text-align:center;
+}
+.oy-kw-kpi__rank    { font-size:11px; color:#999; font-weight:700; margin-bottom:4px; }
+.oy-kw-kpi__keyword {
+    font-size:12px; font-weight:600; color:#333;
+    margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.oy-kw-kpi__value   { font-size:20px; font-weight:700; color:#1e1e1e; }
+.oy-kw-kpi__value span { font-size:11px; color:#888; font-weight:400; }
+
+/* Keyword chart wrapper */
+.oy-kw-chart-wrap {
+    background:#f9f9f9; border:1px solid #e8e8e8; border-radius:6px;
+    padding:10px 12px; margin-bottom:12px;
 }
 
 /* Footer */
