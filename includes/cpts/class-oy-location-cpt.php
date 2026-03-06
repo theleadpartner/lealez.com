@@ -158,6 +158,23 @@ public function __construct() {
             new OY_Location_Address_Metabox();
         }
     }
+
+/**
+     * ✅ Metabox externo: Publicaciones (localPosts) de Google My Business
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-posts-metabox.php
+     *
+     * Muestra y gestiona las publicaciones del perfil GBP de la ubicación.
+     * Expone AJAX propio: oy_gmb_posts_fetch, oy_gmb_posts_create, oy_gmb_posts_delete
+     */
+    $posts_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-posts-metabox.php';
+    if ( file_exists( $posts_metabox_file ) ) {
+        require_once $posts_metabox_file;
+
+        if ( class_exists( 'OY_Location_GMB_Posts_Metabox' ) ) {
+            new OY_Location_GMB_Posts_Metabox();
+        }
+    }
+
 }
 
 
