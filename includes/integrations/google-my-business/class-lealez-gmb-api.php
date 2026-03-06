@@ -3512,10 +3512,8 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
     // REVIEWS – Google My Business API v4
     // =========================================================================
 
-    /**
-     * Obtiene las reseñas de una ubicación desde GMB API v4.
-     *
-     * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews
+/**
+     * Obtiene reseñas de una ubicación GMB (Google My Business API v4).
      *
      * Soporta paginación manual mediante $page_token.
      * La primera llamada sin page_token usa caché de 30 min (configurable).
@@ -3524,189 +3522,204 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
      * @param string $location_any Resource name completo o location_id numérico
      * @param string $page_token   Token de paginación ('' para primera página)
      * @param int    $page_size    Máx reseñas por página (1-50, defecto 50)
-     * @param string $order_by     Campo de ordenamiento (ej: 'updateTimestamp desc', 'rating desc')
+     * @param string $order_by     Campo de ordenamiento. Valores válidos GMB v4:
+     *                             'updateTime desc' (más reciente), 'rating', 'rating desc'
+     *                             NOTA: El campo en la API se llama 'updateTime', NO 'updateTimestamp'.
      * @param bool   $use_cache    Si usar transient cache (ignorado cuando hay page_token)
      * @return array|WP_Error      Estructura: {reviews, averageRating, totalReviewCount, nextPageToken}
      */
-public static function get_location_reviews(
-    $business_id,
-    $location_any,
-    $page_token  = '',
-    $page_size   = 50,
-    $order_by    = 'updateTimestamp desc',
-    $use_cache   = true
-) {
-    $business_id  = absint( $business_id );
-    $location_any = trim( (string) $location_any );
-
-    if ( ! $business_id || empty( $location_any ) ) {
-        return new WP_Error( 'missing_params', __( 'Missing business_id or location for reviews.', 'lealez' ) );
-    }
-
-    $account_id  = self::extract_account_id_from_location_name( $location_any );
-    $location_id = self::extract_location_id_from_any( $location_any );
-
-    // Intentar resolver account_id si solo tenemos location_id (p.ej. "locations/12345")
-    if ( '' === $account_id && '' !== $location_id ) {
-        $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
-        if ( '' !== $resolved ) {
-            $account_id = self::extract_account_id_from_name( $resolved );
-        }
-    }
-
-    // ✅ WP_DEBUG: registrar IDs resueltos para diagnóstico
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( sprintf(
-            '[Lealez Reviews] get_location_reviews | business_id=%d | location_any="%s" | account_id="%s" | location_id="%s" | order_by="%s"',
-            $business_id,
-            $location_any,
-            $account_id,
-            $location_id,
-            $order_by
-        ) );
-    }
-
-    if ( '' === $account_id || '' === $location_id ) {
-        $err_data = array(
-            'location_any' => $location_any,
-            'account_id'   => $account_id,
-            'location_id'  => $location_id,
-        );
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[Lealez Reviews] ERROR - Cannot resolve account/location IDs: ' . wp_json_encode( $err_data ) );
-        }
-        return new WP_Error(
-            'missing_params',
-            __( 'Could not resolve accountId or locationId for reviews.', 'lealez' ),
-            $err_data
-        );
-    }
-
-    // Cache solo en primera página (sin page_token)
-    $cache_key    = 'oy_reviews_' . $business_id . '_' . md5( $account_id . $location_id . $order_by );
-    $cache_expiry = 30 * MINUTE_IN_SECONDS;
-
-    if ( $use_cache && empty( $page_token ) ) {
-        $cached = get_transient( $cache_key );
-        if ( false !== $cached && is_array( $cached ) ) {
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log( $business_id, 'success', 'Reviews: using transient cache.' );
-            }
-            return $cached;
-        }
-    }
-
-    $page_size = max( 1, min( 50, absint( $page_size ) ) );
-
-    /*
-     * ✅ FIX CRÍTICO: Valores válidos de orderBy para GMB API v4.
-     *
-     * Según la documentación oficial de Google My Business API v4 (accounts.locations.reviews.list):
-     *   "Valid values to order by are rating, rating desc, and updateTimestamp desc."
-     *
-     * NOTA: 'updateTimestamp asc' y 'rating asc' NO son válidos → causan INVALID_ARGUMENT (HTTP 400).
-     * El orden ascendente por fecha no está soportado en server-side; se ordena en el cliente (JS).
-     */
-    $allowed_order_server = array( 'updateTimestamp desc', 'rating', 'rating desc' );
-
-    /*
-     * ✅ FIX CRÍTICO: Construir query string manualmente con rawurlencode().
-     *
-     * PROBLEMA: add_query_arg() en WordPress < 6.x usa urlencode() que codifica
-     *           espacios como '+'. Google API v4 interpreta '+' literalmente,
-     *           convirtiendo 'updateTimestamp desc' en 'updateTimestamp+desc'
-     *           → respuesta HTTP 400: "Request contains an invalid argument."
-     *
-     * SOLUCIÓN: rawurlencode() codifica espacios como '%20', que es el encoding
-     *           correcto para parámetros de URL según RFC 3986.
-     */
-    $qs_parts = array();
-    $qs_parts[] = 'pageSize=' . rawurlencode( (string) $page_size );
-
-    if ( ! empty( $page_token ) ) {
-        $qs_parts[] = 'pageToken=' . rawurlencode( $page_token );
-    }
-
-    // Solo enviar orderBy si es un valor soportado por el servidor
-    if ( in_array( $order_by, $allowed_order_server, true ) ) {
-        $qs_parts[] = 'orderBy=' . rawurlencode( $order_by );
-    }
-    // Si el orderBy no es válido para el servidor (p.ej. 'updateTimestamp asc', 'rating asc'),
-    // se omite el parámetro y Google devuelve 'updateTimestamp desc' por defecto.
-    // El ordenamiento final se aplica en JS (función sortList).
-
-    $endpoint = '/accounts/' . rawurlencode( $account_id )
-              . '/locations/' . rawurlencode( $location_id )
-              . '/reviews'
-              . '?' . implode( '&', $qs_parts );
-
-    // ✅ WP_DEBUG: registrar URL completa antes de llamar
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[Lealez Reviews] Calling GMB v4 URL: ' . self::$mybusiness_v4_base . $endpoint );
-    }
-
-    $result = self::make_request(
+    public static function get_location_reviews(
         $business_id,
-        $endpoint,
-        self::$mybusiness_v4_base,
-        'GET',
-        array(),
-        false  // Cache controlado aquí, no en make_request
-        // Sin $query_args: ya están embebidos en $endpoint con rawurlencode
-    );
+        $location_any,
+        $page_token  = '',
+        $page_size   = 50,
+        $order_by    = 'updateTime desc',
+        $use_cache   = true
+    ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
 
-    if ( is_wp_error( $result ) ) {
-        $err_data = $result->get_error_data();
+        if ( ! $business_id || empty( $location_any ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing business_id or location for reviews.', 'lealez' ) );
+        }
 
-        // ✅ WP_DEBUG: registrar error completo incluyendo respuesta raw de Google
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        // Intentar resolver account_id si solo tenemos location_id (p.ej. "locations/12345")
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        // ✅ WP_DEBUG: registrar IDs resueltos para diagnóstico
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( sprintf(
-                '[Lealez Reviews] API error | code=%s | message=%s | http_code=%s | raw_body=%s',
-                $result->get_error_code(),
-                $result->get_error_message(),
-                ( is_array( $err_data ) && isset( $err_data['code'] ) ) ? $err_data['code'] : 'n/a',
-                ( is_array( $err_data ) && isset( $err_data['raw_body'] ) ) ? substr( (string) $err_data['raw_body'], 0, 1000 ) : 'n/a'
+                '[Lealez Reviews] get_location_reviews | business_id=%d | location_any="%s" | account_id="%s" | location_id="%s" | order_by="%s"',
+                $business_id,
+                $location_any,
+                $account_id,
+                $location_id,
+                $order_by
             ) );
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            $err_data = array(
+                'location_any' => $location_any,
+                'account_id'   => $account_id,
+                'location_id'  => $location_id,
+            );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[Lealez Reviews] ERROR - Cannot resolve account/location IDs: ' . wp_json_encode( $err_data ) );
+            }
+            return new WP_Error(
+                'missing_params',
+                __( 'Could not resolve accountId or locationId for reviews.', 'lealez' ),
+                $err_data
+            );
+        }
+
+        // Cache solo en primera página (sin page_token)
+        $cache_key    = 'oy_reviews_' . $business_id . '_' . md5( $account_id . $location_id . $order_by );
+        $cache_expiry = 30 * MINUTE_IN_SECONDS;
+
+        if ( $use_cache && empty( $page_token ) ) {
+            $cached = get_transient( $cache_key );
+            if ( false !== $cached && is_array( $cached ) ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'success', 'Reviews: using transient cache.' );
+                }
+                return $cached;
+            }
+        }
+
+        $page_size = max( 1, min( 50, absint( $page_size ) ) );
+
+        /*
+         * ✅ FIX CRÍTICO — Valores válidos de orderBy para GMB API v4 reviews.list:
+         *
+         * El recurso Review de GMB v4 tiene los campos:
+         *   - createTime  → fecha de creación
+         *   - updateTime  → fecha de última modificación (incluye respuestas)
+         *
+         * Valores VÁLIDOS según la documentación de Google:
+         *   - 'updateTime desc'  → más reciente primero (campo: updateTime, NO updateTimestamp)
+         *   - 'rating'           → menor rating primero (default)
+         *   - 'rating desc'      → mayor rating primero
+         *
+         * INVÁLIDO (causa HTTP 400 INVALID_ARGUMENT):
+         *   - 'updateTimestamp desc'  ← nombre de campo incorrecto
+         *   - 'updateTimestamp asc'   ← nombre de campo incorrecto
+         *   - 'updateTime asc'        ← dirección asc no soportada server-side
+         *   - 'rating asc'            ← 'rating' ya es asc por defecto, no se acepta 'asc'
+         *
+         * El ordenamiento asc por fecha se aplica en el cliente (función sortList en JS).
+         */
+        $allowed_order_server = array( 'updateTime desc', 'rating', 'rating desc' );
+
+        /*
+         * ✅ FIX: Construir query string manualmente con rawurlencode().
+         *
+         * add_query_arg() usa http_build_query() que codifica espacios como '+'.
+         * Google API v4 requiere '%20' (RFC 3986). Usamos rawurlencode().
+         */
+        $qs_parts = array();
+        $qs_parts[] = 'pageSize=' . rawurlencode( (string) $page_size );
+
+        if ( ! empty( $page_token ) ) {
+            $qs_parts[] = 'pageToken=' . rawurlencode( $page_token );
+        }
+
+        // Solo enviar orderBy si es un valor soportado por el servidor
+        // Si el frontend envía 'updateTimestamp desc' (valor legacy), lo mapeamos a 'updateTime desc'
+        $server_order = $order_by;
+        if ( 'updateTimestamp desc' === $server_order ) {
+            $server_order = 'updateTime desc';
+        } elseif ( 'updateTimestamp asc' === $server_order ) {
+            // asc no soportado server-side; omitir (Google devuelve updateTime desc por defecto)
+            $server_order = '';
+        }
+
+        if ( in_array( $server_order, $allowed_order_server, true ) ) {
+            $qs_parts[] = 'orderBy=' . rawurlencode( $server_order );
+        }
+        // Si no es un valor soportado, se omite orderBy → Google usa 'updateTime desc' por defecto.
+
+        $endpoint = '/accounts/' . rawurlencode( $account_id )
+                  . '/locations/' . rawurlencode( $location_id )
+                  . '/reviews'
+                  . '?' . implode( '&', $qs_parts );
+
+        // ✅ WP_DEBUG: registrar URL completa antes de llamar
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez Reviews] Calling GMB v4 URL: ' . self::$mybusiness_v4_base . $endpoint );
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'GET',
+            array(),
+            false  // Cache controlado aquí, no en make_request
+            // Sin $query_args: ya están embebidos en $endpoint con rawurlencode
+        );
+
+        if ( is_wp_error( $result ) ) {
+            $err_data = $result->get_error_data();
+
+            // ✅ WP_DEBUG: registrar error completo incluyendo respuesta raw de Google
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[Lealez Reviews] API error | code=%s | message=%s | http_code=%s | raw_body=%s',
+                    $result->get_error_code(),
+                    $result->get_error_message(),
+                    ( is_array( $err_data ) && isset( $err_data['code'] ) ) ? $err_data['code'] : 'n/a',
+                    ( is_array( $err_data ) && isset( $err_data['raw_body'] ) ) ? substr( (string) $err_data['raw_body'], 0, 1000 ) : 'n/a'
+                ) );
+            }
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'warning', 'Reviews API error.', array(
+                    'account_id'  => $account_id,
+                    'location_id' => $location_id,
+                    'error'       => $result->get_error_message(),
+                    'error_code'  => $result->get_error_code(),
+                ) );
+            }
+            return $result;
+        }
+
+        $page_data = is_array( $result ) ? $result : array();
+
+        $response = array(
+            'reviews'          => isset( $page_data['reviews'] ) && is_array( $page_data['reviews'] )
+                                    ? $page_data['reviews']
+                                    : array(),
+            'averageRating'    => $page_data['averageRating']    ?? null,
+            'totalReviewCount' => $page_data['totalReviewCount'] ?? 0,
+            'nextPageToken'    => $page_data['nextPageToken']     ?? '',
+        );
+
+        // Solo guarda en caché si es primera página
+        if ( empty( $page_token ) ) {
+            set_transient( $cache_key, $response, $cache_expiry );
         }
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log( $business_id, 'warning', 'Reviews API error.', array(
-                'account_id'  => $account_id,
-                'location_id' => $location_id,
-                'error'       => $result->get_error_message(),
-                'error_code'  => $result->get_error_code(),
-            ) );
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                'Reviews: fetched ' . count( $response['reviews'] ) . ' reviews.'
+                . ( ! empty( $response['nextPageToken'] ) ? ' (has next page)' : '' )
+            );
         }
-        return $result;
+
+        return $response;
     }
-
-    $page_data = is_array( $result ) ? $result : array();
-
-    $response = array(
-        'reviews'          => isset( $page_data['reviews'] ) && is_array( $page_data['reviews'] )
-                                ? $page_data['reviews']
-                                : array(),
-        'averageRating'    => $page_data['averageRating']    ?? null,
-        'totalReviewCount' => $page_data['totalReviewCount'] ?? 0,
-        'nextPageToken'    => $page_data['nextPageToken']     ?? '',
-    );
-
-    // Solo guarda en caché si es primera página
-    if ( empty( $page_token ) ) {
-        set_transient( $cache_key, $response, $cache_expiry );
-    }
-
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'success',
-            'Reviews: fetched ' . count( $response['reviews'] ) . ' reviews.'
-            . ( ! empty( $response['nextPageToken'] ) ? ' (has next page)' : '' )
-        );
-    }
-
-    return $response;
-}
 
     /**
      * Crea o actualiza la respuesta de propietario a una reseña.
@@ -3872,7 +3885,7 @@ public static function get_location_reviews(
         return true;
     }
 
-    /**
+/**
      * Invalida el transient de caché de reseñas para una ubicación.
      *
      * Llamar después de create/update/delete de una respuesta.
@@ -3892,19 +3905,25 @@ public static function get_location_reviews(
         $location_id = self::extract_location_id_from_any( $location_any );
 
         if ( '' !== $account_id && '' !== $location_id ) {
-            // Borra todas las variantes de sort conocidas
+            // ✅ FIX: Las claves de caché usan 'updateTime desc' (campo correcto de GMB v4).
+            // Se mantienen las variantes legacy 'updateTimestamp ...' para limpiar cualquier
+            // transient antiguo que pudiera existir en la base de datos.
             $sort_variants = array(
-                'updateTimestamp desc',
-                'updateTimestamp asc',
+                'updateTime desc',      // ✅ Correcto — campo real de GMB v4
+                'updateTime asc',       // variante cliente (misma key de caché que se genera)
                 'rating desc',
                 'rating asc',
+                'rating',
+                // Legacy (por si quedan transients de versiones anteriores):
+                'updateTimestamp desc',
+                'updateTimestamp asc',
             );
             foreach ( $sort_variants as $sort ) {
                 $cache_key = 'oy_reviews_' . $business_id . '_' . md5( $account_id . $location_id . $sort );
                 delete_transient( $cache_key );
             }
         }
-} // cierre clear_reviews_cache()
+    } // cierre clear_reviews_cache()
 
 } // fin clase Lealez_GMB_API
 
