@@ -191,8 +191,8 @@ class OY_Location_GMB_Reviews_Metabox {
                 <div class="oy-reviews-toolbar">
                     <label for="oy-reviews-sort" class="screen-reader-text"><?php esc_html_e( 'Ordenar por', 'lealez' ); ?></label>
                     <select id="oy-reviews-sort" class="oy-reviews-sort">
-                        <option value="updateTimestamp desc"><?php esc_html_e( 'Mas reciente', 'lealez' ); ?></option>
-                        <option value="updateTimestamp asc"><?php esc_html_e( 'Mas antiguo', 'lealez' ); ?></option>
+<option value="updateTime desc"><?php esc_html_e( 'Mas reciente', 'lealez' ); ?></option>
+<option value="updateTime asc"><?php esc_html_e( 'Mas antiguo', 'lealez' ); ?></option>
                         <option value="rating desc"><?php esc_html_e( 'Mayor calificacion', 'lealez' ); ?></option>
                         <option value="rating asc"><?php esc_html_e( 'Menor calificacion', 'lealez' ); ?></option>
                     </select>
@@ -397,7 +397,7 @@ class OY_Location_GMB_Reviews_Metabox {
 (function($){
 'use strict';
 var $wrap,postId=0,businessId=0,locationName='',nonce='',isReady=false;
-var allReviews=[],nextPageToken='',currentTab='all',currentSort='updateTimestamp desc',isLoading=false;
+var allReviews=[],nextPageToken='',currentTab='all',currentSort='updateTime desc',isLoading=false;
 var STAR_MAP={ONE:1,TWO:2,THREE:3,FOUR:4,FIVE:5};
 function starNum(s){return STAR_MAP[s]||0;}
 function renderStarsHtml(n){var h='';for(var i=1;i<=5;i++){h+=i<=n?'<span class="oy-star oy-star--full">\u2605</span>':'<span class="oy-star oy-star--empty">\u2606</span>';}return h;}
@@ -410,7 +410,7 @@ function extractReviewId(name){if(!name)return '';var p=name.split('/');return p
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');}
 function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');}
 function getFiltered(){return allReviews.filter(function(r){if(currentTab==='replied')return !!(r.reviewReply&&r.reviewReply.comment);if(currentTab==='unreplied')return !(r.reviewReply&&r.reviewReply.comment);return true;});}
-function sortList(reviews){var list=reviews.slice();if(currentSort==='updateTimestamp desc'){list.sort(function(a,b){return new Date(b.updateTime||0)-new Date(a.updateTime||0);});}else if(currentSort==='updateTimestamp asc'){list.sort(function(a,b){return new Date(a.updateTime||0)-new Date(b.updateTime||0);});}else if(currentSort==='rating desc'){list.sort(function(a,b){return starNum(b.starRating)-starNum(a.starRating);});}else if(currentSort==='rating asc'){list.sort(function(a,b){return starNum(a.starRating)-starNum(b.starRating);});}return list;}
+function sortList(reviews){var list=reviews.slice();if(currentSort==='updateTime desc'){list.sort(function(a,b){return new Date(b.updateTime||0)-new Date(a.updateTime||0);});}else if(currentSort==='updateTime asc'){list.sort(function(a,b){return new Date(a.updateTime||0)-new Date(b.updateTime||0);});}else if(currentSort==='rating desc'){list.sort(function(a,b){return starNum(b.starRating)-starNum(a.starRating);});}else if(currentSort==='rating asc'){list.sort(function(a,b){return starNum(a.starRating)-starNum(b.starRating);});}return list;}
 function updateBadges(){var replied=allReviews.filter(function(r){return !!(r.reviewReply&&r.reviewReply.comment);}).length;var unreplied=allReviews.length-replied;$('#oy-tab-badge-all').text(allReviews.length);$('#oy-tab-badge-replied').text(replied);$('#oy-tab-badge-unreplied').text(unreplied);}
 function renderCard(review){
 var reviewId=extractReviewId(review.name||'');
@@ -657,7 +657,7 @@ public function ajax_fetch_reviews() {
     $business_id   = absint( $_POST['business_id']  ?? 0 );
     $location      = sanitize_text_field( $_POST['location']     ?? '' );
     $page_token    = sanitize_text_field( $_POST['page_token']   ?? '' );
-    $order_by      = sanitize_text_field( $_POST['order_by']     ?? 'updateTimestamp desc' );
+   $order_by = sanitize_text_field( $_POST['order_by'] ?? 'updateTime desc' );
     $force_refresh = ( '1' === ( $_POST['force_refresh'] ?? '0' ) );
 
     if ( ! $post_id || ! $business_id || empty( $location ) ) {
