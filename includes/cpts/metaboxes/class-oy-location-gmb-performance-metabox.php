@@ -34,6 +34,7 @@ class OY_Location_GMB_Performance_Metabox {
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
         add_action( 'wp_ajax_oy_gmb_perf_fetch',    array( $this, 'ajax_fetch_metrics' ) );
         add_action( 'wp_ajax_oy_gmb_perf_keywords', array( $this, 'ajax_fetch_keywords' ) );
+        add_action( 'wp_ajax_oy_gmb_perf_sync',     array( $this, 'ajax_sync_metrics' ) );
     }
 
     // -----------------------------------------------------------------------
@@ -78,7 +79,20 @@ class OY_Location_GMB_Performance_Metabox {
 
         $nonce = wp_create_nonce( 'oy_gmb_performance_nonce' );
 
-        wp_add_inline_script( 'chartjs-v4', $this->get_inline_js( $post->ID, $nonce ), 'after' );
+        // Inject config via wp_localize_script to avoid PHP variable interpolation issues in JS nowdoc
+        $impressions_keys = array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' );
+        $actions_keys     = array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' );
+
+        wp_localize_script( 'chartjs-v4', 'oyPerfConfig', array(
+            'postId'     => $post->ID,
+            'nonce'      => $nonce,
+            'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+            'metricsDef' => $this->get_all_metrics_definition(),
+            'impKeys'    => $impressions_keys,
+            'actKeys'    => $actions_keys,
+        ) );
+
+        wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
         wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
     }
 
@@ -89,7 +103,14 @@ class OY_Location_GMB_Performance_Metabox {
     public function render_meta_box( $post ) {
         $location_id  = get_post_meta( $post->ID, 'gmb_location_id', true );
         $business_id  = get_post_meta( $post->ID, 'parent_business_id', true );
-        $gmb_connected = $business_id ? get_post_meta( $business_id, 'gmb_connected', true ) : false;
+        // Use _gmb_connected (private meta, set by Lealez_GMB_OAuth) as the authoritative connection flag.
+        // Fallback: also accept if a refresh token is present (covers legacy data).
+        $gmb_connected = false;
+        if ( $business_id ) {
+            $flag          = get_post_meta( $business_id, '_gmb_connected', true );
+            $has_refresh   = (bool) get_post_meta( $business_id, 'gmb_refresh_token', true );
+            $gmb_connected = $flag || $has_refresh;
+        }
         $location_name = get_the_title( $post->ID );
 
         // ---- Guard: GMB no conectado ----
@@ -158,6 +179,10 @@ class OY_Location_GMB_Performance_Metabox {
                         <span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:-2px;"></span>
                         <?php esc_html_e( 'Actualizar', 'lealez' ); ?>
                     </button>
+                    <button type="button" id="oy-perf-btn-sync" class="button button-secondary" title="<?php esc_attr_e( 'Sincroniza los totales de los últimos 30 y 7 días y los guarda en los meta-campos de esta ubicación', 'lealez' ); ?>">
+                        <span class="dashicons dashicons-cloud-saved" style="vertical-align:middle;margin-top:-2px;"></span>
+                        <?php esc_html_e( 'Sincronizar métricas', 'lealez' ); ?>
+                    </button>
                 </div>
             </div><!-- /.toolbar -->
 
@@ -184,6 +209,8 @@ class OY_Location_GMB_Performance_Metabox {
 
             <!-- LOADING / ERROR -->
             <div id="oy-perf-status" class="oy-perf-status" style="display:none;"></div>
+            <!-- SYNC STATUS -->
+            <div id="oy-perf-sync-status" class="oy-perf-status" style="display:none;"></div>
 
             <!-- KPI CARDS -->
             <div id="oy-perf-kpis" class="oy-perf-kpis" style="display:none;"></div>
@@ -656,28 +683,206 @@ class OY_Location_GMB_Performance_Metabox {
     }
 
     // -----------------------------------------------------------------------
+    // AJAX: Sync & Save Performance Metrics to Post Meta
+    // -----------------------------------------------------------------------
+
+    /**
+     * AJAX handler: sincroniza las métricas de rendimiento y guarda los totales
+     * en los meta-campos del post oy_location.
+     *
+     * Guarda (30 días): gmb_profile_views_30d, gmb_calls_30d, gmb_website_clicks_30d,
+     *                   gmb_direction_requests_30d, gmb_bookings_30d, gmb_messages_sent,
+     *                   gmb_food_orders, gmb_menu_clicks
+     * Guarda (7 días):  gmb_profile_views_7d, gmb_calls_7d, gmb_website_clicks_7d,
+     *                   gmb_direction_requests_7d
+     * Guarda timestamp: gmb_metrics_last_sync
+     *
+     * Action: oy_gmb_perf_sync
+     */
+    public function ajax_sync_metrics() {
+        check_ajax_referer( 'oy_gmb_performance_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
+        }
+
+        $post_id = absint( $_POST['post_id'] ?? 0 );
+
+        if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
+        }
+
+        $location_name = get_post_meta( $post_id, 'gmb_location_id', true );
+        $business_id   = get_post_meta( $post_id, 'parent_business_id', true );
+
+        if ( ! $location_name || ! $business_id ) {
+            wp_send_json_error( array( 'message' => __( 'Faltan datos de configuración GMB (location_id o business_id).', 'lealez' ) ) );
+        }
+
+        $all_metrics = array(
+            'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
+            'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+            'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
+            'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
+            'BUSINESS_CONVERSATIONS',
+            'BUSINESS_DIRECTION_REQUESTS',
+            'CALL_CLICKS',
+            'WEBSITE_CLICKS',
+            'BUSINESS_BOOKINGS',
+            'BUSINESS_FOOD_ORDERS',
+            'BUSINESS_FOOD_MENU_CLICKS',
+        );
+
+        $saved = array();
+        $errors = array();
+
+        // ── Sync 30-day period ────────────────────────────────────────────
+        $range_30 = $this->build_date_range( '30' );
+        if ( ! is_wp_error( $range_30 ) ) {
+            $result_30 = Lealez_GMB_API::get_location_performance_metrics(
+                $business_id,
+                $location_name,
+                $all_metrics,
+                $range_30['start'],
+                $range_30['end'],
+                false // force fresh
+            );
+
+            if ( ! is_wp_error( $result_30 ) ) {
+                $processed_30 = $this->process_multi_metrics( $result_30, $all_metrics );
+                $series_30    = $processed_30['series'] ?? array();
+
+                // Impressions (views) = sum of all 4 impression metrics
+                $views_30 = 0;
+                foreach ( array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' ) as $imp_key ) {
+                    $views_30 += isset( $series_30[ $imp_key ] ) ? (int) $series_30[ $imp_key ]['total'] : 0;
+                }
+                update_post_meta( $post_id, 'gmb_profile_views_30d', $views_30 );
+                $saved['gmb_profile_views_30d'] = $views_30;
+
+                $calls_30 = isset( $series_30['CALL_CLICKS'] ) ? (int) $series_30['CALL_CLICKS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_calls_30d', $calls_30 );
+                $saved['gmb_calls_30d'] = $calls_30;
+
+                $web_30 = isset( $series_30['WEBSITE_CLICKS'] ) ? (int) $series_30['WEBSITE_CLICKS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_website_clicks_30d', $web_30 );
+                $saved['gmb_website_clicks_30d'] = $web_30;
+
+                $dir_30 = isset( $series_30['BUSINESS_DIRECTION_REQUESTS'] ) ? (int) $series_30['BUSINESS_DIRECTION_REQUESTS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_direction_requests_30d', $dir_30 );
+                $saved['gmb_direction_requests_30d'] = $dir_30;
+
+                $book_30 = isset( $series_30['BUSINESS_BOOKINGS'] ) ? (int) $series_30['BUSINESS_BOOKINGS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_bookings_30d', $book_30 );
+                $saved['gmb_bookings_30d'] = $book_30;
+
+                $conv_30 = isset( $series_30['BUSINESS_CONVERSATIONS'] ) ? (int) $series_30['BUSINESS_CONVERSATIONS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_messages_sent', $conv_30 );
+                $saved['gmb_messages_sent'] = $conv_30;
+
+                $food_30 = isset( $series_30['BUSINESS_FOOD_ORDERS'] ) ? (int) $series_30['BUSINESS_FOOD_ORDERS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_food_orders', $food_30 );
+                $saved['gmb_food_orders'] = $food_30;
+
+                $menu_30 = isset( $series_30['BUSINESS_FOOD_MENU_CLICKS'] ) ? (int) $series_30['BUSINESS_FOOD_MENU_CLICKS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_menu_clicks', $menu_30 );
+                $saved['gmb_menu_clicks'] = $menu_30;
+            } else {
+                $errors[] = '30d: ' . $result_30->get_error_message();
+            }
+        }
+
+        // ── Sync 7-day period ─────────────────────────────────────────────
+        $range_7 = $this->build_date_range( '7' );
+        if ( ! is_wp_error( $range_7 ) ) {
+            $metrics_7 = array(
+                'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
+                'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+                'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
+                'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
+                'BUSINESS_DIRECTION_REQUESTS',
+                'CALL_CLICKS',
+                'WEBSITE_CLICKS',
+            );
+
+            $result_7 = Lealez_GMB_API::get_location_performance_metrics(
+                $business_id,
+                $location_name,
+                $metrics_7,
+                $range_7['start'],
+                $range_7['end'],
+                false // force fresh
+            );
+
+            if ( ! is_wp_error( $result_7 ) ) {
+                $processed_7 = $this->process_multi_metrics( $result_7, $metrics_7 );
+                $series_7    = $processed_7['series'] ?? array();
+
+                $views_7 = 0;
+                foreach ( array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' ) as $imp_key ) {
+                    $views_7 += isset( $series_7[ $imp_key ] ) ? (int) $series_7[ $imp_key ]['total'] : 0;
+                }
+                update_post_meta( $post_id, 'gmb_profile_views_7d', $views_7 );
+                $saved['gmb_profile_views_7d'] = $views_7;
+
+                $calls_7 = isset( $series_7['CALL_CLICKS'] ) ? (int) $series_7['CALL_CLICKS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_calls_7d', $calls_7 );
+                $saved['gmb_calls_7d'] = $calls_7;
+
+                $web_7 = isset( $series_7['WEBSITE_CLICKS'] ) ? (int) $series_7['WEBSITE_CLICKS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_website_clicks_7d', $web_7 );
+                $saved['gmb_website_clicks_7d'] = $web_7;
+
+                $dir_7 = isset( $series_7['BUSINESS_DIRECTION_REQUESTS'] ) ? (int) $series_7['BUSINESS_DIRECTION_REQUESTS']['total'] : 0;
+                update_post_meta( $post_id, 'gmb_direction_requests_7d', $dir_7 );
+                $saved['gmb_direction_requests_7d'] = $dir_7;
+            } else {
+                $errors[] = '7d: ' . $result_7->get_error_message();
+            }
+        }
+
+        // ── Save sync timestamp ───────────────────────────────────────────
+        $sync_time = current_time( 'mysql' );
+        update_post_meta( $post_id, 'gmb_metrics_last_sync', $sync_time );
+        $saved['gmb_metrics_last_sync'] = $sync_time;
+
+        if ( ! empty( $errors ) && empty( $saved ) ) {
+            wp_send_json_error( array(
+                'message' => __( 'Error al sincronizar métricas: ', 'lealez' ) . implode( ' | ', $errors ),
+            ) );
+        }
+
+        wp_send_json_success( array(
+            'message'  => __( 'Métricas sincronizadas y guardadas correctamente.', 'lealez' ),
+            'saved'    => $saved,
+            'errors'   => $errors,
+            'synced_at' => $sync_time,
+        ) );
+    }
+
+    // -----------------------------------------------------------------------
     // Inline JS
     // -----------------------------------------------------------------------
 
-    private function get_inline_js( $post_id, $nonce ) {
+    private function get_inline_js() {
         $metrics_def_json = wp_json_encode( $this->get_all_metrics_definition() );
 
         $impressions_keys = wp_json_encode( array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' ) );
         $actions_keys     = wp_json_encode( array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' ) );
 
         // phpcs:disable
-        return <<<JS
+        return <<<'JS'
 (function($){
     'use strict';
 
     var OyPerf = {
-        postId       : {$post_id},
-        nonce        : '{$nonce}',
-        ajaxUrl      : window.ajaxurl || '/wp-admin/admin-ajax.php',
+        postId       : oyPerfConfig.postId,
+        nonce        : oyPerfConfig.nonce,
+        ajaxUrl      : oyPerfConfig.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php',
         chartInstance: null,
-        metricsDef   : {$metrics_def_json},
-        impKeys      : {$impressions_keys},
-        actKeys      : {$actions_keys},
+        metricsDef   : oyPerfConfig.metricsDef,
+        impKeys      : oyPerfConfig.impKeys,
+        actKeys      : oyPerfConfig.actKeys,
         lastData     : null,
         sortAsc      : true,
 
@@ -746,6 +951,9 @@ class OY_Location_GMB_Performance_Metabox {
             // Apply / Refresh buttons
             $('#oy-perf-btn-apply').on('click', function(){ self.fetchMetrics(false); });
             $('#oy-perf-btn-refresh').on('click', function(){ self.fetchMetrics(true); });
+
+            // Sync button
+            $('#oy-perf-btn-sync').on('click', function(){ self.syncMetrics(); });
 
             // Sort table
             $('#oy-perf-sort-date-asc').on('click', function(){
@@ -869,6 +1077,48 @@ class OY_Location_GMB_Performance_Metabox {
 
             }).fail(function(xhr){
                 self.showKeywordsStatus('error', 'Error de conexión: ' + (xhr.statusText || 'unknown'));
+            });
+        },
+
+        syncMetrics: function(){
+            var self    = this;
+            var $btn    = $('#oy-perf-btn-sync');
+            var $status = $('#oy-perf-sync-status');
+
+            $btn.prop('disabled', true);
+            $status.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
+                   .addClass('oy-perf-status--loading')
+                   .html('⏳ Sincronizando métricas con Google Business Profile, por favor espera...')
+                   .show();
+
+            $.post(self.ajaxUrl, {
+                action  : 'oy_gmb_perf_sync',
+                nonce   : self.nonce,
+                post_id : self.postId,
+            }, function(resp){
+                $btn.prop('disabled', false);
+                if (!resp.success) {
+                    $status.removeClass('oy-perf-status--loading')
+                           .addClass('oy-perf-status--error')
+                           .html('❌ ' + (resp.data.message || 'Error al sincronizar'));
+                    return;
+                }
+                var saved   = resp.data.saved || {};
+                var msg     = '✅ Métricas guardadas correctamente.';
+                var details = [];
+                if (saved.gmb_profile_views_30d !== undefined) details.push('Vistas 30d: ' + saved.gmb_profile_views_30d);
+                if (saved.gmb_calls_30d        !== undefined) details.push('Llamadas 30d: ' + saved.gmb_calls_30d);
+                if (saved.gmb_website_clicks_30d !== undefined) details.push('Web clicks 30d: ' + saved.gmb_website_clicks_30d);
+                if (details.length) msg += ' (' + details.join(', ') + ')';
+                if (resp.data.synced_at) msg += ' — ' + resp.data.synced_at;
+                $status.removeClass('oy-perf-status--loading')
+                       .addClass('oy-perf-status--success')
+                       .html(msg);
+            }).fail(function(xhr){
+                $btn.prop('disabled', false);
+                $status.removeClass('oy-perf-status--loading')
+                       .addClass('oy-perf-status--error')
+                       .html('❌ Error de conexión: ' + (xhr.statusText || 'unknown'));
             });
         },
 
