@@ -3844,11 +3844,11 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
                 delete_transient( $cache_key );
             }
         }
-    }
+} // cierre clear_reviews_cache()
 
 } // fin clase Lealez_GMB_API
 
 // WP-Cron hook for scheduled refresh
-add_action( 'lealez_gmb_scheduled_refresh', ...
+add_action( 'lealez_gmb_scheduled_refresh', array( 'Lealez_GMB_API', 'run_scheduled_refresh' ), 10, 1 );
 
 
