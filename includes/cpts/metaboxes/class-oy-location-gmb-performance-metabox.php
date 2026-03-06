@@ -32,9 +32,10 @@ class OY_Location_GMB_Performance_Metabox {
     public function __construct() {
         add_action( 'add_meta_boxes',        array( $this, 'register_meta_box' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
-        add_action( 'wp_ajax_oy_gmb_perf_fetch',    array( $this, 'ajax_fetch_metrics' ) );
-        add_action( 'wp_ajax_oy_gmb_perf_keywords', array( $this, 'ajax_fetch_keywords' ) );
-        add_action( 'wp_ajax_oy_gmb_perf_sync',     array( $this, 'ajax_sync_metrics' ) );
+        add_action( 'wp_ajax_oy_gmb_perf_fetch',      array( $this, 'ajax_fetch_metrics' ) );
+        add_action( 'wp_ajax_oy_gmb_perf_keywords',   array( $this, 'ajax_fetch_keywords' ) );
+        add_action( 'wp_ajax_oy_gmb_perf_sync',       array( $this, 'ajax_sync_metrics' ) );
+        add_action( 'wp_ajax_oy_gmb_perf_diagnostic', array( $this, 'ajax_diagnostic' ) );
     }
 
     // -----------------------------------------------------------------------
@@ -183,6 +184,10 @@ class OY_Location_GMB_Performance_Metabox {
                         <span class="dashicons dashicons-cloud-saved" style="vertical-align:middle;margin-top:-2px;"></span>
                         <?php esc_html_e( 'Sincronizar métricas', 'lealez' ); ?>
                     </button>
+                    <button type="button" id="oy-perf-btn-diag" class="button" title="<?php esc_attr_e( 'Ejecuta una llamada de diagnóstico a la API y muestra la respuesta raw para identificar problemas de conexión o alcance OAuth', 'lealez' ); ?>" style="color:#666;">
+                        <span class="dashicons dashicons-info" style="vertical-align:middle;margin-top:-2px;"></span>
+                        <?php esc_html_e( 'Diagnóstico API', 'lealez' ); ?>
+                    </button>
                 </div>
             </div><!-- /.toolbar -->
 
@@ -211,6 +216,8 @@ class OY_Location_GMB_Performance_Metabox {
             <div id="oy-perf-status" class="oy-perf-status" style="display:none;"></div>
             <!-- SYNC STATUS -->
             <div id="oy-perf-sync-status" class="oy-perf-status" style="display:none;"></div>
+            <!-- DIAGNOSTIC STATUS -->
+            <div id="oy-perf-diag-status" class="oy-perf-status" style="display:none;"></div>
 
             <!-- KPI CARDS -->
             <div id="oy-perf-kpis" class="oy-perf-kpis" style="display:none;"></div>
@@ -426,7 +433,20 @@ class OY_Location_GMB_Performance_Metabox {
             $requested_metrics = array( 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_DIRECTION_REQUESTS' );
         }
 
-        // Call API
+        // Resolve the numeric location ID that will actually be sent to the Performance API
+        $resolved_location_id = $location_name;
+        if ( strpos( $location_name, '/locations/' ) !== false ) {
+            $tmp_parts = explode( '/locations/', $location_name );
+            $tmp_tail  = end( $tmp_parts );
+            $tmp_chunks = explode( '/', trim( (string) $tmp_tail, '/' ) );
+            $resolved_location_id = $tmp_chunks[0] ?? $location_name;
+        } elseif ( strpos( $location_name, 'locations/' ) === 0 ) {
+            $tmp_tail   = substr( $location_name, strlen( 'locations/' ) );
+            $tmp_chunks = explode( '/', trim( (string) $tmp_tail, '/' ) );
+            $resolved_location_id = $tmp_chunks[0] ?? $location_name;
+        }
+
+        // Call API (force fresh when force_refresh is set)
         $result = Lealez_GMB_API::get_location_performance_metrics(
             $business_id,
             $location_name,
@@ -438,27 +458,58 @@ class OY_Location_GMB_Performance_Metabox {
 
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( array(
-                'message' => $result->get_error_message(),
-                'code'    => $result->get_error_code(),
+                'message'     => $result->get_error_message(),
+                'code'        => $result->get_error_code(),
+                'location_id' => $resolved_location_id,
+                'range'       => $range,
             ) );
         }
+
+        // Guard: API returned non-WP_Error but unusable (null / non-array)
+        if ( ! is_array( $result ) ) {
+            wp_send_json_error( array(
+                'message'     => __( 'La API de rendimiento de Google devolvió una respuesta vacía o inválida. Verifica que el scope businessprofileperformance.readonly esté autorizado. Es posible que necesites reconectar tu cuenta GMB.', 'lealez' ),
+                'code'        => 'empty_api_response',
+                'raw_type'    => gettype( $result ),
+                'location_id' => $resolved_location_id,
+                'range'       => $range,
+            ) );
+        }
+
+        // Build diagnostic info included in every response (helps diagnose empty data)
+        $raw_series_items = isset( $result['multiDailyMetricTimeSeries'] ) ? $result['multiDailyMetricTimeSeries'] : null;
+        $debug = array(
+            'location_id_stored'  => $location_name,
+            'location_id_numeric' => $resolved_location_id,
+            'business_id'         => (int) $business_id,
+            'requested_metrics'   => $requested_metrics,
+            'date_range'          => $range,
+            'api_key_exists'      => array_key_exists( 'multiDailyMetricTimeSeries', $result ),
+            'api_series_count'    => is_array( $raw_series_items ) ? count( $raw_series_items ) : 'key_missing',
+            'api_top_keys'        => array_keys( $result ),
+            'raw_preview'         => substr( wp_json_encode( $result ), 0, 800 ),
+        );
 
         // Process: build chart-ready structure
         $processed = $this->process_multi_metrics( $result, $requested_metrics );
 
-        // Comparison: previous period
-        $comparison = $this->fetch_comparison(
-            $business_id,
-            $location_name,
-            $requested_metrics,
-            $range
-        );
+        // Comparison: previous period (skip when series is empty to avoid extra API calls)
+        $comparison = array();
+        if ( ! empty( $processed['series'] ) ) {
+            $comparison = $this->fetch_comparison(
+                $business_id,
+                $location_name,
+                $requested_metrics,
+                $range
+            );
+        }
 
         wp_send_json_success( array(
             'period'     => $range,
             'data'       => $processed,
             'comparison' => $comparison,
             'cached_at'  => current_time( 'mysql' ),
+            'debug'      => $debug,
         ) );
     }
 
@@ -580,7 +631,14 @@ class OY_Location_GMB_Performance_Metabox {
         $series      = array(); // metric_key => [ 'label', 'color', 'data' => [ date => value ] ]
         $all_dates   = array();
 
-        $time_series_list = $raw_response['multiDailyMetricTimeSeries'] ?? array();
+        // Guard: handle null / non-array response from API
+        if ( ! is_array( $raw_response ) ) {
+            return array( 'dates' => array(), 'series' => array() );
+        }
+
+        $time_series_list = isset( $raw_response['multiDailyMetricTimeSeries'] )
+            ? (array) $raw_response['multiDailyMetricTimeSeries']
+            : array();
 
         foreach ( $time_series_list as $item ) {
             $metric_key = $item['dailyMetric'] ?? '';
@@ -592,12 +650,16 @@ class OY_Location_GMB_Performance_Metabox {
             $data_map     = array();
 
             foreach ( $dated_values as $dv ) {
-                if ( ! isset( $dv['date'] ) ) {
+                if ( ! is_array( $dv ) || ! isset( $dv['date'] ) ) {
                     continue;
                 }
-                $d         = $dv['date'];
-                $date_str  = sprintf( '%04d-%02d-%02d', $d['year'] ?? 0, $d['month'] ?? 0, $d['day'] ?? 0 );
-                $val       = isset( $dv['value'] ) ? (int) $dv['value'] : 0;
+                $d        = $dv['date'];
+                $date_str = sprintf( '%04d-%02d-%02d', $d['year'] ?? 0, $d['month'] ?? 0, $d['day'] ?? 0 );
+                // 'value' can be integer, string-integer, or null. Use array_key_exists to handle null explicitly.
+                $val = 0;
+                if ( array_key_exists( 'value', $dv ) && null !== $dv['value'] ) {
+                    $val = (int) $dv['value'];
+                }
                 $data_map[ $date_str ] = $val;
                 $all_dates[]           = $date_str;
             }
@@ -861,6 +923,119 @@ class OY_Location_GMB_Performance_Metabox {
     }
 
     // -----------------------------------------------------------------------
+    // AJAX: Diagnostic — Raw API Response Inspector
+    // -----------------------------------------------------------------------
+
+    /**
+     * AJAX handler: diagnostic — makes a minimal raw call to the Performance API
+     * and returns the raw response so the admin can see exactly what Google is returning.
+     * Helps identify missing OAuth scopes, wrong location IDs, or data availability issues.
+     *
+     * Action: oy_gmb_perf_diagnostic
+     */
+    public function ajax_diagnostic() {
+        check_ajax_referer( 'oy_gmb_performance_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
+        }
+
+        $post_id = absint( $_POST['post_id'] ?? 0 );
+
+        if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
+        }
+
+        $location_name = get_post_meta( $post_id, 'gmb_location_id', true );
+        $business_id   = get_post_meta( $post_id, 'parent_business_id', true );
+
+        if ( ! $location_name || ! $business_id ) {
+            wp_send_json_error( array( 'message' => __( 'Faltan gmb_location_id o parent_business_id en los meta de la ubicación.', 'lealez' ) ) );
+        }
+
+        // Resolve the numeric ID that will be used in the API endpoint
+        $resolved_id = $location_name;
+        if ( strpos( $location_name, '/locations/' ) !== false ) {
+            $p = explode( '/locations/', $location_name );
+            $t = end( $p );
+            $c = explode( '/', trim( (string) $t, '/' ) );
+            $resolved_id = $c[0] ?? $location_name;
+        } elseif ( strpos( $location_name, 'locations/' ) === 0 ) {
+            $t = substr( $location_name, strlen( 'locations/' ) );
+            $c = explode( '/', trim( (string) $t, '/' ) );
+            $resolved_id = $c[0] ?? $location_name;
+        }
+
+        // Test call: single metric, last 7 days
+        $range = $this->build_date_range( '7' );
+        if ( is_wp_error( $range ) ) {
+            wp_send_json_error( array( 'message' => $range->get_error_message() ) );
+        }
+
+        $test_metrics = array( 'CALL_CLICKS' );
+
+        $result = Lealez_GMB_API::get_location_performance_metrics(
+            $business_id,
+            $location_name,
+            $test_metrics,
+            $range['start'],
+            $range['end'],
+            false // always force fresh for diagnostic
+        );
+
+        // Check connection tokens
+        $flag        = get_post_meta( $business_id, '_gmb_connected', true );
+        $has_refresh = (bool) get_post_meta( $business_id, 'gmb_refresh_token', true );
+        $token_expiry = get_post_meta( $business_id, 'gmb_token_expires_at', true );
+
+        $info = array(
+            'post_id'                  => $post_id,
+            'gmb_location_id_stored'   => $location_name,
+            'resolved_numeric_id'      => $resolved_id,
+            'parent_business_id'       => (int) $business_id,
+            'gmb_connected_flag'       => $flag ? 'yes (_gmb_connected)' : 'no',
+            'has_refresh_token'        => $has_refresh ? 'yes' : 'no',
+            'token_expires_at'         => $token_expiry ? gmdate( 'Y-m-d H:i:s', (int) $token_expiry ) : 'not set',
+            'token_expired_now'        => ( $token_expiry && (int) $token_expiry < time() ) ? 'YES - TOKEN EXPIRED' : 'no (or not set)',
+            'test_endpoint'            => 'https://businessprofileperformance.googleapis.com/v1/locations/' . $resolved_id . ':fetchMultiDailyMetricsTimeSeries',
+            'test_metric'              => 'CALL_CLICKS',
+            'date_range'               => $range['label'],
+        );
+
+        if ( is_wp_error( $result ) ) {
+            $info['api_result']     = 'WP_Error';
+            $info['error_code']     = $result->get_error_code();
+            $info['error_message']  = $result->get_error_message();
+            $info['error_data']     = $result->get_error_data();
+            wp_send_json_success( array( 'diagnostic' => $info ) );
+        }
+
+        if ( ! is_array( $result ) ) {
+            $info['api_result'] = 'Non-array response: ' . gettype( $result );
+            wp_send_json_success( array( 'diagnostic' => $info ) );
+        }
+
+        $series_items = isset( $result['multiDailyMetricTimeSeries'] ) ? $result['multiDailyMetricTimeSeries'] : null;
+        $info['api_result']          = 'HTTP 200 array';
+        $info['response_keys']       = array_keys( $result );
+        $info['has_series_key']      = array_key_exists( 'multiDailyMetricTimeSeries', $result ) ? 'yes' : 'NO - key missing!';
+        $info['series_count']        = is_array( $series_items ) ? count( $series_items ) : 'null';
+        $info['raw_response_preview'] = substr( wp_json_encode( $result ), 0, 1200 );
+
+        if ( is_array( $series_items ) && ! empty( $series_items ) ) {
+            $first = $series_items[0];
+            $dated = isset( $first['timeSeries']['datedValues'] ) ? $first['timeSeries']['datedValues'] : array();
+            $info['first_series_metric']      = $first['dailyMetric'] ?? 'unknown';
+            $info['first_series_dated_count'] = count( $dated );
+            $info['first_series_sample']      = ! empty( $dated ) ? $dated[0] : 'empty datedValues';
+        } else {
+            $info['diagnosis'] = 'multiDailyMetricTimeSeries is empty or missing. Likely causes: (1) missing OAuth scope businessprofileperformance.readonly, (2) location not verified, (3) no data for this period.';
+        }
+
+        wp_send_json_success( array( 'diagnostic' => $info ) );
+    }
+
+    // -----------------------------------------------------------------------
     // Inline JS
     // -----------------------------------------------------------------------
 
@@ -955,6 +1130,9 @@ class OY_Location_GMB_Performance_Metabox {
             // Sync button
             $('#oy-perf-btn-sync').on('click', function(){ self.syncMetrics(); });
 
+            // Diagnostic button
+            $('#oy-perf-btn-diag').on('click', function(){ self.diagMetrics(); });
+
             // Sort table
             $('#oy-perf-sort-date-asc').on('click', function(){
                 self.sortAsc = true;
@@ -1019,6 +1197,18 @@ class OY_Location_GMB_Performance_Metabox {
                 var pd = resp.data;
                 self.lastData = pd;
 
+                // If API returned no series data, show debug info automatically
+                var hasSeries = pd.data && pd.data.series && Object.keys(pd.data.series).length > 0;
+                if (!hasSeries && pd.debug) {
+                    var dbg = pd.debug;
+                    var hint = '⚠️ La API respondió correctamente (HTTP 200) pero no devolvió datos de series. ';
+                    hint += 'ID numérico enviado: <code>' + (dbg.location_id_numeric || dbg.location_id_stored || '?') + '</code>. ';
+                    hint += 'Claves en respuesta: <code>' + (dbg.api_top_keys ? dbg.api_top_keys.join(', ') : 'ninguna') + '</code>. ';
+                    hint += 'Series encontradas: <code>' + dbg.api_series_count + '</code>. ';
+                    hint += 'Usa el botón <strong>"Diagnóstico API"</strong> para ver la respuesta raw completa.';
+                    self.showStatus('info', hint);
+                }
+
                 // KPIs
                 self.buildKPIs(pd);
 
@@ -1077,6 +1267,94 @@ class OY_Location_GMB_Performance_Metabox {
 
             }).fail(function(xhr){
                 self.showKeywordsStatus('error', 'Error de conexión: ' + (xhr.statusText || 'unknown'));
+            });
+        },
+
+        diagMetrics: function(){
+            var self    = this;
+            var $btn    = $('#oy-perf-btn-diag');
+            var $status = $('#oy-perf-diag-status');
+
+            $btn.prop('disabled', true);
+            $status.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
+                   .addClass('oy-perf-status--loading')
+                   .html('🔍 Ejecutando diagnóstico de API...')
+                   .show();
+
+            $.post(self.ajaxUrl, {
+                action  : 'oy_gmb_perf_diagnostic',
+                nonce   : self.nonce,
+                post_id : self.postId,
+            }, function(resp){
+                $btn.prop('disabled', false);
+                if (!resp.success) {
+                    $status.removeClass('oy-perf-status--loading')
+                           .addClass('oy-perf-status--error')
+                           .html('❌ Error: ' + (resp.data.message || 'Error desconocido'));
+                    return;
+                }
+
+                var d = resp.data.diagnostic || {};
+                var rows = [];
+                rows.push('<strong>🔍 Diagnóstico de API de Rendimiento</strong>');
+                rows.push('');
+                rows.push('<strong>Configuración:</strong>');
+                rows.push('• gmb_location_id almacenado: <code>' + self.escHtml(d.gmb_location_id_stored || '—') + '</code>');
+                rows.push('• ID numérico enviado a la API: <code>' + self.escHtml(d.resolved_numeric_id || '—') + '</code>');
+                rows.push('• parent_business_id: <code>' + (d.parent_business_id || '—') + '</code>');
+                rows.push('');
+                rows.push('<strong>Estado OAuth:</strong>');
+                rows.push('• _gmb_connected: <code>' + self.escHtml(d.gmb_connected_flag || '—') + '</code>');
+                rows.push('• Refresh token: <code>' + self.escHtml(d.has_refresh_token || '—') + '</code>');
+                rows.push('• Token expira: <code>' + self.escHtml(d.token_expires_at || '—') + '</code>');
+                rows.push('• Token expirado: <code>' + self.escHtml(d.token_expired_now || '—') + '</code>');
+                rows.push('');
+                rows.push('<strong>Resultado API:</strong>');
+                rows.push('• URL endpoint: <code>' + self.escHtml(d.test_endpoint || '—') + '</code>');
+                rows.push('• Resultado: <code>' + self.escHtml(d.api_result || '—') + '</code>');
+
+                if (d.error_code) {
+                    rows.push('• Código de error: <code>' + self.escHtml(d.error_code) + '</code>');
+                    rows.push('• Mensaje: <code>' + self.escHtml(d.error_message || '') + '</code>');
+                    if (d.error_data && d.error_data.code) {
+                        rows.push('• HTTP code: <code>' + d.error_data.code + '</code>');
+                    }
+                    if (d.error_data && d.error_data.raw_body) {
+                        rows.push('• Raw body: <code style="font-size:11px;">' + self.escHtml(d.error_data.raw_body.substring(0, 400)) + '</code>');
+                    }
+                } else {
+                    rows.push('• Clave multiDailyMetricTimeSeries: <code>' + self.escHtml(d.has_series_key || '—') + '</code>');
+                    rows.push('• Series recibidas: <code>' + (d.series_count !== undefined ? d.series_count : '—') + '</code>');
+                    if (d.response_keys && d.response_keys.length) {
+                        rows.push('• Claves del response: <code>' + self.escHtml(d.response_keys.join(', ')) + '</code>');
+                    }
+                    if (d.first_series_metric) {
+                        rows.push('• Primera serie: <code>' + self.escHtml(d.first_series_metric) + '</code>');
+                        rows.push('• datedValues count: <code>' + d.first_series_dated_count + '</code>');
+                        rows.push('• Muestra: <code>' + self.escHtml(JSON.stringify(d.first_series_sample)) + '</code>');
+                    }
+                    if (d.diagnosis) {
+                        rows.push('');
+                        rows.push('⚠️ <strong>' + self.escHtml(d.diagnosis) + '</strong>');
+                    }
+                    if (d.raw_response_preview) {
+                        rows.push('');
+                        rows.push('<strong>Raw response preview:</strong>');
+                        rows.push('<code style="font-size:11px;word-break:break-all;">' + self.escHtml(d.raw_response_preview) + '</code>');
+                    }
+                }
+
+                var statusClass = (d.series_count && d.series_count > 0) ? 'oy-perf-status--success' : 'oy-perf-status--info';
+                $status.removeClass('oy-perf-status--loading')
+                       .addClass(statusClass)
+                       .html(rows.join('<br>'))
+                       .show();
+
+            }).fail(function(xhr){
+                $btn.prop('disabled', false);
+                $status.removeClass('oy-perf-status--loading')
+                       .addClass('oy-perf-status--error')
+                       .html('❌ Error de conexión: ' + (xhr.statusText || 'unknown'));
             });
         },
 
