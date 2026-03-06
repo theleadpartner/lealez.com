@@ -3256,6 +3256,258 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
         return null;
     }
 
+// =========================================================================
+    // LOCAL POSTS (GBP Posts / Publicaciones) — My Business API v4
+    // =========================================================================
+
+    /**
+     * Obtiene la lista de publicaciones (localPosts) de una ubicación via GMB API v4.
+     *
+     * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/localPosts
+     *
+     * @param int    $business_id      ID del post oy_business (para tokens y caché)
+     * @param string $location_any     Resource name "accounts/X/locations/Y" o solo ID numérico
+     * @param bool   $use_cache        Si true, usa transient de 1 hora; false fuerza llamada a API
+     * @return array|WP_Error          Array con 'localPosts' y 'total', o WP_Error en caso de fallo
+     */
+    public static function get_location_local_posts( $business_id, $location_any, $use_cache = true ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+
+        if ( ! $business_id || empty( $location_any ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing business_id or location identifier for local posts.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            return new WP_Error(
+                'missing_params',
+                __( 'Could not resolve accountId or locationId for local posts.', 'lealez' ),
+                array(
+                    'location_any'  => $location_any,
+                    'account_id'    => $account_id,
+                    'location_id'   => $location_id,
+                )
+            );
+        }
+
+        $cache_key    = 'oy_local_posts_' . $business_id . '_' . md5( $account_id . $location_id );
+        $cache_expiry = HOUR_IN_SECONDS;
+
+        if ( $use_cache ) {
+            $cached = get_transient( $cache_key );
+            if ( false !== $cached && is_array( $cached ) ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'success', 'Local Posts: using transient cache.' );
+                }
+                return $cached;
+            }
+        }
+
+        $endpoint   = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/localPosts';
+        $all_posts  = array();
+        $page_token = '';
+        $loops      = 0;
+
+        do {
+            $loops++;
+            if ( $loops > 20 ) { break; }
+
+            $query_args = array( 'pageSize' => 20 );
+            if ( ! empty( $page_token ) ) {
+                $query_args['pageToken'] = $page_token;
+            }
+
+            $result = self::make_request(
+                $business_id,
+                $endpoint,
+                self::$mybusiness_v4_base,
+                'GET',
+                array(),
+                false,
+                $query_args
+            );
+
+            if ( is_wp_error( $result ) ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log( $business_id, 'warning', 'Local Posts API error.', array(
+                        'account_id'  => $account_id,
+                        'location_id' => $location_id,
+                        'error'       => $result->get_error_message(),
+                        'error_code'  => $result->get_error_code(),
+                    ) );
+                }
+                update_post_meta( $business_id, '_gmb_local_posts_last_error', array(
+                    'error'     => $result->get_error_message(),
+                    'code'      => $result->get_error_code(),
+                    'timestamp' => time(),
+                ) );
+                return $result;
+            }
+
+            $page_data  = is_array( $result ) ? $result : array();
+            $page_posts = $page_data['localPosts'] ?? array();
+            if ( is_array( $page_posts ) && ! empty( $page_posts ) ) {
+                $all_posts = array_merge( $all_posts, $page_posts );
+            }
+            $page_token = $page_data['nextPageToken'] ?? '';
+
+        } while ( ! empty( $page_token ) );
+
+        $response = array(
+            'localPosts' => $all_posts,
+            'total'      => count( $all_posts ),
+        );
+
+        set_transient( $cache_key, $response, $cache_expiry );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'success', 'Local Posts: fetched ' . count( $all_posts ) . ' posts.' );
+        }
+
+        return $response;
+    }
+
+    /**
+     * Crea una nueva publicación (localPost) en GMB via API v4.
+     *
+     * Endpoint: POST https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/localPosts
+     *
+     * @param int    $business_id  ID del post oy_business
+     * @param string $location_any Resource name o ID numérico de la ubicación
+     * @param array  $payload      Cuerpo del localPost (topicType, summary, callToAction, media, event, offer…)
+     * @return array|WP_Error      El localPost creado, o WP_Error
+     */
+    public static function create_location_local_post( $business_id, $location_any, array $payload ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+
+        if ( ! $business_id || empty( $location_any ) || empty( $payload ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for create local post.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            return new WP_Error( 'missing_params', __( 'Could not resolve accountId/locationId for create local post.', 'lealez' ) );
+        }
+
+        $endpoint = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/localPosts';
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'POST',
+            $payload,
+            false
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'error', 'Create Local Post failed.', array(
+                    'error'   => $result->get_error_message(),
+                    'payload' => $payload,
+                ) );
+            }
+            return $result;
+        }
+
+        $cache_key = 'oy_local_posts_' . $business_id . '_' . md5( $account_id . $location_id );
+        delete_transient( $cache_key );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'success', 'Local Post created: ' . ( $result['name'] ?? 'unknown' ) );
+        }
+
+        return is_array( $result ) ? $result : array();
+    }
+
+    /**
+     * Elimina una publicación (localPost) de GMB via API v4.
+     *
+     * Endpoint: DELETE https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/localPosts/{localPostId}
+     *
+     * @param int    $business_id  ID del post oy_business
+     * @param string $location_any Resource name o ID numérico de la ubicación
+     * @param string $post_name    Resource name completo del localPost ("accounts/X/locations/Y/localPosts/Z")
+     * @return true|WP_Error       true en éxito, WP_Error en fallo
+     */
+    public static function delete_location_local_post( $business_id, $location_any, $post_name ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+        $post_name    = trim( (string) $post_name );
+
+        if ( ! $business_id || empty( $location_any ) || empty( $post_name ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for delete local post.', 'lealez' ) );
+        }
+
+        if ( false === strpos( $post_name, '/localPosts/' ) ) {
+            return new WP_Error( 'invalid_post_name', __( 'Invalid localPost resource name.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        $post_name_clean = ltrim( $post_name, '/' );
+        $endpoint        = '/' . $post_name_clean;
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'DELETE',
+            array(),
+            false
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'error', 'Delete Local Post failed.', array(
+                    'post_name' => $post_name,
+                    'error'     => $result->get_error_message(),
+                ) );
+            }
+            return $result;
+        }
+
+        if ( '' !== $account_id && '' !== $location_id ) {
+            $cache_key = 'oy_local_posts_' . $business_id . '_' . md5( $account_id . $location_id );
+            delete_transient( $cache_key );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'success', 'Local Post deleted: ' . $post_name );
+        }
+
+        return true;
+    }
+
+
 }
 
 // WP-Cron hook for scheduled refresh
