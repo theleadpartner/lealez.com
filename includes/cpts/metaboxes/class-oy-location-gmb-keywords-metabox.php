@@ -84,6 +84,7 @@ class OY_Location_GMB_Keywords_Metabox {
             'postId'  => $post->ID,
             'nonce'   => $nonce,
             'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+            'isDebug' => ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ? 1 : 0,
         ) );
 
         wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
@@ -169,6 +170,16 @@ class OY_Location_GMB_Keywords_Metabox {
             <!-- STATUS MESSAGES -->
             <div id="oy-kw-status"      class="oy-kw-status" style="display:none;"></div>
             <div id="oy-kw-save-status" class="oy-kw-status" style="display:none;"></div>
+
+            <!-- DEBUG PANEL (visible only when WP_DEBUG=true and result is empty/error) -->
+            <div id="oy-kw-debug" class="oy-kw-debug-wrap" style="display:none;">
+                <div class="oy-kw-debug-header" id="oy-kw-debug-toggle">
+                    <span class="dashicons dashicons-info" style="vertical-align:middle;font-size:16px;margin-right:4px;"></span>
+                    <strong><?php esc_html_e( 'Diagnóstico de API — Keywords', 'lealez' ); ?></strong>
+                    <span class="oy-kw-debug-caret">▼</span>
+                </div>
+                <div id="oy-kw-debug-body" class="oy-kw-debug-body"></div>
+            </div>
 
             <!-- KPI TOP 3 -->
             <div id="oy-kw-kpis" class="oy-kw-kpis" style="display:none;"></div>
@@ -268,6 +279,7 @@ class OY_Location_GMB_Keywords_Metabox {
         $month_to     = sanitize_text_field( $_POST['month_to'] ?? '' );
         $per_month    = ! empty( $_POST['per_month'] );
         $force        = ! empty( $_POST['force_refresh'] );
+        $is_debug     = defined( 'WP_DEBUG' ) && WP_DEBUG;
 
         if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
             wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
@@ -303,6 +315,25 @@ class OY_Location_GMB_Keywords_Metabox {
             wp_send_json_error( array( 'message' => __( 'El mes de inicio debe ser anterior o igual al mes de fin.', 'lealez' ) ) );
         }
 
+        // ── Build base debug info (always populated) ────────────────────────
+        $debug_info = array(
+            'location_id'  => $location_id,
+            'business_id'  => (int) $business_id,
+            'start_month'  => sprintf( '%04d-%02d', $start_month['year'], $start_month['month'] ),
+            'end_month'    => sprintf( '%04d-%02d', $end_month['year'], $end_month['month'] ),
+            'mode'         => $per_month ? 'per_month' : 'flat',
+            'force_cache'  => $force,
+            'api_endpoint' => sprintf(
+                'https://businessprofileperformance.googleapis.com/v1/locations/%s/searchkeywords/impressions/monthly',
+                $location_id
+            ),
+            'raw_response' => null,
+            'http_code'    => null,
+            'items_found'  => 0,
+            'error'        => null,
+            'wp_debug'     => $is_debug,
+        );
+
         if ( $per_month ) {
             // ── Mode: one call per month ─────────────────────────────────
             $monthly_data = $this->fetch_keywords_per_month(
@@ -314,10 +345,22 @@ class OY_Location_GMB_Keywords_Metabox {
             );
 
             if ( is_wp_error( $monthly_data ) ) {
-                wp_send_json_error( array( 'message' => $monthly_data->get_error_message() ) );
+                $debug_info['error'] = $monthly_data->get_error_message();
+                wp_send_json_error( array(
+                    'message' => $monthly_data->get_error_message(),
+                    'debug'   => $is_debug ? $debug_info : null,
+                ) );
             }
 
             $aggregated = $this->aggregate_monthly( $monthly_data );
+            $debug_info['items_found'] = count( $aggregated );
+
+            // When empty in debug mode, perform a raw API probe
+            if ( empty( $aggregated ) && $is_debug ) {
+                $raw = $this->probe_keywords_api_raw( $business_id, $location_id, $start_month, $end_month );
+                $debug_info['raw_response'] = $raw['body'];
+                $debug_info['http_code']    = $raw['code'];
+            }
 
             wp_send_json_success( array(
                 'mode'        => 'per_month',
@@ -325,6 +368,7 @@ class OY_Location_GMB_Keywords_Metabox {
                 'monthly_raw' => $monthly_data,
                 'period'      => array( 'start' => $start_month, 'end' => $end_month ),
                 'fetched_at'  => current_time( 'mysql' ),
+                'debug'       => $is_debug ? $debug_info : null,
             ) );
 
         } else {
@@ -338,22 +382,124 @@ class OY_Location_GMB_Keywords_Metabox {
             );
 
             if ( is_wp_error( $result ) ) {
-                wp_send_json_error( array( 'message' => $result->get_error_message() ) );
+                $debug_info['error'] = $result->get_error_message();
+                // On WP_Error, always do raw probe to show actual HTTP response
+                if ( $is_debug ) {
+                    $raw = $this->probe_keywords_api_raw( $business_id, $location_id, $start_month, $end_month );
+                    $debug_info['raw_response'] = $raw['body'];
+                    $debug_info['http_code']    = $raw['code'];
+                }
+                wp_send_json_error( array(
+                    'message' => $result->get_error_message(),
+                    'debug'   => $is_debug ? $debug_info : null,
+                ) );
             }
 
             if ( ! is_array( $result ) ) {
-                wp_send_json_error( array( 'message' => __( 'Respuesta inválida de la API de keywords.', 'lealez' ) ) );
+                $debug_info['error'] = 'Respuesta no-array de la API.';
+                wp_send_json_error( array(
+                    'message' => __( 'Respuesta inválida de la API de keywords.', 'lealez' ),
+                    'debug'   => $is_debug ? $debug_info : null,
+                ) );
             }
 
             $aggregated = $this->parse_flat_keywords( $result );
+            $debug_info['items_found'] = count( $aggregated );
+
+            // When empty in debug mode, do a raw API probe
+            if ( empty( $aggregated ) && $is_debug ) {
+                $raw = $this->probe_keywords_api_raw( $business_id, $location_id, $start_month, $end_month );
+                $debug_info['raw_response'] = $raw['body'];
+                $debug_info['http_code']    = $raw['code'];
+            }
 
             wp_send_json_success( array(
                 'mode'       => 'flat',
                 'aggregated' => $aggregated,
                 'period'     => array( 'start' => $start_month, 'end' => $end_month ),
                 'fetched_at' => current_time( 'mysql' ),
+                'debug'      => $is_debug ? $debug_info : null,
             ) );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Debug: Raw API Probe
+    // -----------------------------------------------------------------------
+
+    /**
+     * Realiza una petición HTTP directa al endpoint de keywords y devuelve la
+     * respuesta sin procesar. Solo se llama cuando WP_DEBUG = true y el resultado
+     * principal está vacío, para mostrar en el panel de diagnóstico.
+     *
+     * @param int    $business_id
+     * @param string $location_id   Numeric location ID.
+     * @param array  $start_month   ['year'=>int, 'month'=>int]
+     * @param array  $end_month     ['year'=>int, 'month'=>int]
+     * @return array  ['code'=>int, 'body'=>string, 'error'=>string|null]
+     */
+    private function probe_keywords_api_raw( $business_id, $location_id, $start_month, $end_month ) {
+        $result = array( 'code' => 0, 'body' => '', 'error' => null );
+
+        if ( ! class_exists( 'Lealez_GMB_Encryption' ) ) {
+            $result['error'] = 'Clase Lealez_GMB_Encryption no disponible.';
+            return $result;
+        }
+
+        $tokens = Lealez_GMB_Encryption::get_tokens( $business_id );
+        if ( ! $tokens || empty( $tokens['access_token'] ) ) {
+            $result['error'] = 'No se encontró access_token para business_id ' . $business_id . '.';
+            return $result;
+        }
+
+        // Strip "locations/" prefix if it came through extract_location_id_from_any already
+        $loc_id_clean = $location_id;
+        if ( strpos( $loc_id_clean, 'locations/' ) === 0 ) {
+            $loc_id_clean = substr( $loc_id_clean, strlen( 'locations/' ) );
+        }
+
+        $qs = http_build_query( array(
+            'monthlyRange.startMonth.year'  => (int) ( $start_month['year']  ?? 0 ),
+            'monthlyRange.startMonth.month' => (int) ( $start_month['month'] ?? 0 ),
+            'monthlyRange.endMonth.year'    => (int) ( $end_month['year']    ?? 0 ),
+            'monthlyRange.endMonth.month'   => (int) ( $end_month['month']   ?? 0 ),
+            'pageSize'                      => 20,
+        ) );
+
+        $url = 'https://businessprofileperformance.googleapis.com/v1/locations/' . rawurlencode( $loc_id_clean )
+               . '/searchkeywords/impressions/monthly?' . $qs;
+
+        $result['url'] = $url;
+
+        $response = wp_remote_get( $url, array(
+            'timeout' => 30,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $tokens['access_token'],
+                'Content-Type'  => 'application/json',
+            ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            $result['error'] = 'wp_remote_get error: ' . $response->get_error_message();
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[Lealez KW DEBUG PROBE] ' . $result['error'] );
+            }
+            return $result;
+        }
+
+        $result['code'] = wp_remote_retrieve_response_code( $response );
+        $result['body'] = wp_remote_retrieve_body( $response );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez KW DEBUG PROBE] HTTP %d | URL: %s | Body: %s',
+                $result['code'],
+                $url,
+                substr( $result['body'], 0, 1000 )
+            ) );
+        }
+
+        return $result;
     }
 
     // -----------------------------------------------------------------------
@@ -622,6 +768,7 @@ class OY_Location_GMB_Keywords_Metabox {
         postId       : oyKwConfig.postId,
         nonce        : oyKwConfig.nonce,
         ajaxUrl      : oyKwConfig.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php',
+        isDebug      : (oyKwConfig.isDebug === 1 || oyKwConfig.isDebug === '1'),
         chartInstance: null,
         lastData     : null,
         monthNames   : ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
@@ -654,6 +801,13 @@ class OY_Location_GMB_Keywords_Metabox {
                 if (self.lastData) {
                     self.buildTable(self.lastData, $(this).val());
                 }
+            });
+
+            // Debug panel toggle
+            $('#oy-kw-debug-toggle').on('click', function(){
+                $('#oy-kw-debug-body').slideToggle(160);
+                var $c = $(this).find('.oy-kw-debug-caret');
+                $c.text($c.text() === '▼' ? '▲' : '▼');
             });
         },
 
@@ -713,7 +867,12 @@ class OY_Location_GMB_Keywords_Metabox {
                 self.hideStatus();
 
                 if (!resp.success) {
-                    self.showStatus('error', resp.data.message || 'Error al consultar keywords.');
+                    var errMsg = (resp.data && resp.data.message) ? resp.data.message : 'Error al consultar keywords.';
+                    self.showStatus('error', errMsg);
+                    // Show debug on error too
+                    if (resp.data && resp.data.debug) {
+                        self.buildDebugPanel(resp.data.debug);
+                    }
                     return;
                 }
 
@@ -722,8 +881,15 @@ class OY_Location_GMB_Keywords_Metabox {
 
                 if (!aggregated.length) {
                     self.showStatus('info', 'No se encontraron frases clave para el período seleccionado. La API de keywords puede tardar hasta 7 días en actualizar datos nuevos.');
+                    // Show debug panel when empty
+                    if (data.debug) {
+                        self.buildDebugPanel(data.debug);
+                    }
                     return;
                 }
+
+                // Hide debug panel when we have results
+                $('#oy-kw-debug').hide();
 
                 self.lastData = data;
 
@@ -789,7 +955,7 @@ class OY_Location_GMB_Keywords_Metabox {
             }, function(resp){
                 $btn.prop('disabled', false);
                 if (!resp.success) {
-                    self.showSaveStatus('error', resp.data.message || 'Error al guardar.');
+                    self.showSaveStatus('error', (resp.data && resp.data.message) ? resp.data.message : 'Error al guardar.');
                     return;
                 }
                 self.showSaveStatus('success',
@@ -1003,6 +1169,48 @@ class OY_Location_GMB_Keywords_Metabox {
         },
 
         // ----------------------------------------------------------------
+        // Debug Panel
+        // ----------------------------------------------------------------
+
+        buildDebugPanel: function(debug){
+            if (!debug) { return; }
+
+            var self = this;
+            var httpCode   = debug.http_code || '—';
+            var httpColor  = (httpCode >= 200 && httpCode < 300) ? '#2e7d32' : (httpCode >= 400 ? '#c62828' : '#555');
+            var rawBody    = debug.raw_response ? self.escHtml(String(debug.raw_response).substring(0, 2000)) : '(no se pudo obtener respuesta directa)';
+            var errHtml    = debug.error ? '<p style="color:#c62828;"><strong>Error:</strong> '+self.escHtml(debug.error)+'</p>' : '';
+
+            var html =
+                '<table class="oy-kw-debug-table">' +
+                '<tr><th>location_id</th><td><code>'+self.escHtml(String(debug.location_id || '—'))+'</code></td></tr>' +
+                '<tr><th>business_id</th><td><code>'+self.escHtml(String(debug.business_id || '—'))+'</code></td></tr>' +
+                '<tr><th>Período</th><td><code>'+self.escHtml(String(debug.start_month||'—'))+' → '+self.escHtml(String(debug.end_month||'—'))+'</code></td></tr>' +
+                '<tr><th>Modo</th><td><code>'+self.escHtml(String(debug.mode||'—'))+'</code></td></tr>' +
+                '<tr><th>Force cache</th><td><code>'+(debug.force_cache ? 'sí' : 'no')+'</code></td></tr>' +
+                '<tr><th>Items encontrados</th><td><code>'+self.escHtml(String(debug.items_found||0))+'</code></td></tr>' +
+                '<tr><th>HTTP probe</th><td><code style="color:'+httpColor+';font-weight:700;">'+httpCode+'</code></td></tr>' +
+                '<tr><th>Endpoint</th><td style="word-break:break-all;font-size:11px;"><code>'+self.escHtml(String(debug.api_endpoint||'—'))+'</code></td></tr>' +
+                '</table>' +
+                errHtml +
+                '<p style="margin:8px 0 4px;font-weight:700;font-size:12px;">Respuesta raw de la API (probe directo):</p>' +
+                '<pre class="oy-kw-debug-raw">'+rawBody+'</pre>' +
+                '<p class="oy-kw-debug-hint">'+
+                    '💡 <strong>Posibles causas de resultado vacío:</strong> (1) El negocio tiene bajo volumen de búsquedas orgánicas en Google. ' +
+                    '(2) Google no muestra keywords con impresiones por debajo del umbral de privacidad (~15). ' +
+                    '(3) El mes actual puede tardar hasta 7 días en aparecer. ' +
+                    '(4) Prueba con un rango más amplio o mes anterior. ' +
+                    '(5) Revisa el log de PHP en <code>wp-content/debug.log</code> para más detalles ([Lealez KW]).'+
+                '</p>';
+
+            $('#oy-kw-debug-body').html(html).show();
+            $('#oy-kw-debug').show();
+            // Auto-expand
+            var $caret = $('#oy-kw-debug-toggle .oy-kw-debug-caret');
+            $caret.text('▲');
+        },
+
+        // ----------------------------------------------------------------
         // CSV Export
         // ----------------------------------------------------------------
 
@@ -1070,6 +1278,7 @@ class OY_Location_GMB_Keywords_Metabox {
         hideResults: function(){
             $('#oy-kw-kpis, #oy-kw-chart-wrap, #oy-kw-table-wrap, #oy-kw-footer, #oy-kw-month-filter-wrap').hide();
             $('#oy-kw-threshold-note').hide();
+            $('#oy-kw-debug').hide();
         },
 
         formatNum: function(n){
@@ -1207,6 +1416,34 @@ JS;
 .oy-kw-footer {
     font-size:11px; color:#888; padding:6px 0;
     border-top:1px solid #eee; margin-top:4px;
+}
+
+/* Debug Panel */
+.oy-kw-debug-wrap {
+    border:1px solid #f0c35a; border-radius:6px;
+    margin-bottom:14px; background:#fffdf0; overflow:hidden;
+}
+.oy-kw-debug-header {
+    padding:8px 14px; background:#fff8e1; cursor:pointer;
+    display:flex; align-items:center; gap:4px;
+    font-size:12px; color:#5d4037; user-select:none;
+}
+.oy-kw-debug-header:hover { background:#fff3cd; }
+.oy-kw-debug-caret { margin-left:auto; font-size:10px; color:#888; }
+.oy-kw-debug-body { padding:12px 14px; font-size:12px; }
+.oy-kw-debug-table { width:100%; border-collapse:collapse; margin-bottom:10px; }
+.oy-kw-debug-table th,
+.oy-kw-debug-table td { padding:4px 8px; border:1px solid #e0e0e0; vertical-align:top; }
+.oy-kw-debug-table th { background:#f5f5f5; width:140px; font-weight:600; color:#555; }
+.oy-kw-debug-raw {
+    background:#1e1e1e; color:#80cbc4; font-size:11px; line-height:1.5;
+    padding:10px 12px; border-radius:4px; overflow-x:auto; white-space:pre-wrap;
+    word-break:break-all; max-height:300px; overflow-y:auto; margin:0 0 10px 0;
+}
+.oy-kw-debug-hint {
+    font-size:11px; color:#5d4037; background:#fff3e0;
+    border:1px solid #ffe0b2; border-radius:4px;
+    padding:8px 10px; margin:0; line-height:1.6;
 }
 ';
     }
