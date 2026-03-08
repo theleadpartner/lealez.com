@@ -32,8 +32,9 @@ class OY_Location_GMB_Keywords_Metabox {
     public function __construct() {
         add_action( 'add_meta_boxes',        array( $this, 'register_meta_box' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
-        add_action( 'wp_ajax_oy_gmb_kw_fetch', array( $this, 'ajax_fetch_keywords' ) );
-        add_action( 'wp_ajax_oy_gmb_kw_save',  array( $this, 'ajax_save_keywords' ) );
+        add_action( 'wp_ajax_oy_gmb_kw_fetch',   array( $this, 'ajax_fetch_keywords' ) );
+        add_action( 'wp_ajax_oy_gmb_kw_save',    array( $this, 'ajax_save_keywords' ) );
+        add_action( 'wp_ajax_oy_gmb_kw_context', array( $this, 'ajax_fetch_search_context' ) );
     }
 
     // -----------------------------------------------------------------------
@@ -183,6 +184,9 @@ class OY_Location_GMB_Keywords_Metabox {
 
             <!-- KPI TOP 3 -->
             <div id="oy-kw-kpis" class="oy-kw-kpis" style="display:none;"></div>
+
+            <!-- CONTEXT: Total Search Impressions vs Keywords -->
+            <div id="oy-kw-context" class="oy-kw-context-wrap" style="display:none;"></div>
 
             <!-- CHART TOP 20 -->
             <div id="oy-kw-chart-wrap" class="oy-kw-chart-wrap" style="display:none;">
@@ -571,6 +575,134 @@ class OY_Location_GMB_Keywords_Metabox {
     }
 
     // -----------------------------------------------------------------------
+    // AJAX: Fetch Total Search Impressions Context
+    // -----------------------------------------------------------------------
+
+    /**
+     * AJAX handler: obtiene el total de impresiones en Google Search (desktop + mobile)
+     * para el mismo período del filtro de keywords, usando el endpoint fetchMultiDailyMetricsTimeSeries.
+     *
+     * Esto permite mostrar cuántas impresiones totales de búsqueda tuvo el negocio
+     * y qué porcentaje de esas impresiones están "explicadas" por las frases clave visibles.
+     *
+     * Nota oficial (Google Business Profile Performance API - DailyMetric enum):
+     *   BUSINESS_IMPRESSIONS_DESKTOP_SEARCH → impresiones en Google Search desde Desktop
+     *   BUSINESS_IMPRESSIONS_MOBILE_SEARCH  → impresiones en Google Search desde Mobile
+     *   Ambas cuentan usuarios únicos por día.
+     *
+     * POST params:
+     *   post_id       int     ID del post oy_location
+     *   month_from    string  YYYY-MM
+     *   month_to      string  YYYY-MM
+     *   force_refresh int     0|1
+     *
+     * Action: oy_gmb_kw_context
+     */
+    public function ajax_fetch_search_context() {
+        check_ajax_referer( 'oy_gmb_keywords_nonce', 'nonce' );
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
+        }
+
+        $post_id    = absint( $_POST['post_id'] ?? 0 );
+        $month_from = sanitize_text_field( $_POST['month_from'] ?? '' );
+        $month_to   = sanitize_text_field( $_POST['month_to'] ?? '' );
+        $force      = ! empty( $_POST['force_refresh'] );
+
+        if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
+        }
+
+        $location_id = get_post_meta( $post_id, 'gmb_location_id', true );
+        $business_id = get_post_meta( $post_id, 'parent_business_id', true );
+
+        if ( ! $location_id || ! $business_id ) {
+            wp_send_json_error( array( 'message' => __( 'Faltan datos de configuración GMB.', 'lealez' ) ) );
+        }
+
+        // Parse month range and convert to daily range
+        if ( ! $month_from || ! $month_to ) {
+            wp_send_json_error( array( 'message' => __( 'Rango de meses requerido.', 'lealez' ) ) );
+        }
+
+        $parts_from = explode( '-', $month_from );
+        $parts_to   = explode( '-', $month_to );
+
+        if ( count( $parts_from ) !== 2 || count( $parts_to ) !== 2 ) {
+            wp_send_json_error( array( 'message' => __( 'Formato de mes inválido.', 'lealez' ) ) );
+        }
+
+        $start_year  = (int) $parts_from[0];
+        $start_month = (int) $parts_from[1];
+        $end_year    = (int) $parts_to[0];
+        $end_month   = (int) $parts_to[1];
+
+        // Daily range: first day of start_month → last day of end_month
+        $start_date = array( 'year' => $start_year, 'month' => $start_month, 'day' => 1 );
+        $last_day   = (int) gmdate( 't', mktime( 0, 0, 0, $end_month, 1, $end_year ) );
+        $end_date   = array( 'year' => $end_year, 'month' => $end_month, 'day' => $last_day );
+
+        // Fetch both Search metrics (Desktop + Mobile) in one call
+        $metrics = array(
+            'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+            'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
+        );
+
+        $result = Lealez_GMB_API::get_location_performance_metrics(
+            $business_id,
+            $location_id,
+            $metrics,
+            $start_date,
+            $end_date,
+            ! $force
+        );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( array(
+                'message' => $result->get_error_message(),
+            ) );
+        }
+
+        // Sum all daily values for Desktop Search + Mobile Search
+        $total_desktop_search = 0;
+        $total_mobile_search  = 0;
+
+        if ( ! empty( $result['multiDailyMetricTimeSeries'] ) ) {
+            foreach ( $result['multiDailyMetricTimeSeries'] as $series_group ) {
+                if ( empty( $series_group['dailyMetricTimeSeries'] ) ) {
+                    continue;
+                }
+                foreach ( $series_group['dailyMetricTimeSeries'] as $series ) {
+                    $metric_name = $series['dailyMetric'] ?? '';
+                    if ( empty( $series['timeSeries']['datedValues'] ) ) {
+                        continue;
+                    }
+                    foreach ( $series['timeSeries']['datedValues'] as $dv ) {
+                        $day_value = isset( $dv['value'] ) ? (int) $dv['value'] : 0;
+                        if ( 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH' === $metric_name ) {
+                            $total_desktop_search += $day_value;
+                        } elseif ( 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' === $metric_name ) {
+                            $total_mobile_search += $day_value;
+                        }
+                    }
+                }
+            }
+        }
+
+        $total_search = $total_desktop_search + $total_mobile_search;
+
+        wp_send_json_success( array(
+            'total_search'          => $total_search,
+            'total_desktop_search'  => $total_desktop_search,
+            'total_mobile_search'   => $total_mobile_search,
+            'period_start'          => sprintf( '%04d-%02d-01', $start_year, $start_month ),
+            'period_end'            => sprintf( '%04d-%02d-%02d', $end_year, $end_month, $last_day ),
+            'note'                  => __( 'Impresiones únicas por usuario/día en Google Search. Fuente: Business Profile Performance API (BUSINESS_IMPRESSIONS_DESKTOP_SEARCH + BUSINESS_IMPRESSIONS_MOBILE_SEARCH).', 'lealez' ),
+        ) );
+    }
+
+    // -----------------------------------------------------------------------
     // Data Processing Helpers
     // -----------------------------------------------------------------------
 
@@ -771,6 +903,7 @@ class OY_Location_GMB_Keywords_Metabox {
         isDebug      : (oyKwConfig.isDebug === 1 || oyKwConfig.isDebug === '1'),
         chartInstance: null,
         lastData     : null,
+        contextData  : null,
         monthNames   : ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
 
         init: function(){
@@ -936,9 +1069,138 @@ class OY_Location_GMB_Keywords_Metabox {
                     }
                 }
 
+                // Fetch total search impressions context (non-blocking, async)
+                self.fetchSearchContext(fromVal, toVal, forceRefresh);
+
             }).fail(function(xhr){
                 self.showStatus('error', 'Error de conexión: ' + (xhr.statusText || 'desconocido'));
             });
+        },
+
+        // ----------------------------------------------------------------
+        // Fetch Total Search Impressions Context
+        // ----------------------------------------------------------------
+
+        /**
+         * Consulta el total de impresiones en Google Search (Desktop + Mobile)
+         * para el mismo período. Usa fetchMultiDailyMetricsTimeSeries.
+         *
+         * Nota: La GBP Performance API NO proporciona clicks ni posición por
+         * frase clave. Solo impresiones mensuales. El contexto de búsqueda
+         * permite saber cuántas impresiones totales hubo en Search y qué
+         * cobertura tienen las frases clave visibles.
+         */
+        fetchSearchContext: function(monthFrom, monthTo, forceRefresh){
+            var self = this;
+            $('#oy-kw-context').html(
+                '<div class="oy-kw-ctx-loading"><span class="spinner is-active" style="float:none;margin:0 6px 0 0;vertical-align:middle;"></span>' +
+                'Cargando contexto de impresiones en Search...</div>'
+            ).show();
+
+            $.post(self.ajaxUrl, {
+                action        : 'oy_gmb_kw_context',
+                nonce         : self.nonce,
+                post_id       : self.postId,
+                month_from    : monthFrom,
+                month_to      : monthTo,
+                force_refresh : forceRefresh ? 1 : 0,
+            }, function(resp){
+                if (!resp.success || !resp.data) {
+                    $('#oy-kw-context').hide();
+                    return;
+                }
+                self.contextData = resp.data;
+                var kwData = self.lastData && self.lastData.aggregated ? self.lastData.aggregated : [];
+                self.buildContextPanel(resp.data, kwData);
+            }).fail(function(){
+                $('#oy-kw-context').hide();
+            });
+        },
+
+        // ----------------------------------------------------------------
+        // Build Context Panel
+        // ----------------------------------------------------------------
+
+        buildContextPanel: function(ctx, aggregated){
+            var self = this;
+
+            // Sum all keyword impressions
+            var totalKwImpressions = 0;
+            $.each(aggregated, function(i, kw){ totalKwImpressions += (kw.total || 0); });
+
+            var totalSearch    = ctx.total_search || 0;
+            var totalDesktop   = ctx.total_desktop_search || 0;
+            var totalMobile    = ctx.total_mobile_search || 0;
+
+            // Coverage: keyword impressions / total search impressions
+            // (These count differently: keywords = unique users/month, DailyMetric = unique users/day summed.
+            //  Coverage > 100% is possible. We cap display at 100% for UX clarity.)
+            var coveragePct = totalSearch > 0
+                ? Math.min(100, Math.round((totalKwImpressions / totalSearch) * 100))
+                : 0;
+
+            var mobilePct = totalSearch > 0
+                ? Math.round((totalMobile / totalSearch) * 100)
+                : 0;
+            var desktopPct = totalSearch > 0
+                ? Math.round((totalDesktop / totalSearch) * 100)
+                : 0;
+
+            var coverageColor = coveragePct >= 70 ? '#2e7d32' : (coveragePct >= 40 ? '#f57f17' : '#c62828');
+
+            var html =
+                '<div class="oy-kw-ctx-panel">' +
+                    '<div class="oy-kw-ctx-header">' +
+                        '<span class="dashicons dashicons-chart-area" style="vertical-align:middle;color:#1a73e8;margin-right:6px;"></span>' +
+                        '<strong>Contexto de Búsqueda — Google Search (mismo período)</strong>' +
+                        '<span class="oy-kw-ctx-badge">Performance API · BUSINESS_IMPRESSIONS_SEARCH</span>' +
+                    '</div>' +
+                    '<div class="oy-kw-ctx-grid">' +
+
+                        // Total Search Impressions
+                        '<div class="oy-kw-ctx-card">' +
+                            '<div class="oy-kw-ctx-label">Total Impresiones en Search</div>' +
+                            '<div class="oy-kw-ctx-value">' + self.formatNum(totalSearch) + '</div>' +
+                            '<div class="oy-kw-ctx-sub">Usuarios únicos que vieron el perfil en Google Search</div>' +
+                        '</div>' +
+
+                        // Desktop vs Mobile
+                        '<div class="oy-kw-ctx-card">' +
+                            '<div class="oy-kw-ctx-label">Dispositivos</div>' +
+                            '<div class="oy-kw-ctx-device">' +
+                                '<span class="dashicons dashicons-desktop" style="color:#4285f4;"></span> ' +
+                                '<strong>' + self.formatNum(totalDesktop) + '</strong> Desktop <em>(' + desktopPct + '%)</em>' +
+                            '</div>' +
+                            '<div class="oy-kw-ctx-device">' +
+                                '<span class="dashicons dashicons-smartphone" style="color:#34a853;"></span> ' +
+                                '<strong>' + self.formatNum(totalMobile) + '</strong> Mobile <em>(' + mobilePct + '%)</em>' +
+                            '</div>' +
+                        '</div>' +
+
+                        // Keyword impressions vs total search
+                        '<div class="oy-kw-ctx-card">' +
+                            '<div class="oy-kw-ctx-label">Cobertura de Frases Clave</div>' +
+                            '<div class="oy-kw-ctx-value" style="color:' + coverageColor + ';">' + coveragePct + '%</div>' +
+                            '<div class="oy-kw-ctx-sub">' +
+                                self.formatNum(totalKwImpressions) + ' imp. en frases clave visibles' +
+                                (coveragePct >= 100 ? ' <span title="Las frases clave se cuentan mensualmente por usuario; las impresiones diarias pueden ser mayores">ℹ️</span>' : '') +
+                            '</div>' +
+                        '</div>' +
+
+                    '</div>' +
+                    '<p class="oy-kw-ctx-note">' +
+                        '⚠️ <strong>Limitación de la API:</strong> La GBP Performance API ' +
+                        '<strong>no proporciona clics ni posición por frase clave</strong> ' +
+                        '(esos datos están en Google Search Console). Las frases clave solo incluyen impresiones mensuales.' +
+                    '</p>' +
+                '</div>';
+
+            $('#oy-kw-context').html(html).show();
+
+            // Also rebuild table to update % share column if context changed coverage
+            if (self.lastData) {
+                self.buildTable(self.lastData, $('#oy-kw-filter-month').val() || '');
+            }
         },
 
         // ----------------------------------------------------------------
@@ -991,16 +1253,24 @@ class OY_Location_GMB_Keywords_Metabox {
 
             if (!top3.length) { $kpis.hide(); return; }
 
+            // Calculate total keyword impressions for % share
+            var totalKwImpressions = 0;
+            $.each(aggregated, function(i, kw){ totalKwImpressions += (kw.total || 0); });
+
             var colors = ['#4285f4','#34a853','#fbbc05'];
             $.each(top3, function(i, kw){
                 var badge = kw.below_threshold
                     ? '<span class="oy-kw-threshold-badge" title="Valor aproximado">~</span>'
                     : '';
+                var sharePct = totalKwImpressions > 0
+                    ? (Math.round((kw.total / totalKwImpressions) * 1000) / 10).toFixed(1)
+                    : '0.0';
                 $kpis.append(
                     '<div class="oy-kw-kpi-card" style="border-top:3px solid '+colors[i]+';">' +
                         '<div class="oy-kw-kpi-rank">#'+(i+1)+'</div>' +
                         '<div class="oy-kw-kpi-keyword" title="'+self.escHtml(kw.keyword)+'">'+self.escHtml(kw.keyword)+'</div>' +
                         '<div class="oy-kw-kpi-value">'+self.formatNum(kw.total)+badge+' <span>imp.</span></div>' +
+                        '<div class="oy-kw-kpi-share">'+sharePct+'% del total</div>' +
                     '</div>'
                 );
             });
@@ -1114,8 +1384,14 @@ class OY_Location_GMB_Keywords_Metabox {
                 rows = aggregated.slice();
             }
 
+            // Calculate total keyword impressions for % share column
+            var totalKwImpressions = 0;
+            $.each(rows, function(i, kw){ totalKwImpressions += (kw.total || 0); });
+
             // Build header
-            var headHtml = '<tr><th style="width:40px;">#</th><th>Frase Clave</th><th style="text-align:right;">Impresiones</th>';
+            var headHtml = '<tr><th style="width:40px;">#</th><th>Frase Clave</th>' +
+                '<th style="text-align:right;">Impresiones</th>' +
+                '<th style="text-align:right;white-space:nowrap;" title="Porcentaje del total de impresiones de frases clave en el período">% Share</th>';
             if (isPerMonth && !selectedMonth) {
                 $.each(months, function(i, mk){
                     var parts = mk.split('-');
@@ -1137,10 +1413,24 @@ class OY_Location_GMB_Keywords_Metabox {
                     hasThreshold = true;
                 }
 
+                // % Share calculation
+                var sharePct = totalKwImpressions > 0
+                    ? (Math.round((kw.total / totalKwImpressions) * 1000) / 10).toFixed(1)
+                    : '0.0';
+                var shareBarWidth = totalKwImpressions > 0
+                    ? Math.round((kw.total / totalKwImpressions) * 100)
+                    : 0;
+
                 bodyHtml += '<tr>';
                 bodyHtml += '<td><strong>'+(i+1)+'</strong></td>';
                 bodyHtml += '<td>'+self.escHtml(String(kw.keyword))+'</td>';
                 bodyHtml += '<td style="text-align:right;font-weight:700;">'+self.formatNum(kw.total)+thBadge+'</td>';
+                bodyHtml += '<td style="text-align:right;white-space:nowrap;">' +
+                    '<span style="font-weight:600;color:#1a73e8;">'+sharePct+'%</span>' +
+                    '<div style="background:#e8f0fe;border-radius:3px;height:4px;margin-top:3px;width:60px;display:inline-block;vertical-align:middle;margin-left:6px;">' +
+                        '<div style="background:#1a73e8;border-radius:3px;height:4px;width:'+shareBarWidth+'%;"></div>' +
+                    '</div>' +
+                    '</td>';
 
                 // Monthly columns (only in per-month mode, no filter active)
                 if (isPerMonth && !selectedMonth) {
@@ -1167,7 +1457,7 @@ class OY_Location_GMB_Keywords_Metabox {
             });
 
             if (!bodyHtml) {
-                var colspan = isPerMonth && !selectedMonth ? (3 + months.length + 1) : 3;
+                var colspan = isPerMonth && !selectedMonth ? (4 + months.length + 1) : 4;
                 bodyHtml = '<tr><td colspan="'+colspan+'" style="text-align:center;color:#888;padding:16px;">Sin datos disponibles para este período.</td></tr>';
             }
 
@@ -1237,7 +1527,11 @@ class OY_Location_GMB_Keywords_Metabox {
 
             if (!aggregated.length) { return; }
 
-            var header = ['#', 'Frase Clave', 'Total Impresiones'];
+            // Calculate total for % share
+            var totalKwImpressions = 0;
+            $.each(aggregated, function(i, kw){ totalKwImpressions += (kw.total || 0); });
+
+            var header = ['#', 'Frase Clave', 'Total Impresiones', '% Share'];
             if (isPerMonth) {
                 $.each(months, function(i, mk){ header.push(mk); });
             }
@@ -1245,7 +1539,10 @@ class OY_Location_GMB_Keywords_Metabox {
             var rows = [header.join(',')];
 
             $.each(aggregated, function(i, kw){
-                var row = [(i+1), '"'+String(kw.keyword).replace(/"/g,'""')+'"', kw.total];
+                var sharePct = totalKwImpressions > 0
+                    ? (Math.round((kw.total / totalKwImpressions) * 1000) / 10).toFixed(1)
+                    : '0.0';
+                var row = [(i+1), '"'+String(kw.keyword).replace(/"/g,'""')+'"', kw.total, sharePct+'%'];
                 if (isPerMonth) {
                     var monthly = kw.monthly || {};
                     $.each(months, function(j, mk){
@@ -1290,7 +1587,7 @@ class OY_Location_GMB_Keywords_Metabox {
         },
 
         hideResults: function(){
-            $('#oy-kw-kpis, #oy-kw-chart-wrap, #oy-kw-table-wrap, #oy-kw-footer, #oy-kw-month-filter-wrap').hide();
+            $('#oy-kw-kpis, #oy-kw-context, #oy-kw-chart-wrap, #oy-kw-table-wrap, #oy-kw-footer, #oy-kw-month-filter-wrap').hide();
             $('#oy-kw-threshold-note').hide();
             $('#oy-kw-debug').hide();
         },
@@ -1458,6 +1755,73 @@ JS;
     font-size:11px; color:#5d4037; background:#fff3e0;
     border:1px solid #ffe0b2; border-radius:4px;
     padding:8px 10px; margin:0; line-height:1.6;
+}
+
+/* KPI Share label */
+.oy-kw-kpi-share {
+    font-size:11px; color:#1a73e8; font-weight:600;
+    margin-top:4px; letter-spacing:0.02em;
+}
+
+/* Context Panel */
+.oy-kw-context-wrap {
+    margin-bottom:16px;
+}
+.oy-kw-ctx-loading {
+    padding:10px 14px; font-size:12px; color:#666;
+    background:#f6f7f7; border:1px solid #ddd; border-radius:6px;
+}
+.oy-kw-ctx-panel {
+    background:#fff; border:1px solid #c8d8f5; border-radius:6px;
+    padding:14px 16px; box-shadow:0 1px 4px rgba(26,115,232,.08);
+}
+.oy-kw-ctx-header {
+    display:flex; align-items:center; gap:4px;
+    margin-bottom:12px; flex-wrap:wrap;
+}
+.oy-kw-ctx-header strong {
+    font-size:13px; color:#1a1a1a; flex:1; min-width:200px;
+}
+.oy-kw-ctx-badge {
+    background:#e8f0fe; color:#1a73e8; font-size:10px; font-weight:600;
+    padding:2px 8px; border-radius:20px; white-space:nowrap;
+}
+.oy-kw-ctx-grid {
+    display:grid;
+    grid-template-columns:repeat(3, 1fr);
+    gap:10px; margin-bottom:12px;
+}
+.oy-kw-ctx-card {
+    background:#f8f9ff; border:1px solid #dce8fc; border-radius:5px;
+    padding:10px 12px;
+}
+.oy-kw-ctx-label {
+    font-size:11px; color:#666; font-weight:600;
+    text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;
+}
+.oy-kw-ctx-value {
+    font-size:22px; font-weight:700; color:#1a1a1a; line-height:1.2;
+}
+.oy-kw-ctx-sub {
+    font-size:11px; color:#888; margin-top:4px; line-height:1.4;
+}
+.oy-kw-ctx-device {
+    font-size:12px; color:#333; margin-bottom:3px;
+    display:flex; align-items:center; gap:4px;
+}
+.oy-kw-ctx-device .dashicons {
+    font-size:16px; width:16px; height:16px; margin-right:2px;
+}
+.oy-kw-ctx-device em {
+    color:#888; font-style:normal; font-size:11px;
+}
+.oy-kw-ctx-note {
+    font-size:11px; color:#5d4037; background:#fff8e1;
+    border:1px solid #ffe082; border-radius:4px;
+    padding:7px 10px; margin:0; line-height:1.6;
+}
+@media (max-width: 782px) {
+    .oy-kw-ctx-grid { grid-template-columns:1fr; }
 }
 ';
     }
