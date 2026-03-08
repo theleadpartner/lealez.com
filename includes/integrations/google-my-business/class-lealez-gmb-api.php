@@ -4095,124 +4095,142 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
         return $result;
     }
 
-    /**
-     * Recupera las palabras clave de búsqueda mensual (Business Profile Performance API v1).
-     *
-     * Endpoint: GET /v1/{location}/searchkeywords/impressions/monthly
-     *
-     * Devuelve las palabras clave de Búsqueda de Google que se usaron para encontrar el negocio.
-     * Nota: La API devuelve hasta 20 keywords por página. Máximo recomendado: 6 meses de rango.
-     *
-     * @param int    $business_id   ID del post oy_business.
-     * @param string $location_name gmb_location_id.
-     * @param array  $start_month   ['year'=>int, 'month'=>int]
-     * @param array  $end_month     ['year'=>int, 'month'=>int]
-     * @param bool   $use_cache     Usar transient cache (TTL: 12 horas).
-     * @return array|WP_Error       Array de SearchKeywordCount o WP_Error.
-     */
-    public static function get_location_search_keywords(
-        $business_id,
-        $location_name,
-        array $start_month,
-        array $end_month,
-        $use_cache = true
-    ) {
-        $location_id = self::extract_location_id_from_any( $location_name );
+/**
+ * Recupera las palabras clave de búsqueda mensual (Business Profile Performance API v1).
+ *
+ * Endpoint: GET /v1/{location}/searchkeywords/impressions/monthly
+ *
+ * Devuelve las palabras clave de Búsqueda de Google que se usaron para encontrar el negocio.
+ * Nota: La API devuelve hasta 20 keywords por página. Máximo recomendado: 6 meses de rango.
+ *
+ * CORRECCIÓN: La clave real en la respuesta JSON de la API es "searchKeywordsCounts"
+ * (con 's' al final), NO "searchKeywordCounts". La documentación oficial omite la 's
+ * pero la respuesta real de la API la incluye.
+ *
+ * @param int    $business_id   ID del post oy_business.
+ * @param string $location_name gmb_location_id.
+ * @param array  $start_month   ['year'=>int, 'month'=>int]
+ * @param array  $end_month     ['year'=>int, 'month'=>int]
+ * @param bool   $use_cache     Usar transient cache (TTL: 12 horas).
+ * @return array|WP_Error       Array de SearchKeywordCount o WP_Error.
+ */
+public static function get_location_search_keywords(
+    $business_id,
+    $location_name,
+    array $start_month,
+    array $end_month,
+    $use_cache = true
+) {
+    $location_id = self::extract_location_id_from_any( $location_name );
 
-        if ( '' === $location_id ) {
-            return new WP_Error( 'invalid_location', __( 'Location ID inválido para keywords de búsqueda.', 'lealez' ) );
-        }
-
-        $cache_key = 'oy_perf_kw_' . $business_id . '_' . md5(
-            $location_id . serialize( $start_month ) . serialize( $end_month )
-        );
-
-        if ( $use_cache ) {
-            $cached = get_transient( $cache_key );
-            if ( ! empty( $cached ) ) {
-                return $cached;
-            }
-        }
-
-        // Build endpoint with query string (no repeated params here)
-        $location_resource = 'locations/' . $location_id;
-        $endpoint          = '/' . $location_resource . '/searchkeywords/impressions/monthly';
-
-        $qs_parts = array(
-            'monthlyRange.startMonth.year='  . (int) ( $start_month['year']  ?? 0 ),
-            'monthlyRange.startMonth.month=' . (int) ( $start_month['month'] ?? 0 ),
-            'monthlyRange.endMonth.year='    . (int) ( $end_month['year']    ?? 0 ),
-            'monthlyRange.endMonth.month='   . (int) ( $end_month['month']   ?? 0 ),
-            'pageSize=20',
-        );
-
-        $endpoint_with_qs = $endpoint . '?' . implode( '&', $qs_parts );
-
-        $all_keywords  = array();
-        $next_page     = null;
-        $page_count    = 0;
-        $max_pages     = 5; // Safety limit
-
-        do {
-            $current_endpoint = $endpoint_with_qs;
-            if ( $next_page ) {
-                $current_endpoint .= '&pageToken=' . rawurlencode( $next_page );
-            }
-
-            $result = self::make_request(
-                $business_id,
-                $current_endpoint,
-                'https://businessprofileperformance.googleapis.com/v1',
-                'GET',
-                array(),
-                false
-            );
-
-            if ( is_wp_error( $result ) ) {
-                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                    Lealez_GMB_Logger::log(
-                        $business_id,
-                        'error',
-                        'Keywords API error: ' . $result->get_error_message()
-                    );
-                }
-                // Return partial results if we have any
-                if ( ! empty( $all_keywords ) ) {
-                    break;
-                }
-                return $result;
-            }
-
-            $items     = $result['searchKeywordCounts'] ?? array();
-            foreach ( $items as $item ) {
-                $all_keywords[] = $item;
-            }
-
-            $next_page = $result['nextPageToken'] ?? null;
-            $page_count++;
-
-        } while ( $next_page && $page_count < $max_pages );
-
-        // Sort by impressions descending
-        usort( $all_keywords, function( $a, $b ) {
-            $av = isset( $a['insightsValue']['value'] ) ? (int) $a['insightsValue']['value'] : 0;
-            $bv = isset( $b['insightsValue']['value'] ) ? (int) $b['insightsValue']['value'] : 0;
-            return $bv - $av;
-        } );
-
-        // TTL: 12 hours. Keywords change slowly.
-        set_transient( $cache_key, $all_keywords, 12 * HOUR_IN_SECONDS );
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'success',
-                sprintf( 'Keywords API: received %d keywords for location %s', count( $all_keywords ), $location_id )
-            );
-        }
-
-        return $all_keywords;
+    if ( '' === $location_id ) {
+        return new WP_Error( 'invalid_location', __( 'Location ID inválido para keywords de búsqueda.', 'lealez' ) );
     }
+
+    $cache_key = 'oy_perf_kw_' . $business_id . '_' . md5(
+        $location_id . serialize( $start_month ) . serialize( $end_month )
+    );
+
+    if ( $use_cache ) {
+        $cached = get_transient( $cache_key );
+        if ( ! empty( $cached ) ) {
+            return $cached;
+        }
+    }
+
+    // Build endpoint with query string (no repeated params here)
+    $location_resource = 'locations/' . $location_id;
+    $endpoint          = '/' . $location_resource . '/searchkeywords/impressions/monthly';
+
+    $qs_parts = array(
+        'monthlyRange.startMonth.year='  . (int) ( $start_month['year']  ?? 0 ),
+        'monthlyRange.startMonth.month=' . (int) ( $start_month['month'] ?? 0 ),
+        'monthlyRange.endMonth.year='    . (int) ( $end_month['year']    ?? 0 ),
+        'monthlyRange.endMonth.month='   . (int) ( $end_month['month']   ?? 0 ),
+        'pageSize=20',
+    );
+
+    $endpoint_with_qs = $endpoint . '?' . implode( '&', $qs_parts );
+
+    $all_keywords  = array();
+    $next_page     = null;
+    $page_count    = 0;
+    $max_pages     = 5; // Safety limit
+
+    do {
+        $current_endpoint = $endpoint_with_qs;
+        if ( $next_page ) {
+            $current_endpoint .= '&pageToken=' . rawurlencode( $next_page );
+        }
+
+        $result = self::make_request(
+            $business_id,
+            $current_endpoint,
+            'https://businessprofileperformance.googleapis.com/v1',
+            'GET',
+            array(),
+            false
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'error',
+                    'Keywords API error: ' . $result->get_error_message()
+                );
+            }
+            // Return partial results if we have any
+            if ( ! empty( $all_keywords ) ) {
+                break;
+            }
+            return $result;
+        }
+
+        // ── CORRECCIÓN: la clave real en la respuesta de la API es "searchKeywordsCounts"
+        // (con 's' al final). La documentación puede listarla sin 's' pero la respuesta
+        // real HTTP siempre la incluye. Soportar ambas variantes por compatibilidad.
+        $items = $result['searchKeywordsCounts'] ?? $result['searchKeywordCounts'] ?? array();
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $keys_found = array_keys( $result );
+            error_log( sprintf(
+                '[Lealez KW API] page=%d | keys_in_response=%s | items_extracted=%d',
+                $page_count + 1,
+                implode( ', ', $keys_found ),
+                count( $items )
+            ) );
+        }
+
+        foreach ( $items as $item ) {
+            $all_keywords[] = $item;
+        }
+
+        $next_page = $result['nextPageToken'] ?? null;
+        $page_count++;
+
+    } while ( $next_page && $page_count < $max_pages );
+
+    // Sort by impressions descending
+    usort( $all_keywords, function( $a, $b ) {
+        $av = isset( $a['insightsValue']['value'] ) ? (int) $a['insightsValue']['value'] : 0;
+        $bv = isset( $b['insightsValue']['value'] ) ? (int) $b['insightsValue']['value'] : 0;
+        return $bv - $av;
+    } );
+
+    // TTL: 12 hours. Keywords change slowly.
+    set_transient( $cache_key, $all_keywords, 12 * HOUR_IN_SECONDS );
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'Keywords API: received %d keywords for location %s', count( $all_keywords ), $location_id )
+        );
+    }
+
+    return $all_keywords;
+}
 
     /**
      * Limpia el caché de métricas de rendimiento para una ubicación.
