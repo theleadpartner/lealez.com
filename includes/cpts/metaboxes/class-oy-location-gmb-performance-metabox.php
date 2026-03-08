@@ -165,8 +165,20 @@ class OY_Location_GMB_Performance_Metabox {
                         <label for="oy-perf-chart-type"><?php esc_html_e( 'Gráfica', 'lealez' ); ?></label>
                         <select id="oy-perf-chart-type" class="oy-perf-select">
                             <option value="line"><?php esc_html_e( 'Líneas', 'lealez' ); ?></option>
-                            <option value="bar"><?php esc_html_e( 'Barras', 'lealez' ); ?></option>
+                            <option value="bar"><?php esc_html_e( 'Barras (por día)', 'lealez' ); ?></option>
+                            <option value="bar_month"><?php esc_html_e( 'Barras (por mes)', 'lealez' ); ?></option>
+                            <option value="bar_year"><?php esc_html_e( 'Barras (por año)', 'lealez' ); ?></option>
+                            <option value="pie"><?php esc_html_e( 'Torta (distribución)', 'lealez' ); ?></option>
+                            <option value="doughnut"><?php esc_html_e( 'Dona (distribución)', 'lealez' ); ?></option>
                         </select>
+                    </div>
+
+                    <!-- Compare toggle -->
+                    <div class="oy-perf-field-group">
+                        <label class="oy-perf-toggle-label">
+                            <input type="checkbox" id="oy-perf-compare-toggle" checked />
+                            <?php esc_html_e( 'Comparar período anterior', 'lealez' ); ?>
+                        </label>
                     </div>
 
                 </div><!-- /.left -->
@@ -212,6 +224,31 @@ class OY_Location_GMB_Performance_Metabox {
                 </div>
             </div><!-- /.metric-selector -->
 
+            <!-- VIEW MODE TOGGLE -->
+            <div id="oy-perf-view-toggle" class="oy-perf-view-toggle" style="display:none;">
+                <span class="oy-perf-view-toggle__label"><?php esc_html_e( 'Vista:', 'lealez' ); ?></span>
+                <button type="button" class="oy-perf-view-btn oy-perf-view-btn--active" data-view="all">
+                    <span class="dashicons dashicons-grid-view" style="vertical-align:middle;margin-top:-2px;"></span>
+                    <?php esc_html_e( 'Todo', 'lealez' ); ?>
+                </button>
+                <button type="button" class="oy-perf-view-btn" data-view="cards">
+                    <span class="dashicons dashicons-id" style="vertical-align:middle;margin-top:-2px;"></span>
+                    <?php esc_html_e( 'Tarjetas', 'lealez' ); ?>
+                </button>
+                <button type="button" class="oy-perf-view-btn" data-view="chart">
+                    <span class="dashicons dashicons-chart-line" style="vertical-align:middle;margin-top:-2px;"></span>
+                    <?php esc_html_e( 'Gráfico', 'lealez' ); ?>
+                </button>
+                <button type="button" class="oy-perf-view-btn" data-view="table">
+                    <span class="dashicons dashicons-list-view" style="vertical-align:middle;margin-top:-2px;"></span>
+                    <?php esc_html_e( 'Tabla', 'lealez' ); ?>
+                </button>
+                <button type="button" class="oy-perf-view-btn" data-view="comparison">
+                    <span class="dashicons dashicons-arrow-left-alt" style="vertical-align:middle;margin-top:-2px;"></span>
+                    <?php esc_html_e( 'Comparativa', 'lealez' ); ?>
+                </button>
+            </div>
+
             <!-- LOADING / ERROR -->
             <div id="oy-perf-status" class="oy-perf-status" style="display:none;"></div>
             <!-- SYNC STATUS -->
@@ -226,9 +263,12 @@ class OY_Location_GMB_Performance_Metabox {
             <div id="oy-perf-chart-wrap" class="oy-perf-chart-wrap" style="display:none;">
                 <div class="oy-perf-chart-header">
                     <h4 id="oy-perf-chart-title"><?php esc_html_e( 'Evolución de métricas', 'lealez' ); ?></h4>
-                    <span id="oy-perf-chart-period" class="oy-perf-badge"></span>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span id="oy-perf-chart-subtitle" class="oy-perf-chart-subtitle" style="display:none;"></span>
+                        <span id="oy-perf-chart-period" class="oy-perf-badge"></span>
+                    </div>
                 </div>
-                <div class="oy-perf-chart-container">
+                <div class="oy-perf-chart-container" id="oy-perf-chart-container">
                     <canvas id="oy-perf-chart"></canvas>
                 </div>
             </div>
@@ -1275,6 +1315,7 @@ class OY_Location_GMB_Performance_Metabox {
         lastData        : null,
         lastKeywordsData: null,
         sortAsc         : true,
+        currentView     : 'all',   // 'all' | 'cards' | 'chart' | 'table' | 'comparison'
 
         // Month names in Spanish
         monthNames: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
@@ -1359,6 +1400,33 @@ class OY_Location_GMB_Performance_Metabox {
                 if (self.lastData) self.exportCSV(self.lastData);
             });
 
+            // View mode toggle buttons
+            $(document).on('click', '.oy-perf-view-btn', function(){
+                var mode = $(this).data('view');
+                self.setViewMode(mode);
+            });
+
+            // Comparison toggle checkbox - re-apply view visibility
+            $('#oy-perf-compare-toggle').on('change', function(){
+                if (self.lastData) {
+                    if ($(this).is(':checked')) {
+                        self.buildComparison(self.lastData);
+                    } else {
+                        $('#oy-perf-comparison-wrap').hide();
+                    }
+                    self.applyViewMode();
+                }
+            });
+
+            // Chart type change: re-render existing data without new AJAX call
+            $('#oy-perf-chart-type').on('change', function(){
+                if (self.lastData) {
+                    var newType = $(this).val();
+                    self.buildChart(self.lastData, newType);
+                    self.applyViewMode();
+                }
+            });
+
             // Keywords refresh button (force)
             $('#oy-perf-btn-keywords').on('click', function(){ self.fetchKeywords(true); });
 
@@ -1422,6 +1490,75 @@ class OY_Location_GMB_Performance_Metabox {
                 from: fromDate.getFullYear() + '-' + String(fromDate.getMonth()+1).padStart(2,'0'),
                 to  : toVal,
             };
+        },
+
+        // ----------------------------------------------------------------
+        // View Mode
+        // ----------------------------------------------------------------
+
+        setViewMode: function(mode){
+            var self = this;
+            self.currentView = mode || 'all';
+            // Update button active state
+            $('.oy-perf-view-btn').removeClass('oy-perf-view-btn--active');
+            $('.oy-perf-view-btn[data-view="'+self.currentView+'"]').addClass('oy-perf-view-btn--active');
+            self.applyViewMode();
+        },
+
+        applyViewMode: function(){
+            var self = this;
+            var showCards      = false;
+            var showChart      = false;
+            var showTable      = false;
+            var showComparison = false;
+
+            switch (self.currentView) {
+                case 'cards':
+                    showCards = true;
+                    break;
+                case 'chart':
+                    showChart = true;
+                    break;
+                case 'table':
+                    showTable = true;
+                    break;
+                case 'comparison':
+                    showComparison = true;
+                    break;
+                case 'all':
+                default:
+                    showCards = showChart = showTable = showComparison = true;
+                    break;
+            }
+
+            // KPIs
+            if (showCards && self.lastData && self.lastData.data && Object.keys(self.lastData.data.series||{}).length > 0) {
+                $('#oy-perf-kpis').show();
+            } else {
+                $('#oy-perf-kpis').hide();
+            }
+
+            // Chart
+            if (showChart && self.chartInstance) {
+                $('#oy-perf-chart-wrap').show();
+            } else {
+                $('#oy-perf-chart-wrap').hide();
+            }
+
+            // Table
+            if (showTable && self.lastData && self.lastData.data && (self.lastData.data.dates||[]).length > 0) {
+                $('#oy-perf-table-wrap').show();
+            } else {
+                $('#oy-perf-table-wrap').hide();
+            }
+
+            // Comparison — also gated on the checkbox
+            var compareEnabled = $('#oy-perf-compare-toggle').is(':checked');
+            if (showComparison && compareEnabled && self.lastData && Object.keys(self.lastData.comparison||{}).length > 0) {
+                $('#oy-perf-comparison-wrap').show();
+            } else {
+                $('#oy-perf-comparison-wrap').hide();
+            }
         },
 
         // ----------------------------------------------------------------
@@ -1495,8 +1632,17 @@ class OY_Location_GMB_Performance_Metabox {
                 // Table
                 self.buildTable(pd);
 
-                // Comparison
-                self.buildComparison(pd);
+                // Comparison (gated on checkbox)
+                var compareEnabled = $('#oy-perf-compare-toggle').is(':checked');
+                if (compareEnabled) {
+                    self.buildComparison(pd);
+                } else {
+                    $('#oy-perf-comparison-wrap').hide();
+                }
+
+                // Show & apply view mode
+                $('#oy-perf-view-toggle').show();
+                self.applyViewMode();
 
                 // Period badge
                 $('#oy-perf-chart-period').text(pd.period.label || '');
@@ -1917,8 +2063,10 @@ class OY_Location_GMB_Performance_Metabox {
             var dates  = pd.data.dates || [];
             var series = pd.data.series || {};
             var $wrap  = $('#oy-perf-chart-wrap');
+            var $title = $('#oy-perf-chart-title');
+            var $sub   = $('#oy-perf-chart-subtitle');
 
-            if (!dates.length || !Object.keys(series).length) {
+            if (!Object.keys(series).length) {
                 $wrap.hide();
                 return;
             }
@@ -1928,51 +2076,229 @@ class OY_Location_GMB_Performance_Metabox {
                 self.chartInstance = null;
             }
 
-            var datasets = [];
-            $.each(series, function(k, s){
-                var values = dates.map(function(d){ return s.data[d] !== undefined ? s.data[d] : null; });
-                datasets.push({
-                    label          : s.label,
-                    data           : values,
-                    borderColor    : s.color,
-                    backgroundColor: chartType === 'bar' ? s.color + 'BB' : s.color + '22',
-                    borderWidth    : 2,
-                    tension        : 0.3,
-                    fill           : chartType === 'line',
-                    pointRadius    : dates.length > 60 ? 1 : 3,
-                    spanGaps       : true,
-                });
-            });
-
             var ctx = document.getElementById('oy-perf-chart');
             if (!ctx) { return; }
 
-            self.chartInstance = new Chart(ctx, {
-                type : chartType,
-                data : { labels: dates, datasets: datasets },
-                options: {
-                    responsive : true,
-                    interaction: { mode: 'index', intersect: false },
-                    plugins: {
-                        legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
-                        tooltip : {
-                            callbacks: {
-                                label: function(ctx){
-                                    return ' ' + ctx.dataset.label + ': ' + (ctx.raw !== null ? self.formatNum(ctx.raw) : '—');
+            var chartConfig = null;
+
+            // --- PIE / DOUGHNUT: totals distribution -------------------------
+            if (chartType === 'pie' || chartType === 'doughnut') {
+                var pieLabels  = [];
+                var pieValues  = [];
+                var pieColors  = [];
+                $.each(series, function(k, s){
+                    pieLabels.push(s.label);
+                    pieValues.push(s.total);
+                    pieColors.push(s.color);
+                });
+                $title.text('Distribución de métricas');
+                $sub.text('Total del período seleccionado').show();
+                // Adjust canvas height for pie/doughnut
+                $('#oy-perf-chart-container').css('height', '320px');
+                chartConfig = {
+                    type : chartType,
+                    data : {
+                        labels  : pieLabels,
+                        datasets: [{
+                            data           : pieValues,
+                            backgroundColor: pieColors.map(function(c){ return c + 'CC'; }),
+                            borderColor    : pieColors,
+                            borderWidth    : 2,
+                        }]
+                    },
+                    options: {
+                        responsive  : true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'right', labels: { boxWidth: 14, padding: 10, font: { size: 11 } } },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx){
+                                        var total = ctx.dataset.data.reduce(function(a,b){ return a+b; }, 0);
+                                        var pct   = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
+                                        return ' ' + ctx.label + ': ' + self.formatNum(ctx.raw) + ' (' + pct + '%)';
+                                    }
                                 }
                             }
                         }
-                    },
-                    scales: {
-                        x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
-                        y: {
-                            beginAtZero: true,
-                            ticks: { callback: function(v){ return self.formatNum(v); } }
+                    }
+                };
+            }
+
+            // --- BAR BY MONTH ------------------------------------------------
+            else if (chartType === 'bar_month') {
+                if (!dates.length) { $wrap.hide(); return; }
+                var monthMap  = {}; // { 'YYYY-MM': { metricKey: sum } }
+                var monthList = [];
+
+                $.each(dates, function(i, d){
+                    var ym = d.substring(0, 7); // 'YYYY-MM'
+                    if (!monthMap[ym]) {
+                        monthMap[ym] = {};
+                        monthList.push(ym);
+                    }
+                    $.each(series, function(k, s){
+                        monthMap[ym][k] = (monthMap[ym][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
+                    });
+                });
+
+                // Build nice month labels
+                var monthLabels = monthList.map(function(ym){
+                    var parts = ym.split('-');
+                    var mNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+                    return mNames[parseInt(parts[1],10)-1] + ' ' + parts[0];
+                });
+
+                var datasets = [];
+                $.each(series, function(k, s){
+                    datasets.push({
+                        label          : s.label,
+                        data           : monthList.map(function(ym){ return monthMap[ym][k] || 0; }),
+                        backgroundColor: s.color + 'CC',
+                        borderColor    : s.color,
+                        borderWidth    : 1.5,
+                        borderRadius   : 3,
+                    });
+                });
+
+                $title.text('Métricas por mes');
+                $sub.hide();
+                $('#oy-perf-chart-container').css('height', '280px');
+                chartConfig = {
+                    type : 'bar',
+                    data : { labels: monthLabels, datasets: datasets },
+                    options: {
+                        responsive : true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
+                            tooltip : {
+                                callbacks: {
+                                    label: function(ctx){
+                                        return ' ' + ctx.dataset.label + ': ' + self.formatNum(ctx.raw);
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { ticks: { maxRotation: 45 } },
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
                         }
                     }
-                }
-            });
+                };
+            }
 
+            // --- BAR BY YEAR -------------------------------------------------
+            else if (chartType === 'bar_year') {
+                if (!dates.length) { $wrap.hide(); return; }
+                var yearMap  = {}; // { 'YYYY': { metricKey: sum } }
+                var yearList = [];
+
+                $.each(dates, function(i, d){
+                    var yr = d.substring(0, 4);
+                    if (!yearMap[yr]) {
+                        yearMap[yr] = {};
+                        yearList.push(yr);
+                    }
+                    $.each(series, function(k, s){
+                        yearMap[yr][k] = (yearMap[yr][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
+                    });
+                });
+
+                var datasets = [];
+                $.each(series, function(k, s){
+                    datasets.push({
+                        label          : s.label,
+                        data           : yearList.map(function(yr){ return yearMap[yr][k] || 0; }),
+                        backgroundColor: s.color + 'CC',
+                        borderColor    : s.color,
+                        borderWidth    : 1.5,
+                        borderRadius   : 4,
+                    });
+                });
+
+                $title.text('Métricas por año');
+                $sub.hide();
+                $('#oy-perf-chart-container').css('height', '280px');
+                chartConfig = {
+                    type : 'bar',
+                    data : { labels: yearList, datasets: datasets },
+                    options: {
+                        responsive : true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
+                            tooltip : {
+                                callbacks: {
+                                    label: function(ctx){
+                                        return ' ' + ctx.dataset.label + ': ' + self.formatNum(ctx.raw);
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {},
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
+                        }
+                    }
+                };
+            }
+
+            // --- LINE / BAR (by day) ----------------------------------------
+            else {
+                if (!dates.length) { $wrap.hide(); return; }
+                var datasets = [];
+                $.each(series, function(k, s){
+                    var values = dates.map(function(d){ return s.data[d] !== undefined ? s.data[d] : null; });
+                    datasets.push({
+                        label          : s.label,
+                        data           : values,
+                        borderColor    : s.color,
+                        backgroundColor: chartType === 'bar' ? s.color + 'BB' : s.color + '22',
+                        borderWidth    : 2,
+                        tension        : 0.3,
+                        fill           : chartType === 'line',
+                        pointRadius    : dates.length > 60 ? 1 : 3,
+                        spanGaps       : true,
+                    });
+                });
+
+                $title.text('Evolución de métricas');
+                $sub.hide();
+                $('#oy-perf-chart-container').css('height', '280px');
+                chartConfig = {
+                    type : chartType,
+                    data : { labels: dates, datasets: datasets },
+                    options: {
+                        responsive : true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
+                            tooltip : {
+                                callbacks: {
+                                    label: function(ctx){
+                                        return ' ' + ctx.dataset.label + ': ' + (ctx.raw !== null ? self.formatNum(ctx.raw) : '—');
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
+                            y: {
+                                beginAtZero: true,
+                                ticks: { callback: function(v){ return self.formatNum(v); } }
+                            }
+                        }
+                    }
+                };
+            }
+
+            if (!chartConfig) { $wrap.hide(); return; }
+
+            self.chartInstance = new Chart(ctx, chartConfig);
             $wrap.show();
         },
 
@@ -2020,11 +2346,19 @@ class OY_Location_GMB_Performance_Metabox {
             var series     = pd.data.series || {};
             var comparison = pd.comparison || {};
             var $grid      = $('#oy-perf-comparison-grid');
+            var $wrap      = $('#oy-perf-comparison-wrap');
             $grid.empty();
+
+            // Gate on the comparison toggle checkbox
+            var compareEnabled = $('#oy-perf-compare-toggle').is(':checked');
+            if (!compareEnabled) {
+                $wrap.hide();
+                return;
+            }
 
             var hasComp = Object.keys(comparison).length > 0;
             if (!hasComp) {
-                $('#oy-perf-comparison-wrap').hide();
+                $wrap.hide();
                 return;
             }
 
@@ -2061,7 +2395,7 @@ class OY_Location_GMB_Performance_Metabox {
                 );
             });
 
-            $('#oy-perf-comparison-wrap').show();
+            $wrap.show();
         },
 
         // ----------------------------------------------------------------
@@ -2126,6 +2460,7 @@ class OY_Location_GMB_Performance_Metabox {
         hideKeywordsStatus: function(){ $('#oy-perf-keywords-status').hide(); },
 
         hideResults: function(){
+            $('#oy-perf-view-toggle').hide();
             $('#oy-perf-kpis, #oy-perf-chart-wrap, #oy-perf-table-wrap, #oy-perf-comparison-wrap, #oy-perf-footer').hide();
         },
 
@@ -2248,8 +2583,41 @@ JS;
     background:#e8f0fe; color:#1a73e8; padding:2px 10px;
     border-radius:20px; font-size:12px; font-weight:600;
 }
+.oy-perf-chart-subtitle {
+    background:#fce8b2; color:#b06000; padding:2px 10px;
+    border-radius:20px; font-size:12px; font-weight:500;
+}
 .oy-perf-chart-container { position:relative; height:280px; }
-.oy-perf-chart-container canvas { max-height:280px; }
+.oy-perf-chart-container canvas { max-height:100%; }
+
+/* View Mode Toggle */
+.oy-perf-view-toggle {
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+    margin-bottom:14px; padding:8px 12px;
+    background:#f0f4ff; border:1px solid #c8d8ff; border-radius:6px;
+}
+.oy-perf-view-toggle__label {
+    font-weight:600; font-size:12px; color:#555; white-space:nowrap; margin-right:4px;
+}
+.oy-perf-view-btn {
+    display:inline-flex; align-items:center; gap:4px;
+    padding:4px 12px; border-radius:20px; cursor:pointer; font-size:12px;
+    background:#fff; border:1.5px solid #ccc; color:#444;
+    transition:all .15s;
+}
+.oy-perf-view-btn:hover { border-color:#4285f4; color:#1a73e8; background:#e8f0fe; }
+.oy-perf-view-btn--active {
+    background:#4285f4; border-color:#4285f4; color:#fff !important; font-weight:600;
+}
+.oy-perf-view-btn--active:hover { background:#3367d6; border-color:#3367d6; }
+
+/* Comparison toggle label */
+.oy-perf-toggle-label {
+    display:inline-flex; align-items:center; gap:5px;
+    cursor:pointer; font-size:12px; color:#444; font-weight:500;
+    white-space:nowrap;
+}
+.oy-perf-toggle-label input[type="checkbox"] { cursor:pointer; margin:0; }
 
 /* Table */
 .oy-perf-table-wrap {
