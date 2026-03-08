@@ -832,10 +832,12 @@ class OY_Location_GMB_Keywords_Metabox {
             $('#oy-kw-month-from').html(opts);
             $('#oy-kw-month-to').html(opts);
 
-            // Default: from = 6 months ago, to = current month
-            var fromD = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+            // FIX: default avoids the current month (API lag ~30 days).
+            // from = 7 months ago, to = 2 months ago.
+            var fromD = new Date(now.getFullYear(), now.getMonth() - 7, 1);
+            var toD   = new Date(now.getFullYear(), now.getMonth() - 2, 1);
             var fromV = fromD.getFullYear() + '-' + String(fromD.getMonth()+1).padStart(2,'0');
-            var toV   = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+            var toV   = toD.getFullYear()   + '-' + String(toD.getMonth()+1).padStart(2,'0');
             $('#oy-kw-month-from').val(fromV);
             $('#oy-kw-month-to').val(toV);
         },
@@ -914,16 +916,25 @@ class OY_Location_GMB_Keywords_Metabox {
                 // KPIs top 3
                 self.buildKPIs(aggregated);
 
-                // Chart top 20
-                self.buildChart(aggregated, isPerMonth ? null : null);
-
-                // Table
+                // FIX: table and footer render first — isolated from buildChart.
+                // Chart.js throws when the canvas is inside a display:none parent
+                // (0x0 dimensions). That exception was silently aborting the rest
+                // of this callback, so buildTable and the footer never ran.
                 self.buildTable(data, '');
 
                 // Footer
                 $('#oy-kw-last-fetched').text('Última consulta: ' + (data.fetched_at || ''));
                 $('#oy-kw-total-info').text(' | ' + aggregated.length + ' frases clave encontradas');
                 $('#oy-kw-footer').show();
+
+                // Chart top 20 — after table so any Chart.js exception is isolated
+                try {
+                    self.buildChart(aggregated);
+                } catch(chartErr) {
+                    if (window.console && console.warn) {
+                        console.warn('[OyKw] buildChart error (non-fatal):', chartErr);
+                    }
+                }
 
             }).fail(function(xhr){
                 self.showStatus('error', 'Error de conexión: ' + (xhr.statusText || 'desconocido'));
@@ -958,8 +969,9 @@ class OY_Location_GMB_Keywords_Metabox {
                     self.showSaveStatus('error', (resp.data && resp.data.message) ? resp.data.message : 'Error al guardar.');
                     return;
                 }
+                // FIX: showSaveStatus already prepends the ✅ icon — do not duplicate it here.
                 self.showSaveStatus('success',
-                    '✅ ' + resp.data.message + ' — ' + (resp.data.synced_at || '')
+                    resp.data.message + ' — ' + (resp.data.synced_at || '')
                 );
             }).fail(function(xhr){
                 $btn.prop('disabled', false);
@@ -1024,6 +1036,10 @@ class OY_Location_GMB_Keywords_Metabox {
             var ctx = document.getElementById('oy-kw-main-chart');
             if (!ctx) { return; }
 
+            // FIX: show the wrapper BEFORE new Chart() so canvas has real dimensions.
+            // Chart.js reads canvas.offsetWidth/Height at instantiation — 0x0 throws.
+            $wrap.show();
+
             self.chartInstance = new Chart(ctx, {
                 type: 'bar',
                 data: {
@@ -1066,8 +1082,6 @@ class OY_Location_GMB_Keywords_Metabox {
                     }
                 }
             });
-
-            $wrap.show();
         },
 
         buildMonthFilter: function(startM, endM, monthlyRaw){
