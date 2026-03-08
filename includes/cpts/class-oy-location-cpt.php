@@ -208,6 +208,24 @@ if ( file_exists( $performance_metabox_file ) ) {
     }
 }
 
+/**
+ * Metabox: Frases Clave de Búsqueda GMB (Keywords)
+ *
+ * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-keywords-metabox.php
+ *
+ * Panel dedicado exclusivamente a las palabras clave de búsqueda mensual
+ * con desglose por mes, gráfica independiente y botón de guardado en meta.
+ * AJAX propio: oy_gmb_kw_fetch, oy_gmb_kw_save
+ */
+$keywords_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-keywords-metabox.php';
+if ( file_exists( $keywords_metabox_file ) ) {
+    require_once $keywords_metabox_file;
+
+    if ( class_exists( 'OY_Location_GMB_Keywords_Metabox' ) ) {
+        new OY_Location_GMB_Keywords_Metabox();
+    }
+}
+
 }
 
 
