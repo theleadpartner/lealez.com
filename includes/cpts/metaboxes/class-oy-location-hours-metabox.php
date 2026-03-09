@@ -1,1390 +1,995 @@
 <?php
 /**
- * Metabox: Horario de Mayor Interés
+ * OY Location Address & Geolocation Metabox
  *
- * Panel que muestra en qué días y a qué horas el negocio genera mayor interés,
- * usando la Business Profile Performance API como única fuente de verdad para
- * los pesos por día de semana.
+ * Externalized metabox for "Dirección y Geolocalización" to keep CPT file smaller.
  *
  * @package Lealez
- * @since   1.0.0
+ * @subpackage CPTs/Metaboxes
+ * @since 1.0.0
  */
 
+// Exit if accessed directly
 if ( ! defined( 'ABSPATH' ) ) {
-	exit;
+    exit;
 }
 
-/**
- * Blindaje adicional:
- * Si por error otro archivo ya declaró esta clase específica,
- * salimos inmediatamente para evitar el fatal.
- */
-if ( class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) {
-	return;
-}
-
-/**
- * Class OY_Location_GMB_Busyhours_Metabox_Unique
- *
- * AJAX handlers:
- *  - wp_ajax_oy_gmb_busy_compute  → Computa índice de interés por día desde Performance API
- *  - wp_ajax_oy_gmb_busy_save     → Guarda gmb_peak_hours en post meta
- */
-if ( ! class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) :
-
-class OY_Location_GMB_Busyhours_Metabox_Unique {
-
-	const NONCE_ACTION = 'oy_gmb_busyhours_nonce';
-	const META_KEY     = 'gmb_peak_hours';
-
-	/**
-	 * Ponderación de cada métrica para el cálculo del Índice de Interés.
-	 *
-	 * @var array
-	 */
-	private static $metric_weights = array(
-		'CALL_CLICKS'                        => 3.0,
-		'BUSINESS_BOOKINGS'                  => 3.0,
-		'BUSINESS_FOOD_ORDERS'               => 3.0,
-		'BUSINESS_DIRECTION_REQUESTS'        => 2.5,
-		'BUSINESS_CONVERSATIONS'             => 2.0,
-		'WEBSITE_CLICKS'                     => 1.5,
-		'BUSINESS_FOOD_MENU_CLICKS'          => 1.5,
-		'BUSINESS_IMPRESSIONS_MOBILE_MAPS'   => 0.8,
-		'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' => 0.8,
-		'BUSINESS_IMPRESSIONS_DESKTOP_MAPS'  => 0.6,
-		'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH'=> 0.6,
-	);
-
-	/**
-	 * Grupos de métricas para el desglose visual.
-	 *
-	 * @var array
-	 */
-	private static $metric_groups = array(
-		'high_intent'  => array(
-			'label'   => 'Acciones directas',
-			'color'   => '#e53935',
-			'metrics' => array( 'CALL_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS' ),
-		),
-		'visit_intent' => array(
-			'label'   => 'Intención de visita',
-			'color'   => '#f57c00',
-			'metrics' => array( 'BUSINESS_DIRECTION_REQUESTS', 'BUSINESS_CONVERSATIONS' ),
-		),
-		'research'     => array(
-			'label'   => 'Investigación activa',
-			'color'   => '#1976d2',
-			'metrics' => array( 'WEBSITE_CLICKS', 'BUSINESS_FOOD_MENU_CLICKS' ),
-		),
-		'impressions'  => array(
-			'label'   => 'Visibilidad pasiva',
-			'color'   => '#757575',
-			'metrics' => array(
-				'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
-				'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
-				'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
-				'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
-			),
-		),
-	);
-
-	/**
-	 * Plantillas de distribución horaria.
-	 *
-	 * @var array
-	 */
-	private static $templates = array(
-		'comercio'    => array( 0, 0, 0, 0, 0, 0,  5, 20, 45, 65, 75, 70, 55, 50, 60, 70, 65, 55, 40, 25, 10,  5,  0, 0 ),
-		'restaurante' => array( 0, 0, 0, 0, 0, 0,  5, 10, 25, 35, 55, 75, 80, 65, 40, 50, 65, 75, 85, 75, 50, 25,  5, 0 ),
-		'cafe'        => array( 0, 0, 0, 0, 0, 0, 25, 65, 80, 75, 65, 55, 45, 35, 25, 20, 15, 10,  5,  0,  0,  0,  0, 0 ),
-		'nocturno'    => array( 0, 0, 0, 0, 0, 0,  0,  0,  5, 10, 15, 20, 25, 25, 30, 35, 45, 60, 75, 85, 90, 80, 60, 30 ),
-		'continuo'    => array( 0, 0, 0, 0, 0, 0,  5, 20, 45, 55, 55, 55, 55, 55, 55, 55, 50, 45, 35, 20, 10,  5,  0,  0 ),
-		'oficina'     => array( 0, 0, 0, 0, 0, 0,  0,  5, 20, 70, 80, 75, 60, 55, 65, 70, 65, 45, 20,  5,  0,  0,  0,  0 ),
-		'gimnasio'    => array( 0, 0, 0, 0, 0, 15, 55, 75, 65, 45, 35, 35, 30, 30, 35, 40, 55, 70, 65, 50, 30, 10,  0,  0 ),
-	);
-
-		/**
-	 * Etiquetas legibles de plantillas automáticas.
-	 *
-	 * @var array
-	 */
-	private static $template_labels = array(
-		'comercio'    => 'Comercio / Tienda',
-		'restaurante' => 'Restaurante',
-		'cafe'        => 'Café / Desayunos',
-		'nocturno'    => 'Nocturno / Bar',
-		'continuo'    => 'Horario continuo',
-		'oficina'     => 'Oficina / Servicios',
-		'gimnasio'    => 'Gimnasio / Fitness',
-	);
-
-		/**
-	 * Determina automáticamente la plantilla horaria más coherente
-	 * según el mix de indicadores y el comportamiento semanal.
-	 *
-	 * @param array $day_weights     Pesos por día.
-	 * @param array $group_breakdown Composición por grupos y día.
-	 * @return string
-	 */
-	private function infer_auto_template( array $day_weights, array $group_breakdown ) {
-		$weekend_days = array( 'friday', 'saturday', 'sunday' );
-		$weekday_days = array( 'monday', 'tuesday', 'wednesday', 'thursday' );
-
-		$weekend_score = 0.0;
-		$weekday_score = 0.0;
-
-		foreach ( $weekend_days as $d ) {
-			$weekend_score += isset( $day_weights[ $d ] ) ? (float) $day_weights[ $d ] : 0.0;
-		}
-		foreach ( $weekday_days as $d ) {
-			$weekday_score += isset( $day_weights[ $d ] ) ? (float) $day_weights[ $d ] : 0.0;
-		}
-
-		$totals = array(
-			'high_intent'  => 0.0,
-			'visit_intent' => 0.0,
-			'research'     => 0.0,
-			'impressions'  => 0.0,
-		);
-
-		foreach ( $group_breakdown as $day => $groups ) {
-			if ( ! is_array( $groups ) ) {
-				continue;
-			}
-			foreach ( $totals as $group_key => $unused ) {
-				$totals[ $group_key ] += isset( $groups[ $group_key ] ) ? (float) $groups[ $group_key ] : 0.0;
-			}
-		}
-
-		$dominant_group = 'impressions';
-		$dominant_value = -1;
-		foreach ( $totals as $group_key => $value ) {
-			if ( $value > $dominant_value ) {
-				$dominant_value = $value;
-				$dominant_group = $group_key;
-			}
-		}
-
-		$weekend_ratio = 0.0;
-		$total_week    = $weekend_score + $weekday_score;
-		if ( $total_week > 0 ) {
-			$weekend_ratio = $weekend_score / $total_week;
-		}
-
-		// Reglas automáticas
-		if ( $weekend_ratio >= 0.52 && $totals['high_intent'] >= max( $totals['research'], $totals['impressions'] ) ) {
-			return 'nocturno';
-		}
-
-		if ( $dominant_group === 'high_intent' && $weekend_ratio >= 0.42 ) {
-			return 'restaurante';
-		}
-
-		if ( $dominant_group === 'research' && $weekday_score >= $weekend_score ) {
-			return 'oficina';
-		}
-
-		if ( $dominant_group === 'visit_intent' && $weekday_score >= $weekend_score ) {
-			return 'comercio';
-		}
-
-		if ( $dominant_group === 'impressions' && $weekday_score >= $weekend_score ) {
-			return 'continuo';
-		}
-
-		if ( $dominant_group === 'high_intent' && $weekday_score > $weekend_score ) {
-			return 'gimnasio';
-		}
-
-		return 'comercio';
-	}
-
-		/**
-	 * Construye automáticamente la distribución horaria para toda la semana
-	 * usando la plantilla inferida.
-	 *
-	 * @param string $template_key Plantilla detectada.
-	 * @return array
-	 */
-	private function build_hours_from_template( $template_key ) {
-		$template_key = isset( self::$templates[ $template_key ] ) ? $template_key : 'comercio';
-		$template     = self::$templates[ $template_key ];
-
-		return array(
-			'monday'    => $template,
-			'tuesday'   => $template,
-			'wednesday' => $template,
-			'thursday'  => $template,
-			'friday'    => $template,
-			'saturday'  => $template,
-			'sunday'    => $template,
-		);
-	}
-
-	public function __construct() {
-		add_action( 'add_meta_boxes', array( $this, 'register_meta_box' ) );
-		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
-		add_action( 'wp_ajax_oy_gmb_busy_compute', array( $this, 'ajax_compute_interest_index' ) );
-		add_action( 'wp_ajax_oy_gmb_busy_save', array( $this, 'ajax_save_peak_hours' ) );
-	}
-
-	public function register_meta_box() {
-		add_meta_box(
-			'oy_location_gmb_busyhours',
-			__( '🕐 Horario de Mayor Interés', 'lealez' ),
-			array( $this, 'render_meta_box' ),
-			'oy_location',
-			'normal',
-			'default'
-		);
-	}
-
-	public function enqueue_scripts( $hook ) {
-		global $post;
-
-		if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
-			return;
-		}
-		if ( ! $post || 'oy_location' !== $post->post_type ) {
-			return;
-		}
-
-		if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
-			if ( defined( 'LEALEZ_ASSETS_URL' ) ) {
-				$chartjs_url = LEALEZ_ASSETS_URL . 'js/vendor/chart.umd.min.js';
-			} else {
-				$plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
-				$chartjs_url = plugins_url( 'assets/js/vendor/chart.umd.min.js', $plugin_root . '/index.php' );
-			}
-			wp_register_script( 'chartjs-v4', $chartjs_url, array(), '4.4.3', true );
-
-			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-				error_log( '[OyBusyHours] Chart.js URL: ' . $chartjs_url );
-			}
-		}
-		wp_enqueue_script( 'chartjs-v4' );
-
-		wp_register_script( 'oy-busyhours', false, array( 'jquery', 'chartjs-v4' ), '2.1.0', true );
-		wp_enqueue_script( 'oy-busyhours' );
-
-		$saved_raw  = get_post_meta( $post->ID, self::META_KEY, true );
-		$saved_data = ( ! empty( $saved_raw ) ) ? json_decode( $saved_raw, true ) : null;
-
-		$business_id   = get_post_meta( $post->ID, 'parent_business_id', true );
-		$location_id   = get_post_meta( $post->ID, 'gmb_location_id', true );
-		$gmb_connected = false;
-		if ( $business_id ) {
-			$flag          = get_post_meta( $business_id, '_gmb_connected', true );
-			$has_refresh   = (bool) get_post_meta( $business_id, 'gmb_refresh_token', true );
-			$gmb_connected = $flag || $has_refresh;
-		}
-
-		wp_localize_script(
-			'oy-busyhours',
-			'oyBusyConfig',
-			array(
-				'postId'         => $post->ID,
-				'nonce'          => wp_create_nonce( self::NONCE_ACTION ),
-				'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
-				'savedData'      => $saved_data,
-				'metricGroups'   => self::$metric_groups,
-				'templateLabels' => self::$template_labels,
-				'gmbConnected'   => $gmb_connected,
-				'hasLocationId'  => ! empty( $location_id ),
-			)
-		);
-
-		wp_add_inline_script( 'oy-busyhours', $this->get_inline_js() );
-		wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
-	}
-
-	public function render_meta_box( $post ) {
-		$location_id   = get_post_meta( $post->ID, 'gmb_location_id', true );
-		$business_id   = get_post_meta( $post->ID, 'parent_business_id', true );
-		$gmb_connected = false;
-
-		if ( $business_id ) {
-			$flag          = get_post_meta( $business_id, '_gmb_connected', true );
-			$has_refresh   = (bool) get_post_meta( $business_id, 'gmb_refresh_token', true );
-			$gmb_connected = $flag || $has_refresh;
-		}
-
-		$saved_raw  = get_post_meta( $post->ID, self::META_KEY, true );
-		$saved_data = ( ! empty( $saved_raw ) ) ? json_decode( $saved_raw, true ) : null;
-		$has_data   = ! empty( $saved_data['day_weights'] );
-
-		$busiest_day         = get_post_meta( $post->ID, 'gmb_busiest_day_of_week', true );
-		$auto_template       = isset( $saved_data['auto_template'] ) ? (string) $saved_data['auto_template'] : '';
-		$auto_template_label = isset( self::$template_labels[ $auto_template ] ) ? self::$template_labels[ $auto_template ] : '';
-
-		$day_labels  = array(
-			'monday'    => 'Lunes',
-			'tuesday'   => 'Martes',
-			'wednesday' => 'Miércoles',
-			'thursday'  => 'Jueves',
-			'friday'    => 'Viernes',
-			'saturday'  => 'Sábado',
-			'sunday'    => 'Domingo',
-		);
-		?>
-		<div id="oy-busy-wrap">
-
-			<?php if ( ! $gmb_connected ) : ?>
-				<div class="oy-busy-notice oy-busy-notice--warn">
-					<span class="dashicons dashicons-warning"></span>
-					<?php esc_html_e( 'El negocio padre no tiene Google Business Profile conectado. Conecta GMB primero para calcular el índice de interés.', 'lealez' ); ?>
-				</div>
-			<?php elseif ( ! $location_id ) : ?>
-				<div class="oy-busy-notice oy-busy-notice--warn">
-					<span class="dashicons dashicons-warning"></span>
-					<?php esc_html_e( 'Esta ubicación no está vinculada a una propiedad GMB. Configura el GMB Location ID primero.', 'lealez' ); ?>
-				</div>
-			<?php endif; ?>
-
-			<?php if ( $has_data && ! empty( $saved_data['last_computed'] ) ) : ?>
-				<div class="oy-busy-computed-header">
-					<div class="oy-busy-computed-header__left">
-						<span class="oy-busy-source-pill oy-busy-source-pill--api">
-							<span class="dashicons dashicons-chart-bar" style="font-size:13px;vertical-align:middle;margin-right:3px;"></span>
-							<?php esc_html_e( 'Índice calculado desde Performance API', 'lealez' ); ?>
-						</span>
-						<?php
-						$metrics_used = isset( $saved_data['metrics_used'] ) ? (int) $saved_data['metrics_used'] : 0;
-						$period_start = isset( $saved_data['period']['start'] ) ? $saved_data['period']['start'] : '';
-						$period_end   = isset( $saved_data['period']['end'] ) ? $saved_data['period']['end'] : '';
-						if ( $period_start && $period_end ) :
-							?>
-							<span class="oy-busy-period-label">
-								<?php echo esc_html( $period_start . ' → ' . $period_end ); ?>
-								<?php if ( $metrics_used ) : ?>
-									· <?php echo esc_html( $metrics_used ); ?> <?php esc_html_e( 'métricas', 'lealez' ); ?>
-								<?php endif; ?>
-							</span>
-						<?php endif; ?>
-
-						<?php if ( $auto_template_label ) : ?>
-							<span class="oy-busy-auto-pill">
-								<?php echo esc_html( 'Curva automática: ' . $auto_template_label ); ?>
-							</span>
-						<?php endif; ?>
-					</div>
-					<div class="oy-busy-computed-header__right">
-						<?php if ( $busiest_day && isset( $day_labels[ $busiest_day ] ) ) : ?>
-							<span class="oy-busy-peak-badge">
-								📍 <?php echo esc_html( $day_labels[ $busiest_day ] ); ?> <?php esc_html_e( 'es el día de mayor interés', 'lealez' ); ?>
-							</span>
-						<?php endif; ?>
-					</div>
-				</div>
-			<?php endif; ?>
-
-			<div class="oy-busy-toolbar">
-				<div class="oy-busy-toolbar__left">
-					<div class="oy-busy-field-group">
-						<label><?php esc_html_e( 'Permanencia estimada:', 'lealez' ); ?></label>
-						<input type="number" id="oy-busy-stay-min" min="5" max="480" step="5" value="45" class="small-text" style="width:60px;">
-						<span>–</span>
-						<input type="number" id="oy-busy-stay-max" min="5" max="480" step="5" value="90" class="small-text" style="width:60px;">
-						<span class="description"><?php esc_html_e( 'min', 'lealez' ); ?></span>
-					</div>
-
-					<div class="oy-busy-field-group oy-busy-field-group--auto">
-						<span class="dashicons dashicons-admin-generic" style="font-size:14px;vertical-align:middle;margin-right:2px;"></span>
-						<span class="description">
-							<?php esc_html_e( 'La distribución horaria se genera automáticamente con base en los indicadores del negocio. Ya no requiere ajuste manual.', 'lealez' ); ?>
-						</span>
-					</div>
-				</div>
-
-				<div class="oy-busy-toolbar__right">
-					<?php if ( $gmb_connected && $location_id ) : ?>
-						<button type="button" id="oy-busy-compute-btn" class="button button-primary">
-							<span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span>
-							<?php esc_html_e( 'Calcular índice desde GMB', 'lealez' ); ?>
-						</button>
-					<?php endif; ?>
-
-					<button type="button" id="oy-busy-save-btn" class="button button-secondary">
-						<span class="dashicons dashicons-saved" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span>
-						<?php esc_html_e( 'Guardar', 'lealez' ); ?>
-					</button>
-				</div>
-			</div>
-
-			<div id="oy-busy-status-msg" class="oy-busy-status" style="display:none;"></div>
-
-			<div class="oy-busy-dark-panel">
-				<div class="oy-busy-day-tabs" id="oy-busy-day-tabs">
-					<?php
-					$days  = array(
-						'monday'    => 'LUN',
-						'tuesday'   => 'MAR',
-						'wednesday' => 'MIÉ',
-						'thursday'  => 'JUE',
-						'friday'    => 'VIE',
-						'saturday'  => 'SÁB',
-						'sunday'    => 'DOM',
-					);
-					$first = true;
-					foreach ( $days as $key => $label ) :
-						?>
-						<button type="button" class="oy-busy-day-tab<?php echo $first ? ' oy-busy-day-tab--active' : ''; ?>" data-day="<?php echo esc_attr( $key ); ?>">
-							<span class="oy-busy-day-bar-track">
-								<span class="oy-busy-day-bar" id="oy-day-bar-<?php echo esc_attr( $key ); ?>" style="height:5%;"></span>
-							</span>
-							<span class="oy-busy-day-name"><?php echo esc_html( $label ); ?></span>
-							<span class="oy-busy-day-index" id="oy-day-index-<?php echo esc_attr( $key ); ?>">—</span>
-						</button>
-						<?php
-						$first = false;
-					endforeach;
-					?>
-				</div>
-
-				<div class="oy-busy-status-row">
-					<span class="oy-busy-live-dot" id="oy-busy-live-dot"></span>
-					<div>
-						<div class="oy-busy-status-title" id="oy-busy-status-title">
-							<?php esc_html_e( 'Sin datos — calcule el índice desde GMB', 'lealez' ); ?>
-						</div>
-						<div class="oy-busy-status-subtitle" id="oy-busy-status-subtitle">
-							<?php esc_html_e( 'Haga clic en "Calcular índice desde GMB" para generar automáticamente el comportamiento semanal y la curva horaria.', 'lealez' ); ?>
-						</div>
-					</div>
-
-					<div class="oy-busy-day-score-badge" id="oy-busy-day-score-badge" style="display:none;">
-						<span class="oy-busy-score-num" id="oy-busy-score-num">0</span>
-						<span class="oy-busy-score-label"><?php esc_html_e( 'Índice', 'lealez' ); ?></span>
-					</div>
-				</div>
-
-				<div class="oy-busy-chart-container">
-					<canvas id="oy-busy-chart"></canvas>
-				</div>
-
-				<div class="oy-busy-breakdown" id="oy-busy-breakdown" style="display:none;">
-					<span class="oy-busy-breakdown__label"><?php esc_html_e( 'Composición del índice:', 'lealez' ); ?></span>
-					<div class="oy-busy-breakdown__bars" id="oy-busy-breakdown-bars"></div>
-				</div>
-
-				<div class="oy-busy-stay-row">
-					<span class="dashicons dashicons-clock" style="margin-right:5px;opacity:.7;"></span>
-					<span><?php esc_html_e( 'Permanencia estimada:', 'lealez' ); ?></span>
-					<strong id="oy-busy-stay-display" style="margin-left:5px;">—</strong>
-				</div>
-			</div>
-
-			<div class="oy-busy-footer">
-				<strong><?php esc_html_e( '¿Cómo funciona el Índice de Interés?', 'lealez' ); ?></strong>
-				<?php esc_html_e( 'Se obtienen 90 días de datos de la Performance API y se calcula un score ponderado por día de semana, donde las acciones de alta intención pesan más que las impresiones pasivas. El día con mayor score queda en 100 y los demás se normalizan proporcionalmente.', 'lealez' ); ?>
-				<br>
-				<em><?php esc_html_e( 'La curva horaria ya no se ajusta manualmente. Ahora se infiere automáticamente con base en la composición de indicadores y el patrón semanal detectado.', 'lealez' ); ?></em>
-			</div>
-		</div>
-		<?php
-	}
-
-	public function ajax_compute_interest_index() {
-		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
-		}
-
-		$post_id = absint( $_POST['post_id'] ?? 0 );
-
-		if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
-			wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
-		}
-
-		$location_name = get_post_meta( $post_id, 'gmb_location_id', true );
-		$business_id   = get_post_meta( $post_id, 'parent_business_id', true );
-
-		if ( ! $location_name || ! $business_id ) {
-			wp_send_json_error( array( 'message' => __( 'Faltan datos GMB (gmb_location_id o parent_business_id).', 'lealez' ) ) );
-		}
-
-		if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Clase Lealez_GMB_API no encontrada.', 'lealez' ) ) );
-		}
-
-		$end_ts   = strtotime( 'yesterday' );
-		$start_ts = $end_ts - ( 89 * DAY_IN_SECONDS );
-
-		$start_date = array(
-			'year'  => (int) gmdate( 'Y', $start_ts ),
-			'month' => (int) gmdate( 'n', $start_ts ),
-			'day'   => (int) gmdate( 'j', $start_ts ),
-		);
-		$end_date = array(
-			'year'  => (int) gmdate( 'Y', $end_ts ),
-			'month' => (int) gmdate( 'n', $end_ts ),
-			'day'   => (int) gmdate( 'j', $end_ts ),
-		);
-
-		$all_metrics = array_keys( self::$metric_weights );
-
-		$result = Lealez_GMB_API::get_location_performance_metrics(
-			$business_id,
-			$location_name,
-			$all_metrics,
-			$start_date,
-			$end_date,
-			true
-		);
-
-		if ( is_wp_error( $result ) ) {
-			wp_send_json_error(
-				array(
-					'message' => $result->get_error_message(),
-					'code'    => $result->get_error_code(),
-				)
-			);
-		}
-
-		$dow_map          = array( 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday' );
-		$scores_by_date   = array();
-		$metrics_received = array();
-
-		$outer_list = isset( $result['multiDailyMetricTimeSeries'] )
-			? (array) $result['multiDailyMetricTimeSeries']
-			: array();
-
-		foreach ( $outer_list as $outer_item ) {
-			if ( ! is_array( $outer_item ) ) {
-				continue;
-			}
-
-			$inner_list = isset( $outer_item['dailyMetricTimeSeries'] )
-				? (array) $outer_item['dailyMetricTimeSeries']
-				: array();
-
-			foreach ( $inner_list as $item ) {
-				if ( ! is_array( $item ) ) {
-					continue;
-				}
-
-				$metric_key = isset( $item['dailyMetric'] ) ? strtoupper( (string) $item['dailyMetric'] ) : '';
-
-				if ( ! isset( self::$metric_weights[ $metric_key ] ) ) {
-					continue;
-				}
-
-				$dated_values = isset( $item['timeSeries']['datedValues'] )
-					? (array) $item['timeSeries']['datedValues']
-					: array();
-
-				$metric_has_data = false;
-
-				foreach ( $dated_values as $dv ) {
-					if ( ! is_array( $dv ) || ! isset( $dv['date'] ) ) {
-						continue;
-					}
-
-					$d        = $dv['date'];
-					$date_str = sprintf(
-						'%04d-%02d-%02d',
-						isset( $d['year'] ) ? (int) $d['year'] : 0,
-						isset( $d['month'] ) ? (int) $d['month'] : 0,
-						isset( $d['day'] ) ? (int) $d['day'] : 0
-					);
-
-					$val = 0;
-					if ( array_key_exists( 'value', $dv ) && null !== $dv['value'] ) {
-						$val = (int) $dv['value'];
-					}
-
-					if ( ! isset( $scores_by_date[ $date_str ] ) ) {
-						$scores_by_date[ $date_str ] = array();
-					}
-					$scores_by_date[ $date_str ][ $metric_key ] = $val;
-
-					if ( $val > 0 ) {
-						$metric_has_data = true;
-					}
-				}
-
-				if ( $metric_has_data ) {
-					$metrics_received[] = $metric_key;
-				}
-			}
-		}
-
-		$metrics_received = array_unique( $metrics_received );
-
-		if ( empty( $scores_by_date ) ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'No se recibieron datos de la Performance API. Verifica que el scope OAuth businessprofileperformance.readonly esté habilitado y que existan datos para este período.', 'lealez' ),
-				)
-			);
-		}
-
-		$dow_scores = array_fill_keys( $dow_map, 0.0 );
-		$dow_counts = array_fill_keys( $dow_map, 0 );
-
-		$dow_group_scores = array();
-		foreach ( $dow_map as $dk ) {
-			$dow_group_scores[ $dk ] = array(
-				'high_intent'  => 0.0,
-				'visit_intent' => 0.0,
-				'research'     => 0.0,
-				'impressions'  => 0.0,
-			);
-		}
-
-		$metric_to_group = array();
-		foreach ( self::$metric_groups as $gk => $gd ) {
-			foreach ( $gd['metrics'] as $mk ) {
-				$metric_to_group[ $mk ] = $gk;
-			}
-		}
-
-		foreach ( $scores_by_date as $date_str => $metric_vals ) {
-			$ts      = strtotime( $date_str );
-			$dow_idx = (int) gmdate( 'w', $ts );
-			$dow_key = $dow_map[ $dow_idx ];
-
-			$day_score = 0.0;
-			foreach ( $metric_vals as $mk => $val ) {
-				if ( ! isset( self::$metric_weights[ $mk ] ) ) {
-					continue;
-				}
-				$weighted = (float) $val * self::$metric_weights[ $mk ];
-				$day_score += $weighted;
-				$group = $metric_to_group[ $mk ] ?? 'impressions';
-				$dow_group_scores[ $dow_key ][ $group ] += $weighted;
-			}
-
-			$dow_scores[ $dow_key ] += $day_score;
-			$dow_counts[ $dow_key ] += 1;
-		}
-
-		$dow_averages       = array();
-		$dow_group_averages = array();
-
-		foreach ( $dow_map as $dk ) {
-			$cnt = max( 1, $dow_counts[ $dk ] );
-			$dow_averages[ $dk ] = round( $dow_scores[ $dk ] / $cnt, 4 );
-
-			$dow_group_averages[ $dk ] = array();
-			foreach ( $dow_group_scores[ $dk ] as $gk => $gs ) {
-				$dow_group_averages[ $dk ][ $gk ] = round( $gs / $cnt, 4 );
-			}
-		}
-
-		$max_avg = max( $dow_averages );
-		if ( $max_avg <= 0 ) {
-			wp_send_json_error(
-				array(
-					'message' => __( 'Todos los indicadores tienen valor cero para este período. No hay suficiente actividad registrada.', 'lealez' ),
-				)
-			);
-		}
-
-		$day_weights     = array();
-		$group_breakdown = array();
-
-		foreach ( $dow_averages as $dk => $avg ) {
-			$day_weights[ $dk ] = (int) round( $avg / $max_avg * 100 );
-
-			$group_breakdown[ $dk ] = array();
-			foreach ( $dow_group_averages[ $dk ] as $gk => $gav ) {
-				$group_breakdown[ $dk ][ $gk ] = round( $gav / $max_avg * 100, 1 );
-			}
-		}
-
-		$auto_template = $this->infer_auto_template( $day_weights, $group_breakdown );
-		$hours         = $this->build_hours_from_template( $auto_template );
-
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			error_log( '[OyBusyHours] Índice de interés por DOW: ' . wp_json_encode( $day_weights, JSON_UNESCAPED_UNICODE ) );
-			error_log( '[OyBusyHours] Métricas con datos: ' . implode( ', ', $metrics_received ) );
-			error_log( '[OyBusyHours] Días procesados en BD: ' . count( $scores_by_date ) );
-			error_log( '[OyBusyHours] Plantilla automática inferida: ' . $auto_template );
-		}
-
-		$period = array(
-			'start' => sprintf( '%04d-%02d-%02d', $start_date['year'], $start_date['month'], $start_date['day'] ),
-			'end'   => sprintf( '%04d-%02d-%02d', $end_date['year'], $end_date['month'], $end_date['day'] ),
-		);
-
-		wp_send_json_success(
-			array(
-				'day_weights'         => $day_weights,
-				'scores_raw'          => $dow_averages,
-				'group_breakdown'     => $group_breakdown,
-				'hours'               => $hours,
-				'auto_template'       => $auto_template,
-				'auto_template_label' => isset( self::$template_labels[ $auto_template ] ) ? self::$template_labels[ $auto_template ] : $auto_template,
-				'metrics_used'        => count( $metrics_received ),
-				'metrics_list'        => $metrics_received,
-				'days_processed'      => count( $scores_by_date ),
-				'period'              => $period,
-				'computed_at'         => gmdate( 'Y-m-d\TH:i:s\Z' ),
-			)
-		);
-	}
-
-	public function ajax_save_peak_hours() {
-		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
-
-		if ( ! current_user_can( 'edit_posts' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
-		}
-
-		$post_id   = absint( $_POST['post_id'] ?? 0 );
-		$peak_json = wp_unslash( $_POST['peak_data'] ?? '' );
-
-		if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
-			wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
-		}
-
-		if ( empty( $peak_json ) ) {
-			wp_send_json_error( array( 'message' => __( 'No se recibieron datos.', 'lealez' ) ) );
-		}
-
-		$peak_data = json_decode( $peak_json, true );
-
-		if ( JSON_ERROR_NONE !== json_last_error() ) {
-			wp_send_json_error( array( 'message' => __( 'JSON inválido recibido.', 'lealez' ) ) );
-		}
-
-		$day_keys    = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
-		$clean_hours = array();
-		$hours_input = isset( $peak_data['hours'] ) ? (array) $peak_data['hours'] : array();
-
-		foreach ( $day_keys as $dk ) {
-			$clean_hours[ $dk ] = array();
-			$day_arr = isset( $hours_input[ $dk ] ) ? (array) $hours_input[ $dk ] : array();
-			for ( $h = 0; $h < 24; $h++ ) {
-				$clean_hours[ $dk ][] = isset( $day_arr[ $h ] )
-					? max( 0, min( 100, (int) $day_arr[ $h ] ) )
-					: 0;
-			}
-		}
-
-		$clean_weights = array();
-		$weights_input = isset( $peak_data['day_weights'] ) ? (array) $peak_data['day_weights'] : array();
-		foreach ( $day_keys as $dk ) {
-			$clean_weights[ $dk ] = isset( $weights_input[ $dk ] )
-				? max( 0, min( 100, (int) $weights_input[ $dk ] ) )
-				: 0;
-		}
-
-		$clean_breakdown = array();
-		$breakdown_input = isset( $peak_data['metric_breakdown'] ) ? (array) $peak_data['metric_breakdown'] : array();
-		$valid_groups    = array( 'high_intent', 'visit_intent', 'research', 'impressions' );
-		foreach ( $day_keys as $dk ) {
-			$clean_breakdown[ $dk ] = array();
-			$dbd = isset( $breakdown_input[ $dk ] ) ? (array) $breakdown_input[ $dk ] : array();
-			foreach ( $valid_groups as $gk ) {
-				$clean_breakdown[ $dk ][ $gk ] = isset( $dbd[ $gk ] )
-					? max( 0, (float) $dbd[ $gk ] )
-					: 0.0;
-			}
-		}
-
-		$period = array();
-		if ( isset( $peak_data['period'] ) && is_array( $peak_data['period'] ) ) {
-			$period['start'] = sanitize_text_field( $peak_data['period']['start'] ?? '' );
-			$period['end']   = sanitize_text_field( $peak_data['period']['end'] ?? '' );
-		}
-
-		$auto_template = sanitize_text_field( $peak_data['auto_template'] ?? '' );
-		if ( ! isset( self::$templates[ $auto_template ] ) ) {
-			$auto_template = $this->infer_auto_template( $clean_weights, $clean_breakdown );
-		}
-
-		$clean_data = array(
-			'hours'               => $clean_hours,
-			'day_weights'         => $clean_weights,
-			'day_scores_raw'      => array(),
-			'metric_breakdown'    => $clean_breakdown,
-			'avg_stay_min'        => max( 5, min( 480, (int) ( $peak_data['avg_stay_min'] ?? 45 ) ) ),
-			'avg_stay_max'        => max( 5, min( 480, (int) ( $peak_data['avg_stay_max'] ?? 90 ) ) ),
-			'last_computed'       => sanitize_text_field( $peak_data['last_computed'] ?? '' ),
-			'period'              => $period,
-			'metrics_used'        => max( 0, (int) ( $peak_data['metrics_used'] ?? 0 ) ),
-			'auto_template'       => $auto_template,
-			'auto_template_label' => isset( self::$template_labels[ $auto_template ] ) ? self::$template_labels[ $auto_template ] : '',
-			'source'              => 'api',
-		);
-
-		if ( isset( $peak_data['day_scores_raw'] ) && is_array( $peak_data['day_scores_raw'] ) ) {
-			foreach ( $day_keys as $dk ) {
-				$clean_data['day_scores_raw'][ $dk ] = isset( $peak_data['day_scores_raw'][ $dk ] )
-					? round( (float) $peak_data['day_scores_raw'][ $dk ], 4 )
-					: 0.0;
-			}
-		}
-
-		$json_to_save = wp_json_encode( $clean_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-		update_post_meta( $post_id, self::META_KEY, $json_to_save );
-
-		$busiest_day = '';
-		$max_weight  = -1;
-		foreach ( $clean_data['day_weights'] as $dk => $w ) {
-			if ( $w > $max_weight ) {
-				$max_weight  = $w;
-				$busiest_day = $dk;
-			}
-		}
-
-		if ( $busiest_day ) {
-			update_post_meta( $post_id, 'gmb_busiest_day_of_week', $busiest_day );
-
-			$day_hours    = $clean_data['hours'][ $busiest_day ] ?? array();
-			$best_val     = -1;
-			$busiest_hour = 0;
-			foreach ( $day_hours as $h => $v ) {
-				$scaled = (int) round( $v * ( $max_weight / 100 ) );
-				if ( $scaled > $best_val ) {
-					$best_val     = $scaled;
-					$busiest_hour = $h;
-				}
-			}
-			update_post_meta( $post_id, 'gmb_busiest_hour_of_day', $busiest_hour );
-		}
-
-		wp_send_json_success(
-			array(
-				'message'       => __( 'Horario de mayor interés guardado correctamente.', 'lealez' ),
-				'busiest_day'   => $busiest_day,
-				'auto_template' => $auto_template,
-			)
-		);
-	}
-
-	private function get_inline_js() {
-		return <<<'JSEOF'
-(function ($) {
-    'use strict';
-
-    var OyBusyHours = {
-        config: null,
-        chart: null,
-        currentDay: 'monday',
-        data: null,
-
-        DAYS: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-
-        HOUR_LABELS: [
-            '12a','1a','2a','3a','4a','5a',
-            '6a','7a','8a','9a','10a','11a',
-            '12p','1p','2p','3p','4p','5p',
-            '6p','7p','8p','9p','10p','11p'
-        ],
-
-        DOW_LABELS: {
-            monday:'Lunes', tuesday:'Martes', wednesday:'Miércoles',
-            thursday:'Jueves', friday:'Viernes', saturday:'Sábado', sunday:'Domingo'
-        },
-
-        GROUP_COLORS: {
-            high_intent:  '#e53935',
-            visit_intent: '#f57c00',
-            research:     '#1976d2',
-            impressions:  '#757575'
-        },
-
-        GROUP_LABELS: {
-            high_intent:  'Acciones directas',
-            visit_intent: 'Intención de visita',
-            research:     'Investigación activa',
-            impressions:  'Visibilidad pasiva'
-        },
-
-        init: function (config) {
-            this.config = config;
-
-            if (config.savedData && config.savedData.day_weights) {
-                this.data = config.savedData;
-                if (!this.data.hours) this.data.hours = this.buildEmptyHours();
-                if (!this.data.metric_breakdown) this.data.metric_breakdown = {};
-                if (!this.data.avg_stay_min) this.data.avg_stay_min = 45;
-                if (!this.data.avg_stay_max) this.data.avg_stay_max = 90;
-            } else {
-                this.data = this.buildDefaultData();
+if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
+
+    class OY_Location_Address_Metabox {
+
+        /**
+         * Post type slug
+         *
+         * @var string
+         */
+        private $post_type = 'oy_location';
+
+        /**
+         * Nonce name/action usados por OY_Location_CPT
+         * (reutilizamos el mismo para no romper el flujo de guardado)
+         */
+        private $nonce_name   = 'oy_location_meta_nonce';
+        private $nonce_action = 'oy_location_save_meta';
+
+        /**
+         * Constructor
+         */
+        public function __construct() {
+            add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+
+            /**
+             * ✅ Guardado propio SOLO para campos de este metabox que NO están
+             * contemplados en el save_meta_boxes del CPT.
+             *
+             * Importante:
+             * - No tocamos otros metas para evitar interferencia.
+             * - Usamos el mismo nonce del CPT.
+             */
+            add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 18, 2 );
+        }
+
+        /**
+         * Register metabox
+         */
+        public function register_metabox() {
+
+            add_meta_box(
+                'oy_location_address',
+                __( 'Dirección y Geolocalización', 'lealez' ),
+                array( $this, 'render_meta_box' ),
+                $this->post_type,
+                'normal',
+                'high'
+            );
+        }
+
+        /**
+         * ✅ Parse helper: convertir serviceArea RAW (Google) a lista "humana" de labels.
+         *
+         * La API de GBP puede variar la forma:
+         * - serviceArea.places.placeInfos[] con placeName / name / placeId
+         * - serviceArea.places.placeNames[] (strings)
+         * - otros casos: usamos placeId o regionCode como fallback
+         *
+         * @param array $service_area_raw
+         * @return array array de strings (labels) únicos
+         */
+        private function parse_service_area_labels_from_raw( $service_area_raw ) {
+            if ( ! is_array( $service_area_raw ) || empty( $service_area_raw ) ) {
+                return array();
             }
 
-            $('#oy-busy-stay-min').val(this.data.avg_stay_min || 45);
-            $('#oy-busy-stay-max').val(this.data.avg_stay_max || 90);
+            $labels = array();
 
-            this.bindEvents();
-            this.updateAllDayTabs();
-            this.renderChart(this.currentDay);
-            this.updateStatusLabel(this.currentDay);
-            this.updateBreakdown(this.currentDay);
-            this.updateStayDisplay();
+            // Caso A: places.placeInfos[]
+            if (
+                isset( $service_area_raw['places'] )
+                && is_array( $service_area_raw['places'] )
+                && isset( $service_area_raw['places']['placeInfos'] )
+                && is_array( $service_area_raw['places']['placeInfos'] )
+            ) {
+                foreach ( $service_area_raw['places']['placeInfos'] as $pi ) {
+                    if ( ! is_array( $pi ) ) {
+                        continue;
+                    }
 
-            if (!config.savedData && config.gmbConnected && config.hasLocationId) {
-                setTimeout(function () {
-                    OyBusyHours.showStatusMsg(
-                        'No hay datos guardados. Haz clic en "Calcular índice desde GMB" para generar automáticamente el índice y la curva horaria.',
-                        'info'
-                    );
-                }, 500);
-            }
-        },
+                    $label = '';
+                    if ( ! empty( $pi['placeName'] ) ) {
+                        $label = (string) $pi['placeName'];
+                    } elseif ( ! empty( $pi['displayName'] ) ) {
+                        $label = (string) $pi['displayName'];
+                    } elseif ( ! empty( $pi['name'] ) ) {
+                        $label = (string) $pi['name'];
+                    } elseif ( ! empty( $pi['placeId'] ) ) {
+                        $label = (string) $pi['placeId'];
+                    }
 
-        buildDefaultData: function () {
-            return {
-                hours: this.buildEmptyHours(),
-                day_weights: { monday:0, tuesday:0, wednesday:0, thursday:0, friday:0, saturday:0, sunday:0 },
-                day_scores_raw: {},
-                metric_breakdown: {},
-                avg_stay_min: 45,
-                avg_stay_max: 90,
-                last_computed: '',
-                period: {},
-                metrics_used: 0,
-                auto_template: '',
-                auto_template_label: '',
-                source: 'api'
-            };
-        },
-
-        buildEmptyHours: function () {
-            var h = {};
-            this.DAYS.forEach(function (d) { h[d] = new Array(24).fill(0); });
-            return h;
-        },
-
-        bindEvents: function () {
-            var self = this;
-
-            $(document).on('click', '.oy-busy-day-tab', function () {
-                self.switchDay($(this).data('day'));
-            });
-
-            $('#oy-busy-compute-btn').on('click', function () {
-                self.computeFromAPI();
-            });
-
-            $('#oy-busy-save-btn').on('click', function () {
-                self.saveData();
-            });
-
-            $('#oy-busy-stay-min, #oy-busy-stay-max').on('input change', function () {
-                self.data.avg_stay_min = parseInt($('#oy-busy-stay-min').val(), 10) || 45;
-                self.data.avg_stay_max = parseInt($('#oy-busy-stay-max').val(), 10) || 90;
-                self.updateStayDisplay();
-            });
-        },
-
-        switchDay: function (day) {
-            this.currentDay = day;
-            $('.oy-busy-day-tab').removeClass('oy-busy-day-tab--active');
-            $('.oy-busy-day-tab[data-day="' + day + '"]').addClass('oy-busy-day-tab--active');
-
-            this.renderChart(day);
-            this.updateStatusLabel(day);
-            this.updateBreakdown(day);
-        },
-
-        updateAllDayTabs: function () {
-            var weights = this.data.day_weights || {};
-            var vals    = Object.values(weights);
-            var max     = vals.length ? Math.max.apply(null, vals) : 1;
-            if (max <= 0) {
-                max = 1;
+                    $label = trim( $label );
+                    if ( '' !== $label ) {
+                        $labels[] = $label;
+                    }
+                }
             }
 
-            this.DAYS.forEach(function (day) {
-                var w   = weights[day] || 0;
-                var pct = Math.max(3, Math.round((w / max) * 100));
-                $('#oy-day-bar-' + day).css('height', pct + '%');
-                $('#oy-day-index-' + day).text(w > 0 ? w : '—');
-            });
-        },
-
-        renderChart: function (day) {
-            var rawHours = (this.data.hours && this.data.hours[day]) ? this.data.hours[day] : new Array(24).fill(0);
-            var weight   = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
-                ? (this.data.day_weights[day] / 100)
-                : 0;
-
-            var values = rawHours.map(function (v) {
-                return Math.min(100, Math.round(v * weight));
-            });
-
-            var displayValues = values.slice(6, 24);
-            var displayLabels = this.HOUR_LABELS.slice(6, 24);
-
-            var todayDows = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-            var todayDay  = todayDows[new Date().getDay()];
-            var curHour   = new Date().getHours();
-            var isToday   = (todayDay === day);
-            var curBarIdx = (isToday && curHour >= 6 && curHour <= 23) ? (curHour - 6) : -1;
-
-            var bgColors = displayValues.map(function (v, i) {
-                if (i === curBarIdx) { return 'rgba(199,90,72,0.88)'; }
-                if (v >= 70) { return 'rgba(120,120,120,0.85)'; }
-                if (v >= 45) { return 'rgba(155,155,155,0.75)'; }
-                if (v >= 20) { return 'rgba(185,185,185,0.65)'; }
-                return 'rgba(210,210,210,0.35)';
-            });
-
-            var ctx = document.getElementById('oy-busy-chart');
-            if (!ctx) { return; }
-            if (this.chart) {
-                this.chart.destroy();
-                this.chart = null;
+            // Caso B: places.placeNames[] (strings)
+            if (
+                isset( $service_area_raw['places'] )
+                && is_array( $service_area_raw['places'] )
+                && isset( $service_area_raw['places']['placeNames'] )
+                && is_array( $service_area_raw['places']['placeNames'] )
+            ) {
+                foreach ( $service_area_raw['places']['placeNames'] as $pn ) {
+                    $pn = trim( (string) $pn );
+                    if ( '' !== $pn ) {
+                        $labels[] = $pn;
+                    }
+                }
             }
-            if (typeof Chart === 'undefined') {
-                console.warn('[OyBusyHours] Chart.js no disponible todavía.');
+
+            // Caso C: places[] directo
+            if ( isset( $service_area_raw['placeInfos'] ) && is_array( $service_area_raw['placeInfos'] ) ) {
+                foreach ( $service_area_raw['placeInfos'] as $pi ) {
+                    if ( ! is_array( $pi ) ) {
+                        continue;
+                    }
+                    $label = '';
+                    if ( ! empty( $pi['placeName'] ) ) {
+                        $label = (string) $pi['placeName'];
+                    } elseif ( ! empty( $pi['displayName'] ) ) {
+                        $label = (string) $pi['displayName'];
+                    } elseif ( ! empty( $pi['name'] ) ) {
+                        $label = (string) $pi['name'];
+                    } elseif ( ! empty( $pi['placeId'] ) ) {
+                        $label = (string) $pi['placeId'];
+                    }
+                    $label = trim( $label );
+                    if ( '' !== $label ) {
+                        $labels[] = $label;
+                    }
+                }
+            }
+
+            // Fallback: si no sacamos nada, usar regionCode/placeId
+            if ( empty( $labels ) ) {
+                if ( ! empty( $service_area_raw['regionCode'] ) ) {
+                    $labels[] = trim( (string) $service_area_raw['regionCode'] );
+                }
+                if ( ! empty( $service_area_raw['placeId'] ) ) {
+                    $labels[] = trim( (string) $service_area_raw['placeId'] );
+                }
+            }
+
+            // Normalizar: unique + limpiar
+            $labels = array_map(
+                function( $v ) {
+                    $v = trim( (string) $v );
+                    $v = preg_replace( '/\s{2,}/', ' ', $v );
+                    return $v;
+                },
+                $labels
+            );
+
+            $labels = array_values( array_filter( array_unique( $labels ) ) );
+
+            return $labels;
+        }
+
+        /**
+         * Save metabox (solo service areas)
+         *
+         * @param int     $post_id
+         * @param WP_Post $post
+         */
+        public function save_meta_box( $post_id, $post ) {
+
+            // Security checks
+            if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
                 return;
             }
 
-            this.chart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: displayLabels,
-                    datasets: [{
-                        data: displayValues,
-                        backgroundColor: bgColors,
-                        borderColor: bgColors,
-                        borderRadius: 4,
-                        borderSkipped: false,
-                        barPercentage: 0.80,
-                        categoryPercentage: 0.90
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: { duration: 200 },
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: {
-                            displayColors: false,
-                            callbacks: {
-                                title: function (items) { return items[0].label; },
-                                label: function (item) {
-                                    var v = item.raw;
-                                    if (v === 0)  { return 'Sin actividad / cerrado'; }
-                                    if (v <= 15)  { return 'Muy bajo interés'; }
-                                    if (v <= 40)  { return 'Bajo interés'; }
-                                    if (v <= 65)  { return 'Interés normal'; }
-                                    if (v <= 85)  { return 'Alto interés'; }
-                                    return 'Máximo interés';
-                                }
-                            },
-                            backgroundColor: 'rgba(20,20,20,0.93)',
-                            titleColor: '#fff',
-                            bodyColor: '#ddd',
-                            padding: 10,
-                            cornerRadius: 6
+            if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+                return;
+            }
+
+            if ( ! current_user_can( 'edit_post', $post_id ) ) {
+                return;
+            }
+
+            // ✅ Guardar location_service_areas[] (chips)
+            if ( isset( $_POST['location_service_areas'] ) && is_array( $_POST['location_service_areas'] ) ) {
+                $raw = wp_unslash( $_POST['location_service_areas'] );
+
+                $clean = array();
+                foreach ( $raw as $v ) {
+                    $v = sanitize_text_field( (string) $v );
+                    $v = trim( preg_replace( '/\s{2,}/', ' ', $v ) );
+                    if ( '' !== $v ) {
+                        $clean[] = $v;
+                    }
+                }
+
+                $clean = array_values( array_filter( array_unique( $clean ) ) );
+
+                update_post_meta( $post_id, 'location_service_areas', $clean );
+
+                // Si hay algo, marcamos flag (útil para UI/validaciones)
+                if ( ! empty( $clean ) ) {
+                    update_post_meta( $post_id, 'service_area_enabled', '1' );
+                } else {
+                    // Si el usuario lo dejó vacío manualmente, no borramos gmb_service_area_raw,
+                    // solo indicamos que no hay selección manual.
+                    delete_post_meta( $post_id, 'service_area_enabled' );
+                }
+            } else {
+                // Si no viene el array, no borramos nada automáticamente para evitar pérdida accidental.
+                // (ej: guardado parcial o conflicto de metaboxes)
+            }
+        }
+
+        /**
+         * Render Address meta box
+         *
+         * @param WP_Post $post
+         */
+        public function render_meta_box( $post ) {
+            $address_line1        = get_post_meta( $post->ID, 'location_address_line1', true );
+            $address_line2        = get_post_meta( $post->ID, 'location_address_line2', true );
+            $neighborhood         = get_post_meta( $post->ID, 'location_neighborhood', true );
+            $city                 = get_post_meta( $post->ID, 'location_city', true );
+            $state                = get_post_meta( $post->ID, 'location_state', true );
+            $country              = get_post_meta( $post->ID, 'location_country', true );
+            $postal_code          = get_post_meta( $post->ID, 'location_postal_code', true );
+            $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
+            $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
+
+            // ✅ Service areas (campo humano)
+            $service_areas = get_post_meta( $post->ID, 'location_service_areas', true );
+            if ( ! is_array( $service_areas ) ) {
+                $service_areas = array();
+            }
+
+            // ✅ Fallback: si no hay lista humana, intentar derivarla de RAW de GMB
+            if ( empty( $service_areas ) ) {
+                $gmb_service_area_raw = get_post_meta( $post->ID, 'gmb_service_area_raw', true );
+                if ( is_array( $gmb_service_area_raw ) ) {
+                    $derived = $this->parse_service_area_labels_from_raw( $gmb_service_area_raw );
+                    if ( ! empty( $derived ) ) {
+                        $service_areas = $derived;
+
+                        // Persistimos para que ya quede “humano” en el post
+                        update_post_meta( $post->ID, 'location_service_areas', $service_areas );
+                        update_post_meta( $post->ID, 'service_area_enabled', '1' );
+                    }
+                }
+            }
+
+            // ✅ Fallback coords desde gmb_latlng_raw
+            if ( ( $latitude === '' || $latitude === false ) || ( $longitude === '' || $longitude === false ) ) {
+                $latlng_raw = get_post_meta( $post->ID, 'gmb_latlng_raw', true );
+                if ( is_array( $latlng_raw ) ) {
+                    if ( ( $latitude === '' || $latitude === false ) && ! empty( $latlng_raw['latitude'] ) ) {
+                        $latitude = (string) $latlng_raw['latitude'];
+                        update_post_meta( $post->ID, 'location_latitude', sanitize_text_field( $latitude ) );
+                    }
+                    if ( ( $longitude === '' || $longitude === false ) && ! empty( $latlng_raw['longitude'] ) ) {
+                        $longitude = (string) $latlng_raw['longitude'];
+                        update_post_meta( $post->ID, 'location_longitude', sanitize_text_field( $longitude ) );
+                    }
+                }
+            }
+
+            $formatted_address    = get_post_meta( $post->ID, 'location_formatted_address', true );
+            $map_url              = get_post_meta( $post->ID, 'location_map_url', true );
+            $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
+            $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
+
+            if ( '' === $show_address ) {
+                $show_address = '1';
+            }
+
+            if ( empty( $country ) ) {
+                $country = '';
+            }
+
+            // Determine initial states
+            $is_service_area    = ( '1' === (string) $service_area_only );
+            $is_show_address    = ( '1' === (string) $show_address );
+            $address_hidden     = $is_service_area && ! $is_show_address;
+            $show_address_row   = $is_service_area;
+
+            // Build initial map embed URL
+            $has_coords   = ( $latitude && $longitude );
+            $embed_url    = '';
+            $map_link_url = $map_url;
+
+            $has_embed = false;
+            if ( $map_url && strpos( $map_url, 'cid=' ) !== false ) {
+                $parsed_cid = '';
+                parse_str( wp_parse_url( $map_url, PHP_URL_QUERY ), $qs );
+                if ( ! empty( $qs['cid'] ) ) {
+                    $parsed_cid = $qs['cid'];
+                }
+                if ( $parsed_cid ) {
+                    $embed_url = 'https://maps.google.com/maps?cid=' . rawurlencode( $parsed_cid ) . '&output=embed';
+                    $has_embed = true;
+                }
+            }
+
+            if ( ! $has_embed && $has_coords ) {
+                $embed_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude ) . '&z=17&output=embed';
+                $has_embed = true;
+            }
+
+            if ( empty( $map_link_url ) && $has_coords ) {
+                $map_link_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude );
+            }
+
+            $has_coords = $has_embed;
+            ?>
+
+            <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
+            <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:16px;">
+                <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
+                    📍 <?php _e( 'Ubicación de la empresa', 'lealez' ); ?>
+                </h4>
+                <p class="description" style="margin:0 0 12px;">
+                    <?php _e( 'Si los clientes visitan tu empresa, agrega una dirección. Si solo ofreces servicios en el domicilio del cliente o en línea, activa la opción "Sin ubicación física".', 'lealez' ); ?>
+                </p>
+
+                <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+                    <input type="checkbox"
+                           name="service_area_only"
+                           id="service_area_only"
+                           value="1"
+                        <?php checked( $service_area_only, '1' ); ?>>
+                    <strong><?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?></strong>
+                </label>
+
+                <div id="oy-show-address-row"
+                     style="display:<?php echo $show_address_row ? 'flex' : 'none'; ?>; align-items:center; gap:10px; margin-top:6px;">
+                    <label class="oy-toggle-label" style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox"
+                               name="show_address_to_customers"
+                               id="show_address_to_customers"
+                               value="1"
+                            <?php checked( $show_address, '1' ); ?>>
+                        <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
+                    </label>
+                </div>
+            </div>
+
+            <?php /* ── Áreas de servicio (UI tipo GMB) ── */ ?>
+            <div style="background:#fff; border:1px solid #e2e4e7; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
+                <h4 style="margin:0 0 6px; font-size:14px; color:#1d2327;">
+                    🗺️ <?php _e( 'Áreas de servicio (Google)', 'lealez' ); ?>
+                </h4>
+                <p class="description" style="margin:0 0 12px;">
+                    <?php _e( 'Define en qué ciudades / regiones / países prestas servicio. Se sincroniza desde GMB (<code>serviceArea</code>) y puedes ajustarlo manualmente aquí. La UI está preparada para múltiples áreas, igual que en Google.', 'lealez' ); ?>
+                </p>
+
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                    <input type="text"
+                           id="oy-service-area-input"
+                           class="regular-text"
+                           placeholder="<?php esc_attr_e( 'Ej: Barranquilla, Atlántico, Colombia', 'lealez' ); ?>"
+                           style="min-width:280px; flex:1;">
+                    <button type="button" class="button" id="oy-service-area-add">+ <?php _e( 'Agregar', 'lealez' ); ?></button>
+                </div>
+
+                <div id="oy-service-area-tags" style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <?php if ( ! empty( $service_areas ) ) : ?>
+                        <?php foreach ( $service_areas as $sa ) :
+                            $sa = trim( (string) $sa );
+                            if ( '' === $sa ) { continue; }
+                            ?>
+                            <span class="oy-sa-tag" data-value="<?php echo esc_attr( $sa ); ?>" style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">
+                                <span class="oy-sa-text"><?php echo esc_html( $sa ); ?></span>
+                                <button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>
+                                <input type="hidden" name="location_service_areas[]" value="<?php echo esc_attr( $sa ); ?>">
+                            </span>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+
+                <p class="description" style="margin-top:10px;">
+                    <?php _e( 'Tip: si presionas Enter en el campo, también se agrega el área.', 'lealez' ); ?>
+                </p>
+            </div>
+
+            <?php /* ── Layout de dos columnas: Campos | Mapa (igual a la UI de GMB) ── */ ?>
+            <div id="oy-address-map-layout" style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
+
+                <?php /* ── Columna izquierda: campos de dirección ── */ ?>
+                <div id="oy-address-fields-col" style="flex:1; min-width:280px;">
+
+                    <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
+                        <table class="form-table" style="margin-top:0;">
+                            <tr>
+                                <th scope="row" style="width:160px;">
+                                    <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_address_line1"
+                                           id="location_address_line1"
+                                           value="<?php echo esc_attr( $address_line1 ); ?>"
+                                           class="large-text"
+                                           placeholder="<?php esc_attr_e( 'Ej: Calle 10 # 25-30', 'lealez' ); ?>">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[0]</code>', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <label for="location_address_line2"><?php _e( 'Complemento', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_address_line2"
+                                           id="location_address_line2"
+                                           value="<?php echo esc_attr( $address_line2 ); ?>"
+                                           class="large-text"
+                                           placeholder="<?php esc_attr_e( 'Ej: Local 202, Piso 2, Edificio Torre Norte', 'lealez' ); ?>">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.subPremise</code> o <code>addressLines[1]</code>', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <label for="location_neighborhood"><?php _e( 'Barrio/Colonia', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_neighborhood"
+                                           id="location_neighborhood"
+                                           value="<?php echo esc_attr( $neighborhood ); ?>"
+                                           class="regular-text">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.sublocality</code> (si disponible). ⚙️ También editable manualmente.', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_city"
+                                           id="location_city"
+                                           value="<?php echo esc_attr( $city ); ?>"
+                                           class="regular-text">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.locality</code>', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <label for="location_state"><?php _e( 'Estado/Departamento', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_state"
+                                           id="location_state"
+                                           value="<?php echo esc_attr( $state ); ?>"
+                                           class="regular-text">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.administrativeArea</code>', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_country"
+                                           id="location_country"
+                                           value="<?php echo esc_attr( $country ); ?>"
+                                           class="regular-text"
+                                           placeholder="<?php esc_attr_e( 'CO, MX, US', 'lealez' ); ?>"
+                                           maxlength="2">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.regionCode</code> (ISO 3166-1 alpha-2).', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <label for="location_postal_code"><?php _e( 'Código Postal', 'lealez' ); ?></label>
+                                </th>
+                                <td>
+                                    <input type="text"
+                                           name="location_postal_code"
+                                           id="location_postal_code"
+                                           value="<?php echo esc_attr( $postal_code ); ?>"
+                                           class="regular-text">
+                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
+                                </td>
+                            </tr>
+                            <?php if ( $formatted_address ) : ?>
+                                <tr>
+                                    <th scope="row">
+                                        <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
+                                    </th>
+                                    <td>
+                                        <input type="text" readonly class="large-text" value="<?php echo esc_attr( $formatted_address ); ?>">
+                                        <p class="description"><?php _e( 'Auto-generada al importar desde GMB.', 'lealez' ); ?></p>
+                                    </td>
+                                </tr>
+                            <?php endif; ?>
+                        </table>
+                    </div><!-- #oy-address-fields-wrap -->
+
+                    <?php /* ── Coordenadas GPS: siempre visibles ── */ ?>
+                    <table class="form-table" id="oy-coords-map-wrap" style="margin-top:0;">
+                        <tr>
+                            <th scope="row" style="width:160px;">
+                                <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
+                            </th>
+                            <td>
+                                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                                    <div>
+                                        <label for="location_latitude"><?php _e( 'Latitud', 'lealez' ); ?></label>
+                                        <input type="text"
+                                               name="location_latitude"
+                                               id="location_latitude"
+                                               value="<?php echo esc_attr( $latitude ); ?>"
+                                               class="regular-text"
+                                               placeholder="6.2476376">
+                                    </div>
+                                    <div>
+                                        <label for="location_longitude"><?php _e( 'Longitud', 'lealez' ); ?></label>
+                                        <input type="text"
+                                               name="location_longitude"
+                                               id="location_longitude"
+                                               value="<?php echo esc_attr( $longitude ); ?>"
+                                               class="regular-text"
+                                               placeholder="-75.5658153">
+                                    </div>
+                                </div>
+                                <p class="description"><?php _e( 'Importado desde GMB: <code>latlng.latitude</code> / <code>latlng.longitude</code>', 'lealez' ); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row">
+                                <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
+                            </th>
+                            <td>
+                                <input type="url"
+                                       name="location_map_url"
+                                       id="location_map_url"
+                                       value="<?php echo esc_attr( $map_url ); ?>"
+                                       class="large-text">
+                                <p class="description">
+                                    <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
+                                    <?php if ( $map_url ) : ?>
+                                        &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank" id="oy-maps-open-link"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
+                                    <?php else : ?>
+                                        &nbsp;<a href="#" target="_blank" id="oy-maps-open-link" style="<?php echo $has_coords ? '' : 'display:none;'; ?>"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
+                                    <?php endif; ?>
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+
+                </div><!-- #oy-address-fields-col -->
+
+                <?php /* ── Columna derecha: mapa embebido al estilo GMB ── */ ?>
+                <div id="oy-map-preview-col" style="flex:0 0 380px; min-width:280px;">
+                    <div id="oy-map-preview-wrap" style="
+                        border:1px solid #c3d4e6;
+                        border-radius:4px;
+                        overflow:hidden;
+                        background:#e8eaf0;
+                        position:relative;
+                        height:320px;
+                        display:<?php echo $has_coords ? 'block' : 'flex'; ?>;
+                        align-items:center;
+                        justify-content:center;
+                    ">
+                        <?php if ( $has_coords ) : ?>
+                            <iframe
+                                id="oy-map-iframe"
+                                src="<?php echo esc_url( $embed_url ); ?>"
+                                width="100%"
+                                height="320"
+                                style="border:0; display:block;"
+                                allowfullscreen=""
+                                loading="lazy"
+                                referrerpolicy="no-referrer-when-downgrade"
+                            ></iframe>
+                        <?php else : ?>
+                            <div id="oy-map-placeholder" style="text-align:center; color:#757575; padding:20px;">
+                                <span style="font-size:40px; display:block; margin-bottom:10px;">🗺️</span>
+                                <p style="margin:0; font-size:13px;"><?php _e( 'El mapa aparecerá cuando se ingresen las coordenadas GPS o se sincronice con GMB.', 'lealez' ); ?></p>
+                            </div>
+                            <iframe
+                                id="oy-map-iframe"
+                                src=""
+                                width="100%"
+                                height="320"
+                                style="border:0; display:none;"
+                                allowfullscreen=""
+                                loading="lazy"
+                                referrerpolicy="no-referrer-when-downgrade"
+                            ></iframe>
+                        <?php endif; ?>
+
+                        <?php if ( $map_link_url ) : ?>
+                            <a href="<?php echo esc_url( $map_link_url ); ?>"
+                               id="oy-map-adjust-btn"
+                               target="_blank"
+                               style="
+                                position:absolute;
+                                top:10px;
+                                right:10px;
+                                background:#fff;
+                                border:1px solid #dadce0;
+                                border-radius:4px;
+                                padding:6px 14px;
+                                font-size:13px;
+                                font-weight:500;
+                                color:#1a73e8;
+                                text-decoration:none;
+                                box-shadow:0 1px 3px rgba(0,0,0,.2);
+                                z-index:10;
+                                cursor:pointer;
+                                line-height:1.4;
+                               "><?php _e( 'Ajustar', 'lealez' ); ?></a>
+                        <?php else : ?>
+                            <a href="#"
+                               id="oy-map-adjust-btn"
+                               target="_blank"
+                               style="
+                                position:absolute;
+                                top:10px;
+                                right:10px;
+                                background:#fff;
+                                border:1px solid #dadce0;
+                                border-radius:4px;
+                                padding:6px 14px;
+                                font-size:13px;
+                                font-weight:500;
+                                color:#1a73e8;
+                                text-decoration:none;
+                                box-shadow:0 1px 3px rgba(0,0,0,.2);
+                                z-index:10;
+                                cursor:pointer;
+                                line-height:1.4;
+                                display:<?php echo $has_coords ? 'block' : 'none'; ?>;
+                               "><?php _e( 'Ajustar', 'lealez' ); ?></a>
+                        <?php endif; ?>
+                    </div>
+                    <p class="description" style="margin-top:6px; font-size:11px; color:#757575;">
+                        <?php _e( 'Vista previa del mapa. Se actualiza al cambiar las coordenadas GPS.', 'lealez' ); ?>
+                    </p>
+                </div><!-- #oy-map-preview-col -->
+
+            </div><!-- #oy-address-map-layout -->
+
+            <script type="text/javascript">
+                /**
+                 * oy_toggle_address_fields
+                 */
+                window.oy_toggle_address_fields = function() {
+                    var $ = jQuery;
+                    var isServiceAreaOnly  = $('#service_area_only').is(':checked');
+                    var showAddressChecked = $('#show_address_to_customers').is(':checked');
+
+                    if ( isServiceAreaOnly ) {
+                        $('#oy-show-address-row').css('display', 'flex');
+                    } else {
+                        $('#oy-show-address-row').css('display', 'none');
+                    }
+
+                    if ( isServiceAreaOnly && ! showAddressChecked ) {
+                        $('#oy-address-fields-wrap').hide();
+                    } else {
+                        $('#oy-address-fields-wrap').show();
+                    }
+                };
+
+                /**
+                 * oy_update_map_preview
+                 */
+                window.oy_update_map_preview = function() {
+                    var $ = jQuery;
+                    var lat        = $.trim( $('#location_latitude').val() );
+                    var lng        = $.trim( $('#location_longitude').val() );
+                    var savedMapUrl = $.trim( $('#location_map_url').val() );
+
+                    var hasCoords  = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
+
+                    var embedUrl = '';
+                    var mapsUrl  = savedMapUrl || '';
+
+                    if ( savedMapUrl && savedMapUrl.indexOf('cid=') !== -1 ) {
+                        var cidMatch = savedMapUrl.match(/[?&]cid=([^&]+)/);
+                        if ( cidMatch && cidMatch[1] ) {
+                            embedUrl = 'https://maps.google.com/maps?cid=' + encodeURIComponent(cidMatch[1]) + '&output=embed';
                         }
-                    },
-                    scales: {
-                        x: {
-                            grid: { display: false },
-                            border: { display: false },
-                            ticks: { color:'#aaa', font:{ size:10 }, maxRotation:0, autoSkip:true, maxTicksLimit:9 }
-                        },
-                        y: { display:false, min:0, max:100 }
+                    }
+
+                    if ( ! embedUrl && hasCoords ) {
+                        embedUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng) + '&z=17&output=embed';
+                    }
+
+                    if ( ! mapsUrl && hasCoords ) {
+                        mapsUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng);
+                    }
+
+                    if ( ! embedUrl ) {
+                        $('#oy-map-iframe').hide().attr('src', '');
+                        $('#oy-map-placeholder').show();
+                        $('#oy-map-preview-wrap').css({ 'display': 'flex' });
+                        $('#oy-map-adjust-btn').hide();
+                        $('#oy-maps-open-link').hide();
+                        return;
+                    }
+
+                    $('#oy-map-placeholder').hide();
+                    $('#oy-map-iframe').attr('src', embedUrl).css('display', 'block');
+                    $('#oy-map-preview-wrap').css({ 'display': 'block' });
+
+                    if ( mapsUrl ) {
+                        $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
+                        $('#oy-maps-open-link').attr('href', mapsUrl).show();
+                    }
+                };
+
+                /**
+                 * ✅ UI helper: Service Areas (chips)
+                 * Exponemos una función global para que applyLocationToForm pueda usarla.
+                 */
+                window.oy_apply_service_areas = function(loc) {
+                    try {
+                        var $ = jQuery;
+                        if (!loc) return;
+
+                        var labels = [];
+
+                        var sa = loc.serviceArea || null;
+
+                        // Estructuras posibles
+                        if (sa && typeof sa === 'object') {
+
+                            // Caso A: sa.places.placeInfos[]
+                            if (sa.places && sa.places.placeInfos && Array.isArray(sa.places.placeInfos)) {
+                                sa.places.placeInfos.forEach(function(pi){
+                                    if(!pi) return;
+                                    var l = '';
+                                    if (pi.placeName) l = String(pi.placeName);
+                                    else if (pi.displayName) l = String(pi.displayName);
+                                    else if (pi.name) l = String(pi.name);
+                                    else if (pi.placeId) l = String(pi.placeId);
+                                    l = l.trim();
+                                    if (l) labels.push(l);
+                                });
+                            }
+
+                            // Caso B: sa.places.placeNames[]
+                            if (sa.places && sa.places.placeNames && Array.isArray(sa.places.placeNames)) {
+                                sa.places.placeNames.forEach(function(pn){
+                                    pn = String(pn || '').trim();
+                                    if (pn) labels.push(pn);
+                                });
+                            }
+
+                            // Caso C: sa.placeInfos[]
+                            if (sa.placeInfos && Array.isArray(sa.placeInfos)) {
+                                sa.placeInfos.forEach(function(pi){
+                                    if(!pi) return;
+                                    var l = '';
+                                    if (pi.placeName) l = String(pi.placeName);
+                                    else if (pi.displayName) l = String(pi.displayName);
+                                    else if (pi.name) l = String(pi.name);
+                                    else if (pi.placeId) l = String(pi.placeId);
+                                    l = l.trim();
+                                    if (l) labels.push(l);
+                                });
+                            }
+
+                            // Fallback regionCode/placeId
+                            if (!labels.length) {
+                                if (sa.regionCode) labels.push(String(sa.regionCode).trim());
+                                if (sa.placeId) labels.push(String(sa.placeId).trim());
+                            }
+                        }
+
+                        // Normalizar unique
+                        var map = {};
+                        var out = [];
+                        labels.forEach(function(v){
+                            v = String(v || '').trim().replace(/\s{2,}/g,' ');
+                            if (!v) return;
+                            if (map[v]) return;
+                            map[v] = true;
+                            out.push(v);
+                        });
+
+                        // Pintar chips
+                        var $wrap = $('#oy-service-area-tags');
+                        if (!$wrap.length) return;
+
+                        // Limpiar chips actuales
+                        $wrap.find('.oy-sa-tag').remove();
+
+                        // Render
+                        out.forEach(function(v){
+                            var chip =
+                                '<span class="oy-sa-tag" data-value="'+ $('<div>').text(v).html() +'" ' +
+                                'style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">' +
+                                    '<span class="oy-sa-text">'+ $('<div>').text(v).html() +'</span>' +
+                                    '<button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>' +
+                                    '<input type="hidden" name="location_service_areas[]" value="'+ $('<div>').text(v).html() +'">' +
+                                '</span>';
+                            $wrap.append(chip);
+                        });
+
+                    } catch(e) {
+                        if (window.console && window.console.warn) {
+                            console.warn('[OY Address] oy_apply_service_areas error:', e);
+                        }
+                    }
+                };
+
+
+                /**
+ * ✅ Hook defensivo para que "Importar Ahora" SIEMPRE pinte Áreas de servicio
+ * aunque applyLocationToForm() (en el CPT) no lo llame explícitamente.
+ *
+ * Estrategia:
+ * - Si existe window.applyLocationToForm y NO está envuelta, la envolvemos.
+ * - Ejecutamos la original.
+ * - Luego llamamos window.oy_apply_service_areas(loc) para renderizar chips.
+ * - Incluye reintento por si applyLocationToForm se define después.
+ */
+(function() {
+    function wrapApplyLocationToForm() {
+        try {
+            if (typeof window.applyLocationToForm !== 'function') {
+                return false;
+            }
+            if (window.applyLocationToForm.__oy_service_area_wrapped) {
+                return true;
+            }
+
+            var original = window.applyLocationToForm;
+
+            var wrapped = function(loc) {
+                var result;
+                try {
+                    result = original.call(this, loc);
+                } catch (e1) {
+                    // Si la original falla, no bloqueamos el resto
+                    if (window.console && window.console.warn) {
+                        console.warn('[OY Address] applyLocationToForm original error:', e1);
                     }
                 }
-            });
 
-            var w = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
-                ? this.data.day_weights[day] : 0;
-
-            if (w > 0) {
-                $('#oy-busy-score-num').text(w);
-                $('#oy-busy-day-score-badge').show();
-            } else {
-                $('#oy-busy-day-score-badge').hide();
-            }
-        },
-
-        updateStatusLabel: function (day) {
-            var w = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
-                ? this.data.day_weights[day] : 0;
-            var title, subtitle, dotColor;
-
-            if (w === 0) {
-                title = 'Sin datos — calcule el índice desde GMB';
-                subtitle = 'Haga clic en "Calcular índice desde GMB" para obtener el índice real';
-                dotColor = '#757575';
-            } else if (w >= 85) {
-                title = 'Día de máximo interés';
-                subtitle = 'Este es uno de los días de mayor actividad del negocio';
-                dotColor = '#e53935';
-            } else if (w >= 65) {
-                title = 'Alto interés';
-                subtitle = 'Actividad por encima del promedio semanal';
-                dotColor = '#f57c00';
-            } else if (w >= 40) {
-                title = 'Interés moderado';
-                subtitle = 'Actividad en línea con el promedio de la semana';
-                dotColor = '#fbc02d';
-            } else if (w >= 15) {
-                title = 'Bajo interés';
-                subtitle = 'Actividad por debajo del promedio semanal';
-                dotColor = '#43a047';
-            } else {
-                title = 'Muy bajo interés';
-                subtitle = 'Poca actividad registrada este día';
-                dotColor = '#757575';
-            }
-
-            if (this.data.auto_template_label) {
-                subtitle += ' · Curva automática: ' + this.data.auto_template_label;
-            }
-
-            $('#oy-busy-status-title').text(title);
-            $('#oy-busy-status-subtitle').text(subtitle);
-            $('#oy-busy-live-dot').css('background', dotColor).css('box-shadow', '0 0 6px ' + dotColor + '88');
-        },
-
-        updateBreakdown: function (day) {
-            var self = this;
-            var breakdown = (this.data.metric_breakdown && this.data.metric_breakdown[day]) ? this.data.metric_breakdown[day] : null;
-
-            if (!breakdown) {
-                $('#oy-busy-breakdown').hide();
-                return;
-            }
-
-            var groups = ['high_intent','visit_intent','research','impressions'];
-            var total = 0;
-            groups.forEach(function (g) { total += (breakdown[g] || 0); });
-            if (total <= 0) {
-                $('#oy-busy-breakdown').hide();
-                return;
-            }
-
-            var $bars = $('#oy-busy-breakdown-bars').empty();
-
-            groups.forEach(function (g) {
-                var val  = breakdown[g] || 0;
-                if (val <= 0) { return; }
-                var pct  = Math.round((val / total) * 100);
-                var $bar = $(
-                    '<div class="oy-busy-bd-item">' +
-                        '<span class="oy-busy-bd-dot" style="background:' + self.GROUP_COLORS[g] + ';"></span>' +
-                        '<span class="oy-busy-bd-label">' + self.GROUP_LABELS[g] + '</span>' +
-                        '<div class="oy-busy-bd-track">' +
-                            '<div class="oy-busy-bd-fill" style="width:' + pct + '%;background:' + self.GROUP_COLORS[g] + ';"></div>' +
-                        '</div>' +
-                        '<span class="oy-busy-bd-pct">' + pct + '%</span>' +
-                    '</div>'
-                );
-                $bars.append($bar);
-            });
-
-            $('#oy-busy-breakdown').show();
-        },
-
-        updateStayDisplay: function () {
-            var minM = this.data.avg_stay_min || 45;
-            var maxM = this.data.avg_stay_max || 90;
-            var fmt  = function (m) {
-                if (m >= 60) {
-                    var h = Math.floor(m / 60), r = m % 60;
-                    return r ? (h + ' h ' + r + ' min') : (h + ' h');
+                // ✅ Después del import: pintar áreas de servicio si existe helper
+                try {
+                    if (typeof window.oy_apply_service_areas === 'function') {
+                        window.oy_apply_service_areas(loc);
+                    }
+                } catch (e2) {
+                    if (window.console && window.console.warn) {
+                        console.warn('[OY Address] oy_apply_service_areas error:', e2);
+                    }
                 }
-                return m + ' min';
+
+                return result;
             };
-            $('#oy-busy-stay-display').text('Entre ' + fmt(minM) + ' y ' + fmt(maxM));
-        },
 
-        computeFromAPI: function () {
-            var self = this;
-            var $btn = $('#oy-busy-compute-btn');
+            wrapped.__oy_service_area_wrapped = true;
+            window.applyLocationToForm = wrapped;
 
-            $btn.prop('disabled', true).html('<span class="dashicons dashicons-update oy-spin" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calculando…');
-            this.showStatusMsg('Consultando Performance API y generando automáticamente la curva horaria…', 'loading');
-
-            $.ajax({
-                url: this.config.ajaxUrl,
-                method: 'POST',
-                timeout: 60000,
-                data: {
-                    action: 'oy_gmb_busy_compute',
-                    nonce: this.config.nonce,
-                    post_id: this.config.postId
-                },
-                success: function (response) {
-                    if (response.success) {
-                        var d = response.data;
-                        self.data.day_weights       = d.day_weights;
-                        self.data.day_scores_raw    = d.scores_raw;
-                        self.data.metric_breakdown  = d.group_breakdown;
-                        self.data.hours             = d.hours || self.buildEmptyHours();
-                        self.data.auto_template     = d.auto_template || '';
-                        self.data.auto_template_label = d.auto_template_label || '';
-                        self.data.last_computed     = d.computed_at;
-                        self.data.period            = d.period;
-                        self.data.metrics_used      = d.metrics_used;
-                        self.data.source            = 'api';
-
-                        self.updateAllDayTabs();
-                        self.renderChart(self.currentDay);
-                        self.updateStatusLabel(self.currentDay);
-                        self.updateBreakdown(self.currentDay);
-
-                        var msg = '✅ Índice calculado: ' + d.days_processed + ' días procesados, ' +
-                                  d.metrics_used + ' métricas activas (' + d.period.start + ' → ' + d.period.end + '). ' +
-                                  'Curva automática aplicada: ' + (d.auto_template_label || d.auto_template || 'N/A') + '.';
-                        self.showStatusMsg(msg, 'success');
-
-                        $('.oy-busy-computed-header').remove();
-                    } else {
-                        var errMsg = (response.data && response.data.message) ? response.data.message : 'Error desconocido';
-                        self.showStatusMsg('❌ ' + errMsg, 'error');
-                    }
-                },
-                error: function (xhr) {
-                    var msg = (xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message)
-                        ? xhr.responseJSON.data.message
-                        : xhr.statusText;
-                    self.showStatusMsg('Error de conexión: ' + msg, 'error');
-                },
-                complete: function () {
-                    $btn.prop('disabled', false).html('<span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calcular índice desde GMB');
-                }
-            });
-        },
-
-        saveData: function () {
-            var self = this;
-            var $btn = $('#oy-busy-save-btn');
-
-            this.data.avg_stay_min = parseInt($('#oy-busy-stay-min').val(), 10) || 45;
-            this.data.avg_stay_max = parseInt($('#oy-busy-stay-max').val(), 10) || 90;
-
-            $btn.prop('disabled', true).text('Guardando…');
-            this.showStatusMsg('Guardando…', 'loading');
-
-            $.ajax({
-                url: this.config.ajaxUrl,
-                method: 'POST',
-                timeout: 30000,
-                data: {
-                    action: 'oy_gmb_busy_save',
-                    nonce: this.config.nonce,
-                    post_id: this.config.postId,
-                    peak_data: JSON.stringify(this.data)
-                },
-                success: function (response) {
-                    if (response.success) {
-                        self.showStatusMsg('✅ ' + response.data.message, 'success');
-                    } else {
-                        var m = (response.data && response.data.message) ? response.data.message : '';
-                        self.showStatusMsg('Error al guardar: ' + m, 'error');
-                    }
-                },
-                error: function () {
-                    self.showStatusMsg('Error de conexión. Intenta de nuevo.', 'error');
-                },
-                complete: function () {
-                    $btn.prop('disabled', false).html('<span class="dashicons dashicons-saved" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Guardar');
-                }
-            });
-        },
-
-        showStatusMsg: function (msg, type) {
-            var $s = $('#oy-busy-status-msg');
-            $s.removeClass('oy-busy-status--loading oy-busy-status--error oy-busy-status--info oy-busy-status--success');
-            $s.addClass('oy-busy-status--' + (type || 'info')).html(msg).show();
-            if (type === 'success') {
-                setTimeout(function () { $s.fadeOut(400); }, 6000);
+            return true;
+        } catch (e) {
+            if (window.console && window.console.warn) {
+                console.warn('[OY Address] wrapApplyLocationToForm error:', e);
             }
+            return false;
         }
-    };
+    }
 
-    $(document).ready(function () {
-        if (typeof oyBusyConfig !== 'undefined' && document.getElementById('oy-busy-wrap')) {
-            var boot = function () { OyBusyHours.init(oyBusyConfig); };
-            if (typeof window.waitForChart === 'function') {
-                window.waitForChart(boot);
-            } else if (typeof Chart !== 'undefined') {
-                boot();
-            } else {
-                setTimeout(boot, 250);
-            }
+    // Intento inmediato (normalmente applyLocationToForm ya existe)
+    if (!wrapApplyLocationToForm()) {
+        // Reintento en load por si el orden de scripts cambia
+        window.addEventListener('load', function() {
+            wrapApplyLocationToForm();
+        });
+    }
+})();
+
+                
+                jQuery(document).ready(function($){
+
+                    // Toggle dirección
+                    $('#service_area_only').on('change', window.oy_toggle_address_fields);
+                    $('#show_address_to_customers').on('change', window.oy_toggle_address_fields);
+
+                    // Actualizar mapa al cambiar coordenadas (debounce)
+                    var oy_map_debounce_timer;
+                    $('#location_latitude, #location_longitude').on('input change', function() {
+                        clearTimeout(oy_map_debounce_timer);
+                        oy_map_debounce_timer = setTimeout(function() {
+                            window.oy_update_map_preview();
+                        }, 600);
+                    });
+
+                    // Ajustar links si cambia URL Maps manualmente
+                    $('#location_map_url').on('input change', function() {
+                        var mapUrl = $.trim( $(this).val() );
+                        if ( mapUrl ) {
+                            $('#oy-map-adjust-btn').attr('href', mapUrl).show();
+                            $('#oy-maps-open-link').attr('href', mapUrl).show();
+                        }
+                    });
+
+                    // ✅ Service Areas UI: add/remove
+                    function oyServiceAreaAdd(value) {
+                        value = String(value || '').trim().replace(/\s{2,}/g,' ');
+                        if (!value) return;
+
+                        // Evitar duplicados
+                        var exists = false;
+                        $('#oy-service-area-tags .oy-sa-tag').each(function(){
+                            var v = String($(this).attr('data-value') || '').trim();
+                            if (v === value) { exists = true; return false; }
+                        });
+                        if (exists) return;
+
+                        var chip =
+                            '<span class="oy-sa-tag" data-value="'+ $('<div>').text(value).html() +'" ' +
+                            'style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">' +
+                                '<span class="oy-sa-text">'+ $('<div>').text(value).html() +'</span>' +
+                                '<button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>' +
+                                '<input type="hidden" name="location_service_areas[]" value="'+ $('<div>').text(value).html() +'">' +
+                            '</span>';
+
+                        $('#oy-service-area-tags').append(chip);
+                    }
+
+                    $('#oy-service-area-add').on('click', function(e){
+                        e.preventDefault();
+                        var v = $('#oy-service-area-input').val();
+                        oyServiceAreaAdd(v);
+                        $('#oy-service-area-input').val('').focus();
+                    });
+
+                    $('#oy-service-area-input').on('keydown', function(e){
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            $('#oy-service-area-add').trigger('click');
+                        }
+                    });
+
+                    $(document).on('click', '.oy-sa-remove', function(e){
+                        e.preventDefault();
+                        $(this).closest('.oy-sa-tag').remove();
+                    });
+
+                    // Ejecutar al cargar
+                    window.oy_toggle_address_fields();
+
+                    // Inicializar mapa
+                    (function() {
+                        var lat = $.trim( $('#location_latitude').val() );
+                        var lng = $.trim( $('#location_longitude').val() );
+                        if ( lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng)) ) {
+                            var iframeSrc = $('#oy-map-iframe').attr('src');
+                            var savedMapUrl = $.trim( $('#location_map_url').val() );
+                            var mapsUrl = savedMapUrl || 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
+
+                            if ( iframeSrc && iframeSrc.length > 5 ) {
+                                $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
+                                $('#oy-maps-open-link').attr('href', mapsUrl).show();
+                                $('#oy-map-placeholder').hide();
+                                $('#oy-map-iframe').css('display', 'block');
+                                $('#oy-map-preview-wrap').css('display', 'block');
+                            } else {
+                                window.oy_update_map_preview();
+                            }
+                        }
+                    })();
+                });
+            </script>
+            <?php
         }
-    });
-
-}(jQuery));
-JSEOF;
-	}
-
-	private function get_inline_css() {
-		return '
-#oy-busy-wrap { font-size:13px; color:#1e1e1e; }
-.oy-busy-notice { padding:10px 14px; border-radius:4px; margin-bottom:10px; border:1px solid transparent; display:flex; align-items:center; gap:8px; }
-.oy-busy-notice--warn { background:#fff3cd; border-color:#ffc107; color:#856404; }
-.oy-busy-computed-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:8px 12px; margin-bottom:10px; background:#e8f5e9; border:1px solid #a5d6a7; border-radius:6px; }
-.oy-busy-computed-header__left { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
-.oy-busy-computed-header__right { display:flex; align-items:center; gap:8px; }
-.oy-busy-source-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#2e7d32; color:#fff; }
-.oy-busy-source-pill--api { background:#2e7d32; }
-.oy-busy-period-label { font-size:11px; color:#555; }
-.oy-busy-peak-badge { padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#1a73e8; color:#fff; }
-.oy-busy-auto-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#5d4037; color:#fff; }
-
-.oy-busy-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; background:#f6f7f7; border:1px solid #ddd; border-radius:6px; padding:10px 14px; margin-bottom:12px; }
-.oy-busy-toolbar__left { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
-.oy-busy-toolbar__right { display:flex; gap:8px; flex-wrap:wrap; }
-.oy-busy-field-group { display:flex; align-items:center; gap:6px; }
-.oy-busy-field-group label { font-weight:600; font-size:12px; white-space:nowrap; }
-.oy-busy-field-group--auto { max-width:620px; }
-.oy-busy-select { min-width:170px; }
-
-.oy-busy-status { padding:9px 14px; border-radius:4px; margin-bottom:10px; border:1px solid transparent; font-size:12px; line-height:1.5; }
-.oy-busy-status--loading { background:#e8f4fb; border-color:#bee5eb; color:#0c5460; }
-.oy-busy-status--error { background:#fff3cd; border-color:#ffc107; color:#856404; }
-.oy-busy-status--info { background:#d1ecf1; border-color:#bee5eb; color:#0c5460; }
-.oy-busy-status--success { background:#d4edda; border-color:#c3e6cb; color:#155724; }
-
-.oy-busy-dark-panel { background:#2d2d2d; border-radius:8px; padding:0 0 16px; margin-bottom:12px; overflow:hidden; }
-.oy-busy-day-tabs { display:flex; align-items:flex-end; gap:0; background:#252525; padding:8px 8px 0; }
-.oy-busy-day-tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 4px 8px; background:transparent; border:none; cursor:pointer; color:#888; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; transition:color .15s; position:relative; }
-.oy-busy-day-tab:hover { color:#ccc; }
-.oy-busy-day-tab--active { color:#fff; border-bottom:2px solid #fff; margin-bottom:-2px; }
-.oy-busy-day-bar-track { width:24px; height:32px; background:rgba(255,255,255,0.07); border-radius:3px 3px 0 0; display:flex; align-items:flex-end; overflow:hidden; }
-.oy-busy-day-bar { width:100%; background:rgba(160,160,160,0.50); border-radius:3px 3px 0 0; transition:height .4s ease; min-height:3px; }
-.oy-busy-day-tab--active .oy-busy-day-bar { background:rgba(255,255,255,0.70); }
-.oy-busy-day-name { font-size:10px; margin-top:2px; }
-.oy-busy-day-index { font-size:10px; color:#aaa; margin-top:1px; font-weight:400; }
-.oy-busy-day-tab--active .oy-busy-day-index { color:#fff; font-weight:700; }
-
-.oy-busy-status-row { display:flex; align-items:flex-start; gap:10px; padding:14px 18px 10px; position:relative; }
-.oy-busy-live-dot { width:12px; height:12px; border-radius:50%; background:#e53935; margin-top:3px; flex-shrink:0; transition:background .3s, box-shadow .3s; }
-.oy-busy-status-title { font-weight:700; font-size:13px; color:#fff; line-height:1.3; }
-.oy-busy-status-subtitle { font-size:11px; color:#aaa; font-style:italic; margin-top:2px; }
-.oy-busy-day-score-badge { margin-left:auto; flex-shrink:0; display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.08); border-radius:8px; padding:6px 12px; min-width:54px; }
-.oy-busy-score-num { font-size:22px; font-weight:800; color:#fff; line-height:1; }
-.oy-busy-score-label { font-size:10px; color:#aaa; margin-top:2px; letter-spacing:.04em; }
-
-.oy-busy-chart-container { position:relative; height:160px; width:100%; padding:0 12px; box-sizing:border-box; }
-.oy-busy-chart-container canvas { display:block !important; width:100% !important; height:100% !important; }
-
-.oy-busy-breakdown { padding:10px 18px 6px; border-top:1px solid rgba(255,255,255,.07); margin-top:8px; }
-.oy-busy-breakdown__label { font-size:11px; color:#999; font-weight:600; display:block; margin-bottom:8px; letter-spacing:.03em; }
-.oy-busy-breakdown__bars { display:flex; flex-direction:column; gap:5px; }
-.oy-busy-bd-item { display:flex; align-items:center; gap:7px; font-size:11px; }
-.oy-busy-bd-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-.oy-busy-bd-label { color:#bbb; min-width:130px; white-space:nowrap; }
-.oy-busy-bd-track { flex:1; height:6px; background:rgba(255,255,255,.1); border-radius:3px; overflow:hidden; }
-.oy-busy-bd-fill { height:100%; border-radius:3px; transition:width .4s ease; }
-.oy-busy-bd-pct { color:#888; min-width:32px; text-align:right; font-weight:600; }
-
-.oy-busy-stay-row { display:flex; align-items:center; gap:4px; font-size:12px; color:#ccc; border-top:1px solid rgba(255,255,255,.07); padding:10px 18px 0; margin-top:6px; }
-.oy-busy-stay-row strong { color:#fff; }
-
-@keyframes oy-spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
-.oy-spin { display:inline-block; animation:oy-spin .8s linear infinite; }
-
-.oy-busy-footer { font-size:11px; color:#888; padding:8px 2px 4px; border-top:1px solid #eee; margin-top:8px; line-height:1.6; }
-';
-	}
+    }
 }
-
-endif;
