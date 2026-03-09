@@ -51,6 +51,15 @@ class OY_Location_CPT {
     private $ajax_nonce_action = 'oy_location_gmb_ajax';
 
     /**
+     * Instancia del metabox externo de Horarios de Atención.
+     * Se almacena en el constructor para reutilizarla como callback
+     * en add_meta_boxes(), garantizando que el metabox siempre aparezca.
+     *
+     * @var OY_Location_Hours_Metabox|null
+     */
+    private $hours_metabox = null;
+
+    /**
      * Constructor
      */
 public function __construct() {
@@ -138,7 +147,7 @@ public function __construct() {
         require_once $hours_metabox_file;
 
         if ( class_exists( 'OY_Location_Hours_Metabox' ) ) {
-            new OY_Location_Hours_Metabox();
+            $this->hours_metabox = new OY_Location_Hours_Metabox();
         }
     }
 
@@ -370,9 +379,21 @@ public function add_meta_boxes() {
         'default'
     );
 
-    // 5. Business Hours → MOVIDO a OY_Location_Hours_Metabox (metaboxes/class-oy-location-hours-metabox.php)
-    //    Se omite aquí para evitar registro duplicado. El nuevo metabox conserva
-    //    el mismo ID 'oy_location_hours' para mantener la posición guardada por el usuario.
+    // 5. Business Hours
+    // El render usa OY_Location_Hours_Metabox::render_metabox() si la clase cargó
+    // (incluye botón de sync GMB y nonce AJAX propio), o render_hours_meta_box()
+    // del CPT como fallback garantizado si el archivo externo no está disponible.
+    $hours_render_cb = $this->hours_metabox
+        ? array( $this->hours_metabox, 'render_metabox' )
+        : array( $this, 'render_hours_meta_box' );
+    add_meta_box(
+        'oy_location_hours',
+        __( 'Horarios de Atención', 'lealez' ),
+        $hours_render_cb,
+        $this->post_type,
+        'normal',
+        'default'
+    );
 
     // 6. Attributes and Features
     add_meta_box(
