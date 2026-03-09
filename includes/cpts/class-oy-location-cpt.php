@@ -226,6 +226,24 @@ if ( file_exists( $keywords_metabox_file ) ) {
     }
 }
 
+/**
+ * Metabox: Horario de Mayor Concurrencia (Popular Times)
+ *
+ * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-busyhours-metabox.php
+ *
+ * Visualiza pesos por día de semana (computados desde Performance API)
+ * y distribución horaria manual con gráfico de barras estilo GMB.
+ * AJAX: oy_gmb_busy_compute, oy_gmb_busy_save
+ */
+$busyhours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-busyhours-metabox.php';
+if ( file_exists( $busyhours_metabox_file ) ) {
+    require_once $busyhours_metabox_file;
+
+    if ( class_exists( 'OY_Location_GMB_BusyHours_Metabox' ) ) {
+        new OY_Location_GMB_BusyHours_Metabox();
+    }
+}
+    
 }
 
 
