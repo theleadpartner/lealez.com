@@ -50,14 +50,6 @@ class OY_Location_CPT {
      */
     private $ajax_nonce_action = 'oy_location_gmb_ajax';
 
-    /**
-     * Instancia del metabox externo de Horarios de Atención.
-     * Se almacena en el constructor para reutilizarla como callback
-     * en add_meta_boxes(), garantizando que el metabox siempre aparezca.
-     *
-     * @var OY_Location_Hours_Metabox|null
-     */
-    private $hours_metabox = null;
 
     /**
      * Constructor
@@ -139,15 +131,15 @@ public function __construct() {
      * ✅ Metabox externo: Horarios de Atención
      * Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
      *
-     * Registra, renderiza y guarda el metabox de forma independiente.
+     * Registra, renderiza y guarda el metabox de forma completamente independiente.
+     * Se auto-registra vía add_action('add_meta_boxes') en su propio constructor.
      * Expone AJAX propio: oy_sync_location_hours_from_gmb
      */
     $hours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-hours-metabox.php';
     if ( file_exists( $hours_metabox_file ) ) {
         require_once $hours_metabox_file;
-
         if ( class_exists( 'OY_Location_Hours_Metabox' ) ) {
-            $this->hours_metabox = new OY_Location_Hours_Metabox();
+            new OY_Location_Hours_Metabox();
         }
     }
 
@@ -379,17 +371,14 @@ public function add_meta_boxes() {
         'default'
     );
 
-    // 5. Business Hours
-    // El render usa OY_Location_Hours_Metabox::render_metabox() si la clase cargó
-    // (incluye botón de sync GMB y nonce AJAX propio), o render_hours_meta_box()
-    // del CPT como fallback garantizado si el archivo externo no está disponible.
-    $hours_render_cb = $this->hours_metabox
-        ? array( $this->hours_metabox, 'render_metabox' )
-        : array( $this, 'render_hours_meta_box' );
+// 5. Business Hours
+    // Registro garantizado con el fallback del CPT. Si class-oy-location-hours-metabox.php
+    // está disponible, su propio add_action('add_meta_boxes') sobreescribe este registro
+    // con el callback completo (botón de sync GMB + nonce AJAX).
     add_meta_box(
         'oy_location_hours',
         __( 'Horarios de Atención', 'lealez' ),
-        $hours_render_cb,
+        array( $this, 'render_hours_meta_box' ),
         $this->post_type,
         'normal',
         'default'
