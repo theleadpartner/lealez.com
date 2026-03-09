@@ -235,13 +235,17 @@ if ( file_exists( $keywords_metabox_file ) ) {
  * Performance API (11 métricas ponderadas, 90 días). Distribución horaria
  * por plantilla de tipo de negocio + ajuste manual fino.
  * AJAX: oy_gmb_busy_compute, oy_gmb_busy_save
+ *
+ * IMPORTANTE:
+ * Se usa una clase con nombre único para evitar colisiones con cargas
+ * anteriores o con archivos legacy que hayan declarado el nombre antiguo.
  */
 $busyhours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-busyhours-metabox.php';
 if ( file_exists( $busyhours_metabox_file ) ) {
     require_once $busyhours_metabox_file;
 
-    if ( class_exists( 'OY_Location_GMB_BusyHours_Metabox' ) ) {
-        new OY_Location_GMB_BusyHours_Metabox();
+    if ( class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) {
+        new OY_Location_GMB_Busyhours_Metabox_Unique();
     }
 }
     
