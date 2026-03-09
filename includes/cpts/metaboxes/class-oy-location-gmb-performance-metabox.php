@@ -282,14 +282,23 @@ public function enqueue_scripts( $hook ) {
             <!-- KPI CARDS -->
             <div id="oy-perf-kpis" class="oy-perf-kpis" style="display:none;"></div>
 
-            <!-- CHART -->
+<!-- CHART -->
             <div id="oy-perf-chart-wrap" class="oy-perf-chart-wrap" style="display:none;">
                 <div class="oy-perf-chart-header">
-                    <h4 id="oy-perf-chart-title"><?php esc_html_e( 'Evolución de métricas', 'lealez' ); ?></h4>
-                    <div style="display:flex;align-items:center;gap:8px;">
+                    <h4 id="oy-perf-chart-title"><?php esc_html_e( 'Gráfico', 'lealez' ); ?></h4>
+                    <div class="oy-perf-chart-header-right">
+                        <!-- Selector de métrica única (barras/líneas) -->
+                        <label id="oy-perf-chart-metric-label" for="oy-perf-single-metric" style="display:none;"><?php esc_html_e( 'Métrica:', 'lealez' ); ?></label>
+                        <select id="oy-perf-single-metric" class="oy-perf-select oy-perf-single-metric-sel" style="display:none;" title="<?php esc_attr_e( 'Indicador a graficar', 'lealez' ); ?>"></select>
+                        <!-- Badge torta/dona -->
+                        <span id="oy-perf-chart-pie-badge" class="oy-perf-badge oy-perf-badge--pie" style="display:none;"><?php esc_html_e( 'Móvil vs Escritorio', 'lealez' ); ?></span>
                         <span id="oy-perf-chart-subtitle" class="oy-perf-chart-subtitle" style="display:none;"></span>
                         <span id="oy-perf-chart-period" class="oy-perf-badge"></span>
                     </div>
+                </div>
+                <!-- Aviso: torta sin impresiones seleccionadas -->
+                <div id="oy-perf-chart-nodata" class="oy-perf-status oy-perf-status--info" style="display:none;">
+                    <?php esc_html_e( 'ℹ️ Para Torta o Dona selecciona al menos una métrica de impresiones (Vistas Maps o Vistas Búsqueda).', 'lealez' ); ?>
                 </div>
                 <div class="oy-perf-chart-container" id="oy-perf-chart-container">
                     <canvas id="oy-perf-chart"></canvas>
@@ -1343,7 +1352,7 @@ public function enqueue_scripts( $hook ) {
         // Month names in Spanish
         monthNames: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
 
-        init: function(){
+init: function(){
             var self = this;
 
             // Populate month selects before first fetch
@@ -1361,14 +1370,7 @@ public function enqueue_scripts( $hook ) {
                 }
             });
 
-            // Chart type toggle
-            $('#oy-perf-chart-type').on('change', function(){
-                if (self.chartInstance && self.lastData) {
-                    self.buildChart(self.lastData, $(this).val());
-                }
-            });
-
-            // Metric pill toggle
+            // Metric pill toggle (visual only)
             $(document).on('change', '.oy-perf-metric-chk', function(){
                 var $lbl = $(this).closest('.oy-perf-pill');
                 if ($(this).is(':checked')) {
@@ -1441,12 +1443,20 @@ public function enqueue_scripts( $hook ) {
                 }
             });
 
-            // Chart type change: re-render existing data without new AJAX call
+            // Chart type change: re-render with new type (ONE handler only)
             $('#oy-perf-chart-type').on('change', function(){
                 if (self.lastData) {
                     var newType = $(this).val();
                     self.buildChart(self.lastData, newType);
                     self.applyViewMode();
+                }
+            });
+
+            // Single-metric dropdown: re-render chart for the selected indicator
+            $('#oy-perf-single-metric').on('change', function(){
+                if (self.lastData) {
+                    var chartType = $('#oy-perf-chart-type').val() || 'bar';
+                    self.buildChart(self.lastData, chartType);
                 }
             });
 
@@ -1528,7 +1538,7 @@ public function enqueue_scripts( $hook ) {
             self.applyViewMode();
         },
 
-        applyViewMode: function(){
+applyViewMode: function(){
             var self = this;
             var showCards      = false;
             var showChart      = false;
@@ -1561,8 +1571,8 @@ public function enqueue_scripts( $hook ) {
                 $('#oy-perf-kpis').hide();
             }
 
-            // Chart
-            if (showChart && self.chartInstance) {
+            // Chart — el wrap se muestra si hay datos; buildChart gestiona canvas/nodata internamente
+            if (showChart && self.lastData && self.lastData.data && Object.keys(self.lastData.data.series||{}).length > 0) {
                 $('#oy-perf-chart-wrap').show();
             } else {
                 $('#oy-perf-chart-wrap').hide();
@@ -1583,7 +1593,7 @@ public function enqueue_scripts( $hook ) {
                 $('#oy-perf-comparison-wrap').hide();
             }
         },
-
+            
         // ----------------------------------------------------------------
         // Core fetch
         // ----------------------------------------------------------------
@@ -2091,260 +2101,334 @@ buildKeywordsChart: function(aggregated){
             $kpis.show();
         },
 
+
+// ----------------------------------------------------------------
+        // Chart metric selector helper
+        // ----------------------------------------------------------------
+
+        updateChartMetricSelector: function(pd, chartType){
+            var self    = this;
+            var series  = pd.data.series || {};
+            var $sel    = $('#oy-perf-single-metric');
+            var $lbl    = $('#oy-perf-chart-metric-label');
+            var $pieBdg = $('#oy-perf-chart-pie-badge');
+            var isPie   = (chartType === 'pie' || chartType === 'doughnut');
+
+            if (isPie) {
+                $lbl.hide();
+                $sel.hide();
+                $pieBdg.show();
+            } else {
+                $pieBdg.hide();
+                // Rebuild options from currently loaded series
+                var keys       = Object.keys(series);
+                var currentVal = $sel.val();
+                var opts       = '';
+                $.each(keys, function(i, k){
+                    opts += '<option value="'+self.escHtml(k)+'">'+self.escHtml(series[k].label)+'</option>';
+                });
+                $sel.html(opts);
+                // Restore previous selection if still valid in the new series set
+                if (currentVal && series[currentVal]) {
+                    $sel.val(currentVal);
+                } else if (keys.length) {
+                    $sel.val(keys[0]);
+                }
+                $lbl.show();
+                $sel.show();
+            }
+        },
+
+            
+
 buildChart: function(pd, chartType){
-    var self   = this;
-    var dates  = pd.data.dates || [];
-    var series = pd.data.series || {};
-    var $wrap  = $('#oy-perf-chart-wrap');
-    var $title = $('#oy-perf-chart-title');
-    var $sub   = $('#oy-perf-chart-subtitle');
+            var self       = this;
+            var allDates   = pd.data.dates  || [];
+            var allSeries  = pd.data.series || {};
+            var $wrap      = $('#oy-perf-chart-wrap');
+            var $title     = $('#oy-perf-chart-title');
+            var $sub       = $('#oy-perf-chart-subtitle');
+            var $nodata    = $('#oy-perf-chart-nodata');
+            var $container = $('#oy-perf-chart-container');
 
-    if (!Object.keys(series).length) {
-        $wrap.hide();
-        return;
-    }
+            // Reset nodata/canvas visibility
+            $nodata.hide();
+            $container.show();
+            $sub.hide();
 
-    // ── Guard: si Chart.js aún no está listo, reintenta cuando lo esté ────────
-    if (typeof Chart === 'undefined') {
-        if (typeof waitForChart === 'function') {
-            waitForChart(function(){ self.buildChart(pd, chartType); });
-        } else {
-            console.warn('[OyPerf] Chart.js no disponible (buildChart).');
-        }
-        return;
-    }
-    // ───────────────────────────────────────────────────────────────────────────
+            if (!Object.keys(allSeries).length) {
+                if (self.chartInstance) { self.chartInstance.destroy(); self.chartInstance = null; }
+                return;
+            }
 
-    if (self.chartInstance) {
-        self.chartInstance.destroy();
-        self.chartInstance = null;
-    }
+            // ── Guard: Chart.js no cargado aún ──────────────────────────────
+            if (typeof Chart === 'undefined') {
+                if (typeof waitForChart === 'function') {
+                    waitForChart(function(){ self.buildChart(pd, chartType); });
+                } else {
+                    console.warn('[OyPerf] Chart.js no disponible (buildChart).');
+                }
+                return;
+            }
 
-    var ctx = document.getElementById('oy-perf-chart');
-    if (!ctx) { return; }
+            // ── Actualizar el selector de métrica única en la cabecera ───────
+            self.updateChartMetricSelector(pd, chartType);
 
-    var chartConfig = null;
+            // ── Filtrar series según tipo de gráfico ─────────────────────────
+            var series = {};
+            var dates  = allDates;
+            var isPie  = (chartType === 'pie' || chartType === 'doughnut');
 
-    // --- PIE / DOUGHNUT: totals distribution -------------------------
-    if (chartType === 'pie' || chartType === 'doughnut') {
-        var pieLabels  = [];
-        var pieValues  = [];
-        var pieColors  = [];
-        $.each(series, function(k, s){
-            pieLabels.push(s.label);
-            pieValues.push(s.total);
-            pieColors.push(s.color);
-        });
-        $title.text('Distribución de métricas');
-        $sub.text('Total del período seleccionado').show();
-        // Adjust canvas height for pie/doughnut
-        $('#oy-perf-chart-container').css('height', '320px');
-        chartConfig = {
-            type : chartType,
-            data : {
-                labels  : pieLabels,
-                datasets: [{
-                    data           : pieValues,
-                    backgroundColor: pieColors.map(function(c){ return c + 'CC'; }),
-                    borderColor    : pieColors,
-                    borderWidth    : 2,
-                }]
-            },
-            options: {
-                responsive  : true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'right', labels: { boxWidth: 14, padding: 10, font: { size: 11 } } },
-                    tooltip: {
-                        callbacks: {
-                            label: function(ctx){
-                                var total = ctx.dataset.data.reduce(function(a,b){ return a+b; }, 0);
-                                var pct   = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
-                                return ' ' + ctx.label + ': ' + self.formatNum(ctx.raw) + ' (' + pct + '%)';
+            if (isPie) {
+                // Torta/Dona: SOLO las 4 métricas de impresiones (móvil vs escritorio)
+                var impKeys = [
+                    'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
+                    'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+                    'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
+                    'BUSINESS_IMPRESSIONS_MOBILE_SEARCH'
+                ];
+                $.each(impKeys, function(i, k){
+                    if (allSeries[k]) { series[k] = allSeries[k]; }
+                });
+
+                if (!Object.keys(series).length) {
+                    // Ninguna impresión seleccionada → aviso, sin canvas
+                    if (self.chartInstance) { self.chartInstance.destroy(); self.chartInstance = null; }
+                    $nodata.show();
+                    $container.hide();
+                    return;
+                }
+            } else {
+                // Barras/Líneas: UN solo indicador seleccionado en el dropdown
+                var selectedKey = $('#oy-perf-single-metric').val();
+                if (!selectedKey || !allSeries[selectedKey]) {
+                    selectedKey = Object.keys(allSeries)[0] || '';
+                }
+                if (!selectedKey) { return; }
+                series[selectedKey] = allSeries[selectedKey];
+            }
+
+            // ── Destruir instancia anterior ──────────────────────────────────
+            if (self.chartInstance) {
+                self.chartInstance.destroy();
+                self.chartInstance = null;
+            }
+
+            var ctx = document.getElementById('oy-perf-chart');
+            if (!ctx) { return; }
+
+            var chartConfig = null;
+            var sk          = Object.keys(series)[0] || '';
+            var skLabel     = (sk && series[sk]) ? series[sk].label : '';
+
+            // --- PIE / DOUGHNUT: distribución móvil vs escritorio -----------
+            if (isPie) {
+                var pieLabels = [];
+                var pieValues = [];
+                var pieColors = [];
+                $.each(series, function(k, s){
+                    pieLabels.push(s.label);
+                    pieValues.push(s.total);
+                    pieColors.push(s.color);
+                });
+
+                $title.text('Distribución Móvil vs Escritorio');
+                $sub.text('Total del período seleccionado').show();
+                $('#oy-perf-chart-container').css('height', '300px');
+
+                chartConfig = {
+                    type : chartType,
+                    data : {
+                        labels  : pieLabels,
+                        datasets: [{
+                            data           : pieValues,
+                            backgroundColor: pieColors.map(function(c){ return c + 'CC'; }),
+                            borderColor    : pieColors,
+                            borderWidth    : 2,
+                        }]
+                    },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels  : { boxWidth: 14, padding: 10, font: { size: 11 } }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx){
+                                        var total = ctx.dataset.data.reduce(function(a,b){ return a+b; }, 0);
+                                        var pct   = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
+                                        return ' ' + ctx.label + ': ' + self.formatNum(ctx.raw) + ' (' + pct + '%)';
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                };
             }
-        };
-    }
 
-    // --- BAR BY MONTH ------------------------------------------------
-    else if (chartType === 'bar_month') {
-        if (!dates.length) { $wrap.hide(); return; }
-        var monthMap  = {}; // { 'YYYY-MM': { metricKey: sum } }
-        var monthList = [];
+            // --- BARRAS POR MES ---------------------------------------------
+            else if (chartType === 'bar_month') {
+                if (!dates.length) { return; }
 
-        $.each(dates, function(i, d){
-            var ym = d.substring(0, 7); // 'YYYY-MM'
-            if (!monthMap[ym]) {
-                monthMap[ym] = {};
-                monthList.push(ym);
-            }
-            $.each(series, function(k, s){
-                monthMap[ym][k] = (monthMap[ym][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
-            });
-        });
+                var monthMap  = {};
+                var monthList = [];
+                $.each(dates, function(i, d){
+                    var ym = d.substring(0, 7);
+                    if (!monthMap[ym]) { monthMap[ym] = {}; monthList.push(ym); }
+                    $.each(series, function(k, s){
+                        monthMap[ym][k] = (monthMap[ym][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
+                    });
+                });
 
-        // Build nice month labels
-        var monthLabels = monthList.map(function(ym){
-            var parts = ym.split('-');
-            var mNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-            return mNames[parseInt(parts[1],10)-1] + ' ' + parts[0];
-        });
+                var monthLabels = monthList.map(function(ym){
+                    var parts  = ym.split('-');
+                    var mNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+                    return mNames[parseInt(parts[1],10)-1] + ' ' + parts[0];
+                });
 
-        var datasets = [];
-        $.each(series, function(k, s){
-            datasets.push({
-                label          : s.label,
-                data           : monthList.map(function(ym){ return monthMap[ym][k] || 0; }),
-                backgroundColor: s.color + 'CC',
-                borderColor    : s.color,
-                borderWidth    : 1.5,
-                borderRadius   : 3,
-            });
-        });
+                var datasets = [];
+                $.each(series, function(k, s){
+                    datasets.push({
+                        label          : s.label,
+                        data           : monthList.map(function(ym){ return monthMap[ym][k] || 0; }),
+                        backgroundColor: s.color + 'CC',
+                        borderColor    : s.color,
+                        borderWidth    : 1.5,
+                        borderRadius   : 4,
+                    });
+                });
 
-        $title.text('Métricas por mes');
-        $sub.hide();
-        $('#oy-perf-chart-container').css('height', '280px');
-        chartConfig = {
-            type : 'bar',
-            data : { labels: monthLabels, datasets: datasets },
-            options: {
-                responsive : true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
-                    tooltip : {
-                        callbacks: {
-                            label: function(ctx){
-                                return ' ' + ctx.dataset.label + ': ' + self.formatNum(ctx.raw);
+                $title.text(skLabel + ' — por mes');
+                $('#oy-perf-chart-container').css('height', '280px');
+                chartConfig = {
+                    type : 'bar',
+                    data : { labels: monthLabels, datasets: datasets },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        interaction        : { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx){ return ' ' + self.formatNum(ctx.raw); }
+                                }
                             }
+                        },
+                        scales: {
+                            x: { ticks: { maxRotation: 45 } },
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
                         }
                     }
-                },
-                scales: {
-                    x: { ticks: { maxRotation: 45 } },
-                    y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
-                }
+                };
             }
-        };
-    }
 
-    // --- BAR BY YEAR -------------------------------------------------
-    else if (chartType === 'bar_year') {
-        if (!dates.length) { $wrap.hide(); return; }
-        var yearMap  = {}; // { 'YYYY': { metricKey: sum } }
-        var yearList = [];
+            // --- BARRAS POR AÑO ---------------------------------------------
+            else if (chartType === 'bar_year') {
+                if (!dates.length) { return; }
 
-        $.each(dates, function(i, d){
-            var yr = d.substring(0, 4);
-            if (!yearMap[yr]) {
-                yearMap[yr] = {};
-                yearList.push(yr);
-            }
-            $.each(series, function(k, s){
-                yearMap[yr][k] = (yearMap[yr][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
-            });
-        });
+                var yearMap  = {};
+                var yearList = [];
+                $.each(dates, function(i, d){
+                    var yr = d.substring(0, 4);
+                    if (!yearMap[yr]) { yearMap[yr] = {}; yearList.push(yr); }
+                    $.each(series, function(k, s){
+                        yearMap[yr][k] = (yearMap[yr][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
+                    });
+                });
 
-        var datasets = [];
-        $.each(series, function(k, s){
-            datasets.push({
-                label          : s.label,
-                data           : yearList.map(function(yr){ return yearMap[yr][k] || 0; }),
-                backgroundColor: s.color + 'CC',
-                borderColor    : s.color,
-                borderWidth    : 1.5,
-                borderRadius   : 4,
-            });
-        });
+                var datasets = [];
+                $.each(series, function(k, s){
+                    datasets.push({
+                        label          : s.label,
+                        data           : yearList.map(function(yr){ return yearMap[yr][k] || 0; }),
+                        backgroundColor: s.color + 'CC',
+                        borderColor    : s.color,
+                        borderWidth    : 1.5,
+                        borderRadius   : 4,
+                    });
+                });
 
-        $title.text('Métricas por año');
-        $sub.hide();
-        $('#oy-perf-chart-container').css('height', '280px');
-        chartConfig = {
-            type : 'bar',
-            data : { labels: yearList, datasets: datasets },
-            options: {
-                responsive : true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
-                    tooltip : {
-                        callbacks: {
-                            label: function(ctx){
-                                return ' ' + ctx.dataset.label + ': ' + self.formatNum(ctx.raw);
+                $title.text(skLabel + ' — por año');
+                $('#oy-perf-chart-container').css('height', '280px');
+                chartConfig = {
+                    type : 'bar',
+                    data : { labels: yearList, datasets: datasets },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        interaction        : { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx){ return ' ' + self.formatNum(ctx.raw); }
+                                }
                             }
+                        },
+                        scales: {
+                            x: {},
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
                         }
                     }
-                },
-                scales: {
-                    x: {},
-                    y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
-                }
+                };
             }
-        };
-    }
 
-    // --- LINE / BAR (by day) ----------------------------------------
-    else {
-        if (!dates.length) { $wrap.hide(); return; }
-        var datasets = [];
-        $.each(series, function(k, s){
-            var values = dates.map(function(d){ return s.data[d] !== undefined ? s.data[d] : null; });
-            datasets.push({
-                label          : s.label,
-                data           : values,
-                borderColor    : s.color,
-                backgroundColor: chartType === 'bar' ? s.color + 'BB' : s.color + '22',
-                borderWidth    : 2,
-                tension        : 0.3,
-                fill           : chartType === 'line',
-                pointRadius    : dates.length > 60 ? 1 : 3,
-                spanGaps       : true,
-            });
-        });
+            // --- LÍNEAS / BARRAS POR DÍA ------------------------------------
+            else {
+                if (!dates.length) { return; }
 
-        $title.text('Evolución de métricas');
-        $sub.hide();
-        $('#oy-perf-chart-container').css('height', '280px');
-        chartConfig = {
-            type : chartType,
-            data : { labels: dates, datasets: datasets },
-            options: {
-                responsive : true,
-                maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: {
-                    legend  : { position: 'bottom', labels: { boxWidth: 12, padding: 10 } },
-                    tooltip : {
-                        callbacks: {
-                            label: function(ctx){
-                                return ' ' + ctx.dataset.label + ': ' + (ctx.raw !== null ? self.formatNum(ctx.raw) : '—');
+                var datasets = [];
+                $.each(series, function(k, s){
+                    var values = dates.map(function(d){ return s.data[d] !== undefined ? s.data[d] : null; });
+                    datasets.push({
+                        label          : s.label,
+                        data           : values,
+                        borderColor    : s.color,
+                        backgroundColor: chartType === 'bar' ? s.color + 'BB' : s.color + '22',
+                        borderWidth    : 2,
+                        tension        : 0.3,
+                        fill           : chartType === 'line',
+                        pointRadius    : dates.length > 60 ? 1 : 3,
+                        spanGaps       : true,
+                    });
+                });
+
+                $title.text(skLabel + (chartType === 'bar' ? ' — por día' : ' — evolución'));
+                $('#oy-perf-chart-container').css('height', '280px');
+                chartConfig = {
+                    type : chartType,
+                    data : { labels: dates, datasets: datasets },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        interaction        : { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx){
+                                        return ' ' + (ctx.raw !== null ? self.formatNum(ctx.raw) : '—');
+                                    }
+                                }
                             }
+                        },
+                        scales: {
+                            x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
                         }
                     }
-                },
-                scales: {
-                    x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
-                    y: {
-                        beginAtZero: true,
-                        ticks: { callback: function(v){ return self.formatNum(v); } }
-                    }
-                }
+                };
             }
-        };
-    }
 
-    if (!chartConfig) { $wrap.hide(); return; }
+            if (!chartConfig) { return; }
 
-    self.chartInstance = new Chart(ctx, chartConfig);
-    $wrap.show();
-},
+            self.chartInstance = new Chart(ctx, chartConfig);
+            $wrap.show();
+        },
 
         buildTable: function(pd){
             var self   = this;
@@ -2743,6 +2827,27 @@ JS;
     font-size:11px; color:#888; padding:6px 0;
     border-top:1px solid #eee; margin-top:4px;
 }
+
+/* Chart header right area */
+.oy-perf-chart-header-right {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.oy-perf-chart-header-right label {
+    font-size:12px; font-weight:600; color:#555; white-space:nowrap;
+}
+
+/* Single-metric dropdown in chart header */
+.oy-perf-single-metric-sel {
+    min-width:200px; font-size:12px !important;
+    padding:3px 6px !important; height:auto !important;
+}
+
+/* Pie badge variant */
+.oy-perf-badge--pie {
+    background:#fce8b2; color:#b06000;
+}
+
+
 ';
     }
 }
