@@ -70,6 +70,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
+ * Blindaje adicional:
+ * Si por error otro archivo ya declaró esta clase
+ * (por ejemplo class-oy-location-hours-metabox.php),
+ * salimos inmediatamente para evitar el fatal.
+ */
+if ( class_exists( 'OY_Location_GMB_BusyHours_Metabox', false ) ) {
+	return;
+}
+
+/**
  * Class OY_Location_GMB_BusyHours_Metabox
  *
  * AJAX handlers:
