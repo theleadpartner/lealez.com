@@ -1277,82 +1277,93 @@ class OY_Location_GMB_Keywords_Metabox {
             $kpis.show();
         },
 
-        buildChart: function(aggregated){
-            var self  = this;
-            var top20 = aggregated.slice(0, 20);
-            var $wrap = $('#oy-kw-chart-wrap');
+buildChart: function(aggregated){
+    var self  = this;
+    var top20 = aggregated.slice(0, 20);
+    var $wrap = $('#oy-kw-chart-wrap');
 
-            if (!top20.length) { $wrap.hide(); return; }
+    if (!top20.length) { $wrap.hide(); return; }
 
-            if (self.chartInstance) {
-                self.chartInstance.destroy();
-                self.chartInstance = null;
-            }
+    // ── Guard: si Chart.js aún no está listo, reintenta cuando lo esté ────────
+    if (typeof Chart === 'undefined') {
+        if (typeof waitForChart === 'function') {
+            waitForChart(function(){ self.buildChart(aggregated); });
+        } else {
+            console.warn('[OyKw] Chart.js no disponible (buildChart).');
+        }
+        return;
+    }
+    // ───────────────────────────────────────────────────────────────────────────
 
-            var labels  = top20.map(function(kw){ return kw.keyword; });
-            var values  = top20.map(function(kw){ return kw.total; });
-            var palette = [
-                '#4285f4','#34a853','#fbbc05','#ea4335','#9c27b0',
-                '#00bcd4','#ff9800','#795548','#607d8b','#e91e63',
-                '#1565c0','#2e7d32','#f57f17','#bf360c','#6a1b9a',
-                '#00838f','#ad1457','#4e342e','#546e7a','#c62828'
-            ];
-            var bgColors = labels.map(function(l, i){ return palette[i % palette.length]; });
+    if (self.chartInstance) {
+        self.chartInstance.destroy();
+        self.chartInstance = null;
+    }
 
-            // Dynamic chart height based on number of items
-            var chartH = Math.max(280, top20.length * 28);
-            $('.oy-kw-chart-container').css('height', chartH + 'px');
+    var labels  = top20.map(function(kw){ return kw.keyword; });
+    var values  = top20.map(function(kw){ return kw.total; });
+    var palette = [
+        '#4285f4','#34a853','#fbbc05','#ea4335','#9c27b0',
+        '#00bcd4','#ff9800','#795548','#607d8b','#e91e63',
+        '#1565c0','#2e7d32','#f57f17','#bf360c','#6a1b9a',
+        '#00838f','#ad1457','#4e342e','#546e7a','#c62828'
+    ];
+    var bgColors = labels.map(function(l, i){ return palette[i % palette.length]; });
 
-            var ctx = document.getElementById('oy-kw-main-chart');
-            if (!ctx) { return; }
+    // Dynamic chart height based on number of items
+    var chartH = Math.max(280, top20.length * 28);
+    $('.oy-kw-chart-container').css('height', chartH + 'px');
 
-            // FIX: show the wrapper BEFORE new Chart() so canvas has real dimensions.
-            // Chart.js reads canvas.offsetWidth/Height at instantiation — 0x0 throws.
-            $wrap.show();
+    var ctx = document.getElementById('oy-kw-main-chart');
+    if (!ctx) { return; }
 
-            self.chartInstance = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels  : labels,
-                    datasets: [{
-                        label          : 'Impresiones',
-                        data           : values,
-                        backgroundColor: bgColors,
-                        borderRadius   : 4,
-                    }]
-                },
-                options: {
-                    indexAxis : 'y',
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend : { display: false },
-                        tooltip: {
-                            callbacks: {
-                                label: function(ctx){
-                                    return ' ' + self.formatNum(ctx.raw) + ' impresiones';
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        x: {
-                            beginAtZero: true,
-                            ticks: { callback: function(v){ return self.formatNum(v); } }
-                        },
-                        y: {
-                            ticks: {
-                                font    : { size: 11 },
-                                callback: function(val, index){
-                                    var label = labels[index] || '';
-                                    return label.length > 30 ? label.substring(0,27)+'…' : label;
-                                }
-                            }
+    // FIX: show the wrapper BEFORE new Chart() so canvas has real dimensions.
+    // Chart.js reads canvas.offsetWidth/Height at instantiation — 0x0 throws.
+    $wrap.show();
+
+    self.chartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels  : labels,
+            datasets: [{
+                label          : 'Impresiones',
+                data           : values,
+                backgroundColor: bgColors,
+                borderRadius   : 4,
+            }]
+        },
+        options: {
+            indexAxis : 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend : { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx){
+                            return ' ' + self.formatNum(ctx.raw) + ' impresiones';
                         }
                     }
                 }
-            });
-        },
+            },
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    ticks: { callback: function(v){ return self.formatNum(v); } }
+                },
+                y: {
+                    ticks: {
+                        font    : { size: 11 },
+                        callback: function(val, index){
+                            var label = labels[index] || '';
+                            return label.length > 30 ? label.substring(0,27)+'…' : label;
+                        }
+                    }
+                }
+            }
+        }
+    });
+},
 
         buildMonthFilter: function(startM, endM, monthlyRaw){
             var self = this;
