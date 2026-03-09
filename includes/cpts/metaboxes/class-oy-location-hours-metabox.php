@@ -49,10 +49,9 @@ class OY_Location_Hours_Metabox {
     // Constructor
     // ─────────────────────────────────────────────────────────────────────────
 
-public function __construct() {
-        // Registrar el metabox con prioridad 20 — DESPUÉS del CPT (prioridad 10)
-        // para ser la única y definitiva registración de 'oy_location_hours'.
-        add_action( 'add_meta_boxes', array( $this, 'register_metabox' ), 20 );
+    public function __construct() {
+        // Registrar el metabox
+        add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
 
         // Guardar campos al publicar/actualizar — prioridad 25 (después del save principal a 20)
         add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 25, 2 );
@@ -115,8 +114,22 @@ public function __construct() {
         if ( empty( $timezone ) )     { $timezone     = 'America/Bogota'; }
         if ( empty( $hours_status ) ) { $hours_status = 'open_with_hours'; }
 
+        // ✅ Auditoría: última sincronización hecha específicamente por el botón del metabox de Horarios
+        $last_sync_source = (string) get_post_meta( $post->ID, 'oy_hours_last_sync_source', true );
+        $last_sync_at     = (string) get_post_meta( $post->ID, 'oy_hours_last_sync_at', true );
+
+        $last_sync_label = '';
+        if ( 'hours_metabox_button' === $last_sync_source && ! empty( $last_sync_at ) ) {
+            $last_sync_label = sprintf(
+                /* translators: %s: datetime */
+                __( 'Última sincronización (botón Horarios): %s', 'lealez' ),
+                $last_sync_at
+            );
+        } else {
+            $last_sync_label = __( 'Última sincronización (botón Horarios): — (aún no se ha ejecutado)', 'lealez' );
+        }
+
         // ── Opciones de horario: "24 horas" + intervalos de 15 min ─────────────
-        // Google Business Profile permite horarios en incrementos de 15 min.
         $time_options = array();
         $time_options['24_hours'] = __( '24 horas', 'lealez' );
         for ( $h = 0; $h < 24; $h++ ) {
@@ -144,9 +157,7 @@ public function __construct() {
         // ── Metadatos del post para el JS ───────────────────────────────────────
         $parent_business_id = get_post_meta( $post->ID, 'parent_business_id',  true );
         $gmb_location_name  = get_post_meta( $post->ID, 'gmb_location_name',   true );
-        $post_id            = $post->ID;
         ?>
-
         <?php /* ── BARRA DE SINCRONIZACIÓN PROPIA ── */ ?>
         <div id="oy-hours-sync-bar" style="background:#f0f6fc; border:1px solid #c3d4e4; border-radius:4px; padding:10px 14px; margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
             <span style="font-weight:600; color:#1d5b8e;">
@@ -164,6 +175,10 @@ public function __construct() {
             </button>
 
             <div id="oy-hours-sync-msg" style="font-size:13px; color:#555;"></div>
+
+            <div id="oy-hours-sync-lastinfo" style="flex-basis:100%; font-size:12px; color:#666; margin-top:2px;">
+                <?php echo esc_html( $last_sync_label ); ?>
+            </div>
         </div>
 
         <?php /* ── ZONA HORARIA ── */ ?>
@@ -236,7 +251,7 @@ public function __construct() {
                 addPeriod:    '<?php echo esc_js( __( 'Agregar otro turno', 'lealez' ) ); ?>',
                 removePeriod: '<?php echo esc_js( __( 'Eliminar turno', 'lealez' ) ); ?>',
                 opensAt:      '<?php echo esc_js( __( 'Abre a la(s)', 'lealez' ) ); ?>',
-                closesAt:     '<?php echo esc_js( __( 'Cierra a la(s)', 'lealez' ) ); ?>',
+                closesAt:     '<?php echo esc_js( __( 'Cierra a la(s)', 'lealez' ) ); ?>'
             };
             </script>
 
@@ -244,13 +259,12 @@ public function __construct() {
             <?php foreach ( $days as $day_key => $day_label ) :
                 $hours = get_post_meta( $post->ID, 'location_hours_' . $day_key, true );
 
-                // Normalizar: si no existe o es v1 (open/close al nivel raíz), migrar a v2 (periods[])
                 if ( ! is_array( $hours ) ) {
                     $hours = array( 'closed' => false, 'all_day' => false, 'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ) );
                 }
                 if ( ! isset( $hours['periods'] ) || ! is_array( $hours['periods'] ) || empty( $hours['periods'] ) ) {
-                    $old_open  = $hours['open']  ?? '09:00';
-                    $old_close = $hours['close'] ?? '18:00';
+                    $old_open  = isset( $hours['open'] )  ? $hours['open']  : '09:00';
+                    $old_close = isset( $hours['close'] ) ? $hours['close'] : '18:00';
                     if ( $old_open === '24_hours' ) {
                         $hours['all_day'] = true;
                         $hours['periods'] = array( array( 'open' => '24_hours', 'close' => '' ) );
@@ -260,11 +274,10 @@ public function __construct() {
                     }
                 }
 
-                $is_closed     = ! empty( $hours['closed'] );
-                $is_all_day    = ! empty( $hours['all_day'] );
-                $periods       = is_array( $hours['periods'] ) ? $hours['periods'] : array( array( 'open' => '09:00', 'close' => '18:00' ) );
+                $is_closed  = ! empty( $hours['closed'] );
+                $is_all_day = ! empty( $hours['all_day'] );
+                $periods    = is_array( $hours['periods'] ) ? $hours['periods'] : array( array( 'open' => '09:00', 'close' => '18:00' ) );
                 if ( $is_all_day ) { $periods = array( array( 'open' => '24_hours', 'close' => '' ) ); }
-                $periods_total = count( $periods );
                 ?>
                 <div class="oy-day-section" data-day="<?php echo esc_attr( $day_key ); ?>"
                      style="display:flex; align-items:flex-start; gap:0; margin-bottom:4px; padding:6px 0; border-bottom:1px solid #f0f0f0;">
@@ -289,8 +302,8 @@ public function __construct() {
                     <div class="oy-day-periods" data-day="<?php echo esc_attr( $day_key ); ?>"
                          style="flex:1; <?php echo $is_closed ? 'opacity:0.5;' : ''; ?>">
                         <?php foreach ( $periods as $pidx => $period ) :
-                            $popen   = $period['open']  ?? '09:00';
-                            $pclose  = $period['close'] ?? '18:00';
+                            $popen   = isset( $period['open'] )  ? $period['open']  : '09:00';
+                            $pclose  = isset( $period['close'] ) ? $period['close'] : '18:00';
                             $p24h    = ( $popen === '24_hours' );
                             $is_first = ( $pidx === 0 );
                             ?>
@@ -299,14 +312,20 @@ public function __construct() {
                                     <?php if ( $is_first ) : ?><div style="font-size:10px;color:#888;margin-bottom:2px;"><?php _e( 'Abre a la(s)', 'lealez' ); ?></div><?php endif; ?>
                                     <?php echo $render_select(
                                         'location_hours_' . $day_key . '[periods][' . $pidx . '][open]',
-                                        $popen, true, $is_closed, 'oy-period-open'
+                                        $popen,
+                                        true,
+                                        $is_closed,
+                                        'oy-period-open'
                                     ); ?>
                                 </div>
                                 <div>
                                     <?php if ( $is_first ) : ?><div style="font-size:10px;color:#888;margin-bottom:2px;"><?php _e( 'Cierra a la(s)', 'lealez' ); ?></div><?php endif; ?>
                                     <?php echo $render_select(
                                         'location_hours_' . $day_key . '[periods][' . $pidx . '][close]',
-                                        $pclose, false, ( $is_closed || $p24h ), 'oy-period-close'
+                                        $pclose,
+                                        false,
+                                        ( $is_closed || $p24h ),
+                                        'oy-period-close'
                                     ); ?>
                                 </div>
                                 <div style="<?php echo $is_first ? 'margin-top:18px;' : ''; ?>">
@@ -334,7 +353,12 @@ public function __construct() {
 
             // ── Radio: mostrar/ocultar grilla ───────────────────────────────
             $('.oy-hours-status-radio').on('change', function() {
-                $('#oy-hours-grid-wrap')[ $(this).val() === 'open_with_hours' ? 'slideDown' : 'slideUp' ](150);
+                var v = $('input[name="location_hours_status"]:checked').val();
+                if (v === 'open_with_hours') {
+                    $('#oy-hours-grid-wrap').show();
+                } else {
+                    $('#oy-hours-grid-wrap').hide();
+                }
             });
 
             // ── Helper: generar <option> HTML para selects ──────────────────
@@ -403,12 +427,12 @@ public function __construct() {
             $(document).on('change', '.oy-period-open', function() {
                 var isAllDay = $(this).val() === '24_hours';
                 var $row = $(this).closest('.oy-period-row');
-                $row.find('.oy-period-close').prop('disabled', isAllDay).val(isAllDay ? '' : undefined);
+                $row.find('.oy-period-close').prop('disabled', isAllDay);
+                if (isAllDay) { $row.find('.oy-period-close').val(''); }
                 $row.find('.oy-add-period')[ isAllDay ? 'hide' : 'show' ]();
             });
 
             // ── Exponer helpers a window para que applyLocationToForm (GMB metabox)
-            //    pueda seguir usándolos al hacer "Importar Ahora" ──────────────────
             window.oyHours_buildOptions  = buildOptions;
             window.oyHours_buildRow      = buildPeriodRow;
             window.oyHours_reindex       = reindexPeriods;
@@ -423,20 +447,16 @@ public function __construct() {
                 var isAllDay   = !!dayData.all_day;
                 var periodsArr = dayData.periods || [];
 
-                // Actualizar checkbox "Cerrada"
                 $cb.prop('checked', isClosed);
-                // Actualizar etiqueta pequeña
                 $cb.siblings('small').remove();
                 if (isClosed) {
                     $cb.after('<br><small style="color:#999;"><?php echo esc_js( __( 'Cerrada', 'lealez' ) ); ?></small>');
                 }
-                $pane.css('opacity', isClosed ? 0.5 : 1);
 
-                // Limpiar rows existentes
+                $pane.css('opacity', isClosed ? 0.5 : 1);
                 $pane.find('.oy-period-row').remove();
 
                 if (isClosed) {
-                    // Día cerrado: un row deshabilitado con valores por defecto
                     $pane.append(buildPeriodRow(dayKey, 0, '09:00', '18:00', true));
                     $pane.find('select').prop('disabled', true);
                     return;
@@ -444,31 +464,37 @@ public function __construct() {
 
                 if (isAllDay || (periodsArr.length === 1 && periodsArr[0].open === '24_hours')) {
                     $pane.append(buildPeriodRow(dayKey, 0, '24_hours', '', true));
-                    $pane.find('.oy-period-close').prop('disabled', true);
+                    $pane.find('.oy-period-close').prop('disabled', true).val('');
                     $pane.find('.oy-add-period').hide();
                     return;
                 }
 
-                // Períodos normales
                 for (var ri = 0; ri < periodsArr.length; ri++) {
-                    var rowHtml = buildPeriodRow(dayKey, ri, periodsArr[ri].open || '09:00', periodsArr[ri].close || '18:00', (ri === 0));
+                    var rowHtml = buildPeriodRow(
+                        dayKey,
+                        ri,
+                        (periodsArr[ri].open  || '09:00'),
+                        (periodsArr[ri].close || '18:00'),
+                        (ri === 0)
+                    );
                     $pane.append(rowHtml);
                 }
                 reindexPeriods(dayKey);
             }
 
             // ─────────────────────────────────────────────────────────────────
-            // BOTÓN: Sincronizar Horario desde GMB (independiente de "Importar Ahora")
+            // BOTÓN: Sincronizar Horario desde GMB
             // ─────────────────────────────────────────────────────────────────
 
             var _dayOrder = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
 
             $('#oy-hours-sync-btn').on('click', function() {
-                var $btn     = $(this);
-                var $msg     = $('#oy-hours-sync-msg');
-                var postId   = $('#post_ID').val();
-                var bizId    = $('#parent_business_id').val();
-                var locName  = $('#gmb_location_name').val();
+                var $btn   = $(this);
+                var $msg   = $('#oy-hours-sync-msg');
+                var $last  = $('#oy-hours-sync-lastinfo');
+                var postId = $('#post_ID').val();
+                var bizId  = $('#parent_business_id').val();
+                var locName= $('#gmb_location_name').val();
 
                 if (!postId || !bizId || !locName) {
                     $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Selecciona la empresa y la ubicación GMB primero.', 'lealez' ) ); ?></span>');
@@ -498,14 +524,12 @@ public function __construct() {
 
                         var d = response.data;
 
-                        // 1. Actualizar radio de estado
                         if (d.hours_status) {
                             $('input[name="location_hours_status"][value="' + d.hours_status + '"]')
                                 .prop('checked', true)
                                 .trigger('change');
                         }
 
-                        // 2. Reconstruir grilla de días
                         if (d.days && typeof d.days === 'object') {
                             for (var i = 0; i < _dayOrder.length; i++) {
                                 var dk = _dayOrder[i];
@@ -515,10 +539,13 @@ public function __construct() {
                             }
                         }
 
-                        // 3. Mensaje de éxito con timestamp
-                        var now = new Date();
-                        var ts  = now.toLocaleTimeString();
-                        $msg.html('<span style="color:#46b450;">✓ <?php echo esc_js( __( 'Horarios sincronizados', 'lealez' ) ); ?> — ' + ts + '</span>');
+                        if (d.synced_at) {
+                            $last.text('<?php echo esc_js( __( 'Última sincronización (botón Horarios): ', 'lealez' ) ); ?>' + d.synced_at);
+                        } else {
+                            $last.text('<?php echo esc_js( __( 'Última sincronización (botón Horarios): (sin timestamp)', 'lealez' ) ); ?>');
+                        }
+
+                        $msg.html('<span style="color:#46b450;">✓ ' + (d.message ? d.message : '<?php echo esc_js( __( 'Horarios sincronizados', 'lealez' ) ); ?>') + '</span>');
                     },
                     error: function() {
                         $btn.prop('disabled', false);
@@ -539,14 +566,11 @@ public function __construct() {
     /**
      * Guarda los campos de horario cuando el usuario publica o actualiza el post.
      *
-     * Corre en prioridad 25, después del save principal de OY_Location_CPT (prioridad 20).
-     *
      * @param int     $post_id
      * @param WP_Post $post
      */
     public function save_metabox( $post_id, $post ) {
 
-        // Verificar nonce propio
         if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
             return;
         }
@@ -563,12 +587,10 @@ public function __construct() {
             return;
         }
 
-        // ── Zona horaria ────────────────────────────────────────────────────
         if ( isset( $_POST['location_hours_timezone'] ) ) {
             update_post_meta( $post_id, 'location_hours_timezone', sanitize_text_field( wp_unslash( $_POST['location_hours_timezone'] ) ) );
         }
 
-        // ── Estado del horario ───────────────────────────────────────────────
         $valid_hours_statuses = array( 'open_with_hours', 'open_without_hours', 'temporarily_closed', 'permanently_closed' );
         if ( isset( $_POST['location_hours_status'] ) ) {
             $hours_status_raw = sanitize_text_field( wp_unslash( $_POST['location_hours_status'] ) );
@@ -577,10 +599,6 @@ public function __construct() {
             }
         }
 
-        // ── Horarios por día — estructura v2 con periods[] ──────────────────
-        // Formato POST: location_hours_{day}[closed]=1,
-        //               location_hours_{day}[periods][0][open],
-        //               location_hours_{day}[periods][0][close], etc.
         $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
         foreach ( $days as $day ) {
             if ( ! isset( $_POST[ 'location_hours_' . $day ] ) ) {
@@ -596,13 +614,14 @@ public function __construct() {
 
             foreach ( $periods_raw as $praw ) {
                 if ( ! is_array( $praw ) ) { continue; }
-                $popen  = sanitize_text_field( $praw['open']  ?? '09:00' );
-                $pclose = sanitize_text_field( $praw['close'] ?? '18:00' );
+                $popen  = sanitize_text_field( isset( $praw['open'] )  ? $praw['open']  : '09:00' );
+                $pclose = sanitize_text_field( isset( $praw['close'] ) ? $praw['close'] : '18:00' );
+
                 if ( $popen === '24_hours' ) {
-                    $is_all_day     = true;
-                    $pclose         = '';
-                    $periods_clean  = array( array( 'open' => '24_hours', 'close' => '' ) );
-                    break; // 24h → un solo período
+                    $is_all_day    = true;
+                    $pclose        = '';
+                    $periods_clean = array( array( 'open' => '24_hours', 'close' => '' ) );
+                    break;
                 }
                 if ( empty( $popen ) ) { continue; }
                 $periods_clean[] = array( 'open' => $popen, 'close' => $pclose );
@@ -612,15 +631,13 @@ public function __construct() {
                 $periods_clean = array( array( 'open' => '09:00', 'close' => '18:00' ) );
             }
 
-            // Backward-compat: guardar open/close del primer período al nivel raíz
-            $first_open  = $periods_clean[0]['open']  ?? '09:00';
-            $first_close = $periods_clean[0]['close'] ?? '18:00';
+            $first_open  = isset( $periods_clean[0]['open'] )  ? $periods_clean[0]['open']  : '09:00';
+            $first_close = isset( $periods_clean[0]['close'] ) ? $periods_clean[0]['close'] : '18:00';
 
             $hours_data = array(
                 'closed'  => $closed,
                 'all_day' => $is_all_day,
                 'periods' => $periods_clean,
-                // v1 compat keys:
                 'open'    => $is_all_day ? '24_hours' : $first_open,
                 'close'   => $is_all_day ? '' : $first_close,
             );
@@ -635,25 +652,16 @@ public function __construct() {
 
     /**
      * Handler AJAX para el botón "Sincronizar Horario desde GMB".
-     *
-     * Obtiene datos frescos de la API de Google Business Profile,
-     * guarda los campos de horario en la base de datos y devuelve
-     * los datos procesados para que el JS actualice el formulario
-     * sin recargar la página.
-     *
-     * Action: oy_sync_location_hours_from_gmb
      */
     public function ajax_sync_hours() {
 
-        // Verificar nonce AJAX
         $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
         if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
             wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
         }
 
-        // Validar parámetros
-        $post_id       = isset( $_POST['post_id'] )       ? absint( wp_unslash( $_POST['post_id'] ) )                               : 0;
-        $business_id   = isset( $_POST['business_id'] )   ? absint( wp_unslash( $_POST['business_id'] ) )                           : 0;
+        $post_id       = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+        $business_id   = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
         $location_name = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
 
         if ( ! $post_id || ! $business_id || empty( $location_name ) ) {
@@ -664,12 +672,10 @@ public function __construct() {
             wp_send_json_error( array( 'message' => __( 'Sin permisos para editar este post.', 'lealez' ) ) );
         }
 
-        // Verificar que la clase de API está disponible
         if ( ! class_exists( 'Lealez_GMB_API' ) ) {
             wp_send_json_error( array( 'message' => __( 'La clase Lealez_GMB_API no está disponible.', 'lealez' ) ) );
         }
 
-        // ── Obtener datos frescos de GMB ─────────────────────────────────────
         $data = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
 
         if ( is_wp_error( $data ) ) {
@@ -680,14 +686,13 @@ public function __construct() {
             wp_send_json_error( array( 'message' => __( 'No se pudo obtener información de la ubicación desde Google.', 'lealez' ) ) );
         }
 
-        // ── Extraer campos relevantes de horarios ────────────────────────────
-        $regular       = isset( $data['regularHours'] ) && is_array( $data['regularHours'] ) ? $data['regularHours'] : array();
-        $open_info_raw = isset( $data['openInfo'] )     && is_array( $data['openInfo'] )     ? $data['openInfo']     : array();
-        $open_status   = strtoupper( (string) ( $open_info_raw['status']           ?? '' ) );
-        $hours_type    = strtoupper( (string) ( $open_info_raw['openingHoursType'] ?? '' ) );
+        $regular       = ( isset( $data['regularHours'] ) && is_array( $data['regularHours'] ) ) ? $data['regularHours'] : array();
+        $open_info_raw = ( isset( $data['openInfo'] ) && is_array( $data['openInfo'] ) ) ? $data['openInfo'] : array();
+
+        $open_status    = strtoupper( (string) ( isset( $open_info_raw['status'] ) ? $open_info_raw['status'] : '' ) );
+        $hours_type     = strtoupper( (string) ( isset( $open_info_raw['openingHoursType'] ) ? $open_info_raw['openingHoursType'] : '' ) );
         $is_always_open = ( $hours_type === 'ALWAYS_OPEN' );
 
-        // ── Determinar hours_status ──────────────────────────────────────────
         if ( $open_status === 'CLOSED_TEMPORARILY' ) {
             $hours_status = 'temporarily_closed';
         } elseif ( $open_status === 'CLOSED_PERMANENTLY' ) {
@@ -697,9 +702,7 @@ public function __construct() {
             $hours_status = ( $has_periods || $is_always_open ) ? 'open_with_hours' : 'open_without_hours';
         }
 
-        // ── Mapear y guardar horarios por día ────────────────────────────────
         $days_meta = array();
-
         if ( $is_always_open ) {
             $days_meta = $this->build_always_open_daily_meta();
             update_post_meta( $post_id, 'gmb_regular_hours_raw', array( 'openingHoursType' => 'ALWAYS_OPEN' ) );
@@ -708,9 +711,9 @@ public function __construct() {
             update_post_meta( $post_id, 'gmb_regular_hours_raw', $regular );
         }
 
-        // Guardar en BD y en la respuesta solo los 7 días
-        $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        $all_days      = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
         $days_response = array();
+
         foreach ( $all_days as $dk ) {
             if ( isset( $days_meta[ $dk ] ) ) {
                 update_post_meta( $post_id, 'location_hours_' . $dk, $days_meta[ $dk ] );
@@ -718,36 +721,31 @@ public function __construct() {
             }
         }
 
-        // Guardar open_info RAW y estado
         if ( ! empty( $open_info_raw ) ) {
             update_post_meta( $post_id, 'gmb_open_info_raw', $open_info_raw );
         }
         update_post_meta( $post_id, 'location_hours_status', $hours_status );
 
+        $synced_at = current_time( 'mysql' );
+        update_post_meta( $post_id, 'oy_hours_last_sync_source', 'hours_metabox_button' );
+        update_post_meta( $post_id, 'oy_hours_last_sync_at', $synced_at );
+
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY Hours Sync] post_id=' . $post_id . ' | hours_status=' . $hours_status . ' | days_synced=' . count( $days_response ) );
+            error_log( '[OY Hours Sync] post_id=' . $post_id . ' | hours_status=' . $hours_status . ' | days_synced=' . count( $days_response ) . ' | synced_at=' . $synced_at );
         }
 
-        // ── Respuesta al JS para actualizar el formulario sin recargar ───────
         wp_send_json_success( array(
             'hours_status' => $hours_status,
             'days'         => $days_response,
+            'synced_at'    => $synced_at,
             'message'      => __( 'Horarios sincronizados correctamente.', 'lealez' ),
         ) );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers privados de mapeo GMB → meta
-    // (lógica idéntica a los métodos privados de OY_Location_CPT, mantenida
-    //  aquí para que este archivo sea 100% independiente)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Convierte regularHours.periods de Google a una estructura de meta por día.
-     *
-     * @param array $regular  Contenido de data['regularHours'].
-     * @return array  Asociativo día => array de meta.
-     */
     private function map_gmb_regular_hours_to_daily_meta( $regular ) {
         if ( ! is_array( $regular ) ) {
             return array();
@@ -778,27 +776,27 @@ public function __construct() {
 
             $day_key = $day_map[ $open_day_raw ];
 
-            $open_time  = isset( $p['openTime'] )  && is_array( $p['openTime'] )  ? $p['openTime']  : array();
-            $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null;
+            $open_time  = ( isset( $p['openTime'] ) && is_array( $p['openTime'] ) ) ? $p['openTime'] : array();
+            $close_time = ( isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ) ? $p['closeTime'] : null;
 
-            $open_h  = isset( $open_time['hours'] )   ? (int) $open_time['hours']   : 0;
+            $open_h  = isset( $open_time['hours'] ) ? (int) $open_time['hours'] : 0;
             $open_m  = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
-            $close_h = ( null !== $close_time && isset( $close_time['hours'] ) )   ? (int) $close_time['hours']   : 0;
+
+            $close_h = ( null !== $close_time && isset( $close_time['hours'] ) ) ? (int) $close_time['hours'] : 0;
             $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
 
             $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day_raw;
-            $open_day_idx  = $day_order[ $open_day_raw ]  ?? -1;
-            $close_day_idx = $day_order[ $close_day_raw ] ?? -1;
+            $open_day_idx  = isset( $day_order[ $open_day_raw ] )  ? $day_order[ $open_day_raw ]  : -1;
+            $close_day_idx = isset( $day_order[ $close_day_raw ] ) ? $day_order[ $close_day_raw ] : -1;
+
             $is_next_day   = ( $close_day_idx >= 0 && $open_day_idx >= 0 )
                              && ( $close_day_idx === ( ( $open_day_idx + 1 ) % 7 ) );
 
-            // Detectar 24 horas (tres reglas)
             $is_24h = false;
             if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) { $is_24h = true; }
-            if ( ! $is_24h && null !== $close_time && $close_h === 24 && $open_h === 0 && $open_m === 0 )    { $is_24h = true; }
-            if ( ! $is_24h && null === $close_time && $open_h === 0  && $open_m === 0 )                       { $is_24h = true; }
+            if ( ! $is_24h && null !== $close_time && $close_h === 24 && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
+            if ( ! $is_24h && null === $close_time && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
 
-            // Normalizar closeTime.hours=24 → 0 cuando NO es 24h
             if ( ! $is_24h && $close_h === 24 ) { $close_h = 0; $close_m = 0; }
 
             if ( $is_24h ) {
@@ -816,7 +814,6 @@ public function __construct() {
             }
         }
 
-        // Convertir a estructura de meta por día
         $out = array();
         foreach ( $periods_by_day as $day_key => $day_data ) {
             if ( $day_data['is_24h'] ) {
@@ -827,8 +824,8 @@ public function __construct() {
                 );
             } else {
                 $day_periods = $day_data['periods'];
-                $first_open  = $day_periods[0]['open']  ?? '09:00';
-                $first_close = $day_periods[0]['close'] ?? '18:00';
+                $first_open  = isset( $day_periods[0]['open'] ) ? $day_periods[0]['open'] : '09:00';
+                $first_close = isset( $day_periods[0]['close'] ) ? $day_periods[0]['close'] : '18:00';
                 $out[ $day_key ] = array(
                     'closed'  => false, 'all_day' => false,
                     'periods' => $day_periods,
@@ -837,7 +834,6 @@ public function __construct() {
             }
         }
 
-        // Días ausentes en GMB → marcar como cerrados
         $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
         foreach ( $all_days as $dk ) {
             if ( ! isset( $out[ $dk ] ) ) {
@@ -852,12 +848,6 @@ public function __construct() {
         return $out;
     }
 
-    /**
-     * Construye una estructura de meta con los 7 días marcados como 24 horas.
-     * Se usa cuando openInfo.openingHoursType = ALWAYS_OPEN.
-     *
-     * @return array
-     */
     private function build_always_open_daily_meta() {
         $out  = array();
         $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
