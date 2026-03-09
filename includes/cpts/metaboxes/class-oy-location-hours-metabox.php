@@ -6,61 +6,6 @@
  * usando la Business Profile Performance API como única fuente de verdad para
  * los pesos por día de semana.
  *
- * ═══════════════════════════════════════════════════════════════════════════
- * FUENTE DE DATOS Y CÁLCULO
- * ═══════════════════════════════════════════════════════════════════════════
- *
- * ✅ PESOS POR DÍA — Business Profile Performance API (automático):
- *    Las 11 métricas disponibles se ponderan por nivel de intención:
- *
- *    Alta intención (×3.0):  CALL_CLICKS, BUSINESS_BOOKINGS, BUSINESS_FOOD_ORDERS
- *    Media-alta (×2.5):      BUSINESS_DIRECTION_REQUESTS
- *    Media (×2.0):           BUSINESS_CONVERSATIONS
- *    Media-baja (×1.5):      WEBSITE_CLICKS, BUSINESS_FOOD_MENU_CLICKS
- *    Baja / pasiva (×0.8):   BUSINESS_IMPRESSIONS_MOBILE_MAPS/SEARCH
- *    Muy baja (×0.6):        BUSINESS_IMPRESSIONS_DESKTOP_MAPS/SEARCH
- *
- *    Se obtienen 90 días de datos, se acumula el score ponderado por día
- *    de semana, se calcula el promedio y se normaliza a 0-100.
- *    El resultado es el "Índice de Interés" de ese día.
- *
- * ❌ DISTRIBUCIÓN HORARIA — No disponible en ninguna API de GBP:
- *    Los "Popular Times" de Google Maps vienen del historial anónimo de
- *    usuarios de Android/Maps y no están expuestos en ningún endpoint oficial.
- *    → La distribución horaria dentro de cada día se define manualmente
- *      usando plantillas por tipo de negocio o sliders hora por hora.
- *      El gráfico aplica el peso del día sobre la curva horaria elegida.
- *
- * META GUARDADA: gmb_peak_hours (JSON sin guión bajo — convención oy_location)
- * ─────────────────────────────────────────────────────────────────────────
- * {
- *   "hours": {                          // Distribución horaria (0-100 por hora)
- *     "monday":    [0,0,…,65,80,…,0],   // 24 valores, índice = hora (0-23)
- *     …
- *     "sunday":    […]
- *   },
- *   "day_weights": {                    // Índice de interés normalizado (0-100)
- *     "monday": 43, "friday": 100, …    // 100 = día más activo del negocio
- *   },
- *   "day_scores_raw": {                 // Score bruto antes de normalizar
- *     "monday": 4.21, "friday": 9.84, …
- *   },
- *   "metric_breakdown": {               // Contribución de cada grupo al score
- *     "monday":  { "actions": 2.8, "impressions": 1.4 },
- *     …
- *   },
- *   "avg_stay_min": 45,
- *   "avg_stay_max": 90,
- *   "last_computed": "2026-03-09T10:00:00Z",
- *   "period": { "start": "2025-12-10", "end": "2026-03-09" },
- *   "metrics_used": 8,
- *   "source": "api"
- * }
- *
- * META ADICIONAL: gmb_busiest_day_of_week (string), gmb_busiest_hour_of_day (int)
- *
- * ARCHIVO: includes/cpts/metaboxes/class-oy-location-gmb-busyhours-metabox.php
- *
  * @package Lealez
  * @since   1.0.0
  */
@@ -71,56 +16,49 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Blindaje adicional:
- * Si por error otro archivo ya declaró esta clase
- * (por ejemplo class-oy-location-hours-metabox.php),
+ * Si por error otro archivo ya declaró esta clase específica,
  * salimos inmediatamente para evitar el fatal.
  */
-if ( class_exists( 'OY_Location_GMB_BusyHours_Metabox', false ) ) {
+if ( class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) {
 	return;
 }
 
 /**
- * Class OY_Location_GMB_BusyHours_Metabox
+ * Class OY_Location_GMB_Busyhours_Metabox_Unique
  *
  * AJAX handlers:
  *  - wp_ajax_oy_gmb_busy_compute  → Computa índice de interés por día desde Performance API
  *  - wp_ajax_oy_gmb_busy_save     → Guarda gmb_peak_hours en post meta
  */
-if ( ! class_exists( 'OY_Location_GMB_BusyHours_Metabox' ) ) :
+if ( ! class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) :
 
-class OY_Location_GMB_BusyHours_Metabox {
+class OY_Location_GMB_Busyhours_Metabox_Unique {
 
 	const NONCE_ACTION = 'oy_gmb_busyhours_nonce';
 	const META_KEY     = 'gmb_peak_hours';
 
 	/**
 	 * Ponderación de cada métrica para el cálculo del Índice de Interés.
-	 * Mayor peso = mayor intención de interacción real con el negocio.
 	 *
 	 * @var array
 	 */
 	private static $metric_weights = array(
-		// ── Alta intención (acción directa) ──────────────────────────────────
 		'CALL_CLICKS'                        => 3.0,
 		'BUSINESS_BOOKINGS'                  => 3.0,
 		'BUSINESS_FOOD_ORDERS'               => 3.0,
-		// ── Media-alta (intención de visita física) ───────────────────────────
 		'BUSINESS_DIRECTION_REQUESTS'        => 2.5,
-		// ── Media (contacto directo) ──────────────────────────────────────────
 		'BUSINESS_CONVERSATIONS'             => 2.0,
-		// ── Media-baja (investigación activa) ─────────────────────────────────
 		'WEBSITE_CLICKS'                     => 1.5,
 		'BUSINESS_FOOD_MENU_CLICKS'          => 1.5,
-		// ── Baja / pasiva (exposición en móvil) ───────────────────────────────
 		'BUSINESS_IMPRESSIONS_MOBILE_MAPS'   => 0.8,
 		'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' => 0.8,
-		// ── Muy baja / pasiva (exposición en desktop) ─────────────────────────
-		'BUSINESS_IMPRESSIONS_DESKTOP_MAPS'   => 0.6,
-		'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH' => 0.6,
+		'BUSINESS_IMPRESSIONS_DESKTOP_MAPS'  => 0.6,
+		'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH'=> 0.6,
 	);
 
 	/**
 	 * Grupos de métricas para el desglose visual.
+	 *
 	 * @var array
 	 */
 	private static $metric_groups = array(
@@ -152,8 +90,7 @@ class OY_Location_GMB_BusyHours_Metabox {
 	);
 
 	/**
-	 * Plantillas de distribución horaria (24 valores, índice = hora 0-23, escala 0-100).
-	 * Define la FORMA de la curva dentro del día. El peso del día la escala verticalmente.
+	 * Plantillas de distribución horaria.
 	 *
 	 * @var array
 	 */
@@ -167,16 +104,12 @@ class OY_Location_GMB_BusyHours_Metabox {
 		'gimnasio'    => array( 0, 0, 0, 0, 0, 15, 55, 75, 65, 45, 35, 35, 30, 30, 35, 40, 55, 70, 65, 50, 30, 10,  0,  0 ),
 	);
 
-	// ── Constructor / Hooks ──────────────────────────────────────────────────
-
 	public function __construct() {
-		add_action( 'add_meta_boxes',        array( $this, 'register_meta_box' ) );
+		add_action( 'add_meta_boxes', array( $this, 'register_meta_box' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
 		add_action( 'wp_ajax_oy_gmb_busy_compute', array( $this, 'ajax_compute_interest_index' ) );
-		add_action( 'wp_ajax_oy_gmb_busy_save',    array( $this, 'ajax_save_peak_hours' ) );
+		add_action( 'wp_ajax_oy_gmb_busy_save', array( $this, 'ajax_save_peak_hours' ) );
 	}
-
-	// ── Registration ─────────────────────────────────────────────────────────
 
 	public function register_meta_box() {
 		add_meta_box(
@@ -189,8 +122,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 		);
 	}
 
-	// ── Enqueue ──────────────────────────────────────────────────────────────
-
 	public function enqueue_scripts( $hook ) {
 		global $post;
 
@@ -201,7 +132,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			return;
 		}
 
-		// ── Chart.js 4.4.3 — LOCAL (mismo patrón que Performance metabox) ────
 		if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
 			if ( defined( 'LEALEZ_ASSETS_URL' ) ) {
 				$chartjs_url = LEALEZ_ASSETS_URL . 'js/vendor/chart.umd.min.js';
@@ -217,15 +147,12 @@ class OY_Location_GMB_BusyHours_Metabox {
 		}
 		wp_enqueue_script( 'chartjs-v4' );
 
-		// ── Script inline (no requiere archivo adicional) ─────────────────────
 		wp_register_script( 'oy-busyhours', false, array( 'jquery', 'chartjs-v4' ), '2.0.0', true );
 		wp_enqueue_script( 'oy-busyhours' );
 
-		// ── Leer datos guardados ──────────────────────────────────────────────
-		$saved_raw   = get_post_meta( $post->ID, self::META_KEY, true );
-		$saved_data  = ( ! empty( $saved_raw ) ) ? json_decode( $saved_raw, true ) : null;
+		$saved_raw  = get_post_meta( $post->ID, self::META_KEY, true );
+		$saved_data = ( ! empty( $saved_raw ) ) ? json_decode( $saved_raw, true ) : null;
 
-		// Determinar si GMB está conectado para habilitar el compute
 		$business_id   = get_post_meta( $post->ID, 'parent_business_id', true );
 		$location_id   = get_post_meta( $post->ID, 'gmb_location_id', true );
 		$gmb_connected = false;
@@ -239,22 +166,20 @@ class OY_Location_GMB_BusyHours_Metabox {
 			'oy-busyhours',
 			'oyBusyConfig',
 			array(
-				'postId'       => $post->ID,
-				'nonce'        => wp_create_nonce( self::NONCE_ACTION ),
-				'ajaxUrl'      => admin_url( 'admin-ajax.php' ),
-				'savedData'    => $saved_data,
-				'templates'    => self::$templates,
-				'metricGroups' => self::$metric_groups,
-				'gmbConnected' => $gmb_connected,
-				'hasLocationId'=> ! empty( $location_id ),
+				'postId'        => $post->ID,
+				'nonce'         => wp_create_nonce( self::NONCE_ACTION ),
+				'ajaxUrl'       => admin_url( 'admin-ajax.php' ),
+				'savedData'     => $saved_data,
+				'templates'     => self::$templates,
+				'metricGroups'  => self::$metric_groups,
+				'gmbConnected'  => $gmb_connected,
+				'hasLocationId' => ! empty( $location_id ),
 			)
 		);
 
 		wp_add_inline_script( 'oy-busyhours', $this->get_inline_js() );
 		wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
 	}
-
-	// ── Render metabox HTML ──────────────────────────────────────────────────
 
 	public function render_meta_box( $post ) {
 		$location_id   = get_post_meta( $post->ID, 'gmb_location_id', true );
@@ -271,63 +196,64 @@ class OY_Location_GMB_BusyHours_Metabox {
 		$saved_data = ( ! empty( $saved_raw ) ) ? json_decode( $saved_raw, true ) : null;
 		$has_data   = ! empty( $saved_data['day_weights'] );
 
-		// Calcular día pico guardado
 		$busiest_day = get_post_meta( $post->ID, 'gmb_busiest_day_of_week', true );
 		$day_labels  = array(
-			'monday' => 'Lunes', 'tuesday' => 'Martes', 'wednesday' => 'Miércoles',
-			'thursday' => 'Jueves', 'friday' => 'Viernes', 'saturday' => 'Sábado', 'sunday' => 'Domingo',
+			'monday'    => 'Lunes',
+			'tuesday'   => 'Martes',
+			'wednesday' => 'Miércoles',
+			'thursday'  => 'Jueves',
+			'friday'    => 'Viernes',
+			'saturday'  => 'Sábado',
+			'sunday'    => 'Domingo',
 		);
 		?>
 		<div id="oy-busy-wrap">
 
 			<?php if ( ! $gmb_connected ) : ?>
-			<div class="oy-busy-notice oy-busy-notice--warn">
-				<span class="dashicons dashicons-warning"></span>
-				<?php esc_html_e( 'El negocio padre no tiene Google Business Profile conectado. Conecta GMB primero para calcular el índice de interés.', 'lealez' ); ?>
-			</div>
+				<div class="oy-busy-notice oy-busy-notice--warn">
+					<span class="dashicons dashicons-warning"></span>
+					<?php esc_html_e( 'El negocio padre no tiene Google Business Profile conectado. Conecta GMB primero para calcular el índice de interés.', 'lealez' ); ?>
+				</div>
 			<?php elseif ( ! $location_id ) : ?>
-			<div class="oy-busy-notice oy-busy-notice--warn">
-				<span class="dashicons dashicons-warning"></span>
-				<?php esc_html_e( 'Esta ubicación no está vinculada a una propiedad GMB. Configura el GMB Location ID primero.', 'lealez' ); ?>
-			</div>
+				<div class="oy-busy-notice oy-busy-notice--warn">
+					<span class="dashicons dashicons-warning"></span>
+					<?php esc_html_e( 'Esta ubicación no está vinculada a una propiedad GMB. Configura el GMB Location ID primero.', 'lealez' ); ?>
+				</div>
 			<?php endif; ?>
 
-			<!-- ── Cabecera de estado ── -->
 			<?php if ( $has_data && ! empty( $saved_data['last_computed'] ) ) : ?>
-			<div class="oy-busy-computed-header">
-				<div class="oy-busy-computed-header__left">
-					<span class="oy-busy-source-pill oy-busy-source-pill--api">
-						<span class="dashicons dashicons-chart-bar" style="font-size:13px;vertical-align:middle;margin-right:3px;"></span>
-						<?php esc_html_e( 'Índice calculado desde Performance API', 'lealez' ); ?>
-					</span>
-					<?php
-					$metrics_used = isset( $saved_data['metrics_used'] ) ? (int) $saved_data['metrics_used'] : 0;
-					$period_start = isset( $saved_data['period']['start'] ) ? $saved_data['period']['start'] : '';
-					$period_end   = isset( $saved_data['period']['end'] )   ? $saved_data['period']['end']   : '';
-					if ( $period_start && $period_end ) :
-					?>
-					<span class="oy-busy-period-label">
-						<?php echo esc_html( $period_start . ' → ' . $period_end ); ?>
-						<?php if ( $metrics_used ) : ?>
-						· <?php echo esc_html( $metrics_used ); ?> <?php esc_html_e( 'métricas', 'lealez' ); ?>
-					<?php endif; ?>
-					</span>
-					<?php endif; ?>
+				<div class="oy-busy-computed-header">
+					<div class="oy-busy-computed-header__left">
+						<span class="oy-busy-source-pill oy-busy-source-pill--api">
+							<span class="dashicons dashicons-chart-bar" style="font-size:13px;vertical-align:middle;margin-right:3px;"></span>
+							<?php esc_html_e( 'Índice calculado desde Performance API', 'lealez' ); ?>
+						</span>
+						<?php
+						$metrics_used = isset( $saved_data['metrics_used'] ) ? (int) $saved_data['metrics_used'] : 0;
+						$period_start = isset( $saved_data['period']['start'] ) ? $saved_data['period']['start'] : '';
+						$period_end   = isset( $saved_data['period']['end'] ) ? $saved_data['period']['end'] : '';
+						if ( $period_start && $period_end ) :
+							?>
+							<span class="oy-busy-period-label">
+								<?php echo esc_html( $period_start . ' → ' . $period_end ); ?>
+								<?php if ( $metrics_used ) : ?>
+									· <?php echo esc_html( $metrics_used ); ?> <?php esc_html_e( 'métricas', 'lealez' ); ?>
+								<?php endif; ?>
+							</span>
+						<?php endif; ?>
+					</div>
+					<div class="oy-busy-computed-header__right">
+						<?php if ( $busiest_day && isset( $day_labels[ $busiest_day ] ) ) : ?>
+							<span class="oy-busy-peak-badge">
+								📍 <?php echo esc_html( $day_labels[ $busiest_day ] ); ?> <?php esc_html_e( 'es el día de mayor interés', 'lealez' ); ?>
+							</span>
+						<?php endif; ?>
+					</div>
 				</div>
-				<div class="oy-busy-computed-header__right">
-					<?php if ( $busiest_day && isset( $day_labels[ $busiest_day ] ) ) : ?>
-					<span class="oy-busy-peak-badge">
-						📍 <?php echo esc_html( $day_labels[ $busiest_day ] ); ?> <?php esc_html_e( 'es el día de mayor interés', 'lealez' ); ?>
-					</span>
-					<?php endif; ?>
-				</div>
-			</div>
 			<?php endif; ?>
 
-			<!-- ── Toolbar ── -->
 			<div class="oy-busy-toolbar">
 				<div class="oy-busy-toolbar__left">
-
 					<div class="oy-busy-field-group">
 						<label for="oy-busy-template-sel">
 							<span class="dashicons dashicons-clock" style="font-size:14px;vertical-align:middle;margin-right:2px;"></span>
@@ -352,15 +278,16 @@ class OY_Location_GMB_BusyHours_Metabox {
 						<input type="number" id="oy-busy-stay-max" min="5" max="480" step="5" value="90" class="small-text" style="width:60px;">
 						<span class="description"><?php esc_html_e( 'min', 'lealez' ); ?></span>
 					</div>
-
 				</div>
+
 				<div class="oy-busy-toolbar__right">
 					<?php if ( $gmb_connected && $location_id ) : ?>
-					<button type="button" id="oy-busy-compute-btn" class="button button-primary">
-						<span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span>
-						<?php esc_html_e( 'Calcular índice desde GMB', 'lealez' ); ?>
-					</button>
+						<button type="button" id="oy-busy-compute-btn" class="button button-primary">
+							<span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span>
+							<?php esc_html_e( 'Calcular índice desde GMB', 'lealez' ); ?>
+						</button>
 					<?php endif; ?>
+
 					<button type="button" id="oy-busy-save-btn" class="button button-secondary">
 						<span class="dashicons dashicons-saved" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span>
 						<?php esc_html_e( 'Guardar', 'lealez' ); ?>
@@ -368,13 +295,9 @@ class OY_Location_GMB_BusyHours_Metabox {
 				</div>
 			</div>
 
-			<!-- Status bar -->
 			<div id="oy-busy-status-msg" class="oy-busy-status" style="display:none;"></div>
 
-			<!-- ── Panel oscuro: tabs de días + gráfico ── -->
 			<div class="oy-busy-dark-panel">
-
-				<!-- Tabs de días con mini-barra de índice -->
 				<div class="oy-busy-day-tabs" id="oy-busy-day-tabs">
 					<?php
 					$days  = array(
@@ -388,20 +311,20 @@ class OY_Location_GMB_BusyHours_Metabox {
 					);
 					$first = true;
 					foreach ( $days as $key => $label ) :
+						?>
+						<button type="button" class="oy-busy-day-tab<?php echo $first ? ' oy-busy-day-tab--active' : ''; ?>" data-day="<?php echo esc_attr( $key ); ?>">
+							<span class="oy-busy-day-bar-track">
+								<span class="oy-busy-day-bar" id="oy-day-bar-<?php echo esc_attr( $key ); ?>" style="height:5%;"></span>
+							</span>
+							<span class="oy-busy-day-name"><?php echo esc_html( $label ); ?></span>
+							<span class="oy-busy-day-index" id="oy-day-index-<?php echo esc_attr( $key ); ?>">—</span>
+						</button>
+						<?php
+						$first = false;
+					endforeach;
 					?>
-					<button type="button"
-						class="oy-busy-day-tab<?php echo $first ? ' oy-busy-day-tab--active' : ''; ?>"
-						data-day="<?php echo esc_attr( $key ); ?>">
-						<span class="oy-busy-day-bar-track">
-							<span class="oy-busy-day-bar" id="oy-day-bar-<?php echo esc_attr( $key ); ?>" style="height:5%;"></span>
-						</span>
-						<span class="oy-busy-day-name"><?php echo esc_html( $label ); ?></span>
-						<span class="oy-busy-day-index" id="oy-day-index-<?php echo esc_attr( $key ); ?>">—</span>
-					</button>
-					<?php $first = false; endforeach; ?>
 				</div>
 
-				<!-- Estado de concurrencia del día -->
 				<div class="oy-busy-status-row">
 					<span class="oy-busy-live-dot" id="oy-busy-live-dot"></span>
 					<div>
@@ -412,34 +335,29 @@ class OY_Location_GMB_BusyHours_Metabox {
 							<?php esc_html_e( 'Haga clic en "Calcular índice desde GMB" y luego seleccione la forma horaria para este negocio', 'lealez' ); ?>
 						</div>
 					</div>
-					<!-- Índice del día visible -->
+
 					<div class="oy-busy-day-score-badge" id="oy-busy-day-score-badge" style="display:none;">
 						<span class="oy-busy-score-num" id="oy-busy-score-num">0</span>
 						<span class="oy-busy-score-label"><?php esc_html_e( 'Índice', 'lealez' ); ?></span>
 					</div>
 				</div>
 
-				<!-- Gráfico de barras horario -->
 				<div class="oy-busy-chart-container">
 					<canvas id="oy-busy-chart"></canvas>
 				</div>
 
-				<!-- Desglose de métricas del día seleccionado -->
 				<div class="oy-busy-breakdown" id="oy-busy-breakdown" style="display:none;">
 					<span class="oy-busy-breakdown__label"><?php esc_html_e( 'Composición del índice:', 'lealez' ); ?></span>
 					<div class="oy-busy-breakdown__bars" id="oy-busy-breakdown-bars"></div>
 				</div>
 
-				<!-- Permanencia -->
 				<div class="oy-busy-stay-row">
 					<span class="dashicons dashicons-clock" style="margin-right:5px;opacity:.7;"></span>
 					<span><?php esc_html_e( 'Permanencia estimada:', 'lealez' ); ?></span>
 					<strong id="oy-busy-stay-display" style="margin-left:5px;">—</strong>
 				</div>
+			</div>
 
-			</div><!-- .oy-busy-dark-panel -->
-
-			<!-- ── Edit mode: ajuste fino de la curva horaria ── -->
 			<div class="oy-busy-edit-header">
 				<label class="oy-busy-toggle-wrap">
 					<input type="checkbox" id="oy-busy-edit-toggle">
@@ -460,33 +378,16 @@ class OY_Location_GMB_BusyHours_Metabox {
 				</p>
 			</div>
 
-			<!-- ── Nota técnica ── -->
 			<div class="oy-busy-footer">
 				<strong><?php esc_html_e( '¿Cómo funciona el Índice de Interés?', 'lealez' ); ?></strong>
 				<?php esc_html_e( 'Se obtienen 90 días de datos de la Performance API y se calcula un score ponderado por día de semana, donde las acciones de alta intención (llamadas, reservas, cómo llegar) pesan más que las impresiones pasivas. El día con mayor score queda en 100 y los demás se normalizan proporcionalmente.', 'lealez' ); ?>
 				<br>
 				<em><?php esc_html_e( 'La distribución horaria dentro de cada día no está disponible en ninguna API de Google Business Profile. Se estima mediante plantillas por tipo de negocio.', 'lealez' ); ?></em>
 			</div>
-
-		</div><!-- #oy-busy-wrap -->
+		</div>
 		<?php
 	}
 
-	// ── AJAX: Compute Interest Index from Performance API ────────────────────
-
-	/**
-	 * Calcula el Índice de Interés por día de semana usando TODAS las métricas
-	 * disponibles de la Performance API, ponderadas por nivel de intención.
-	 *
-	 * Proceso:
-	 *  1. Solicita 90 días de todas las métricas disponibles en un solo request.
-	 *  2. Por cada día del período: calcula score = Σ(valor_métrica × peso_métrica).
-	 *  3. Agrupa scores por día de la semana → promedio por DOW.
-	 *  4. Normaliza a 0-100 (DOW con mayor promedio = 100).
-	 *  5. Devuelve pesos + desglose por grupo de métricas.
-	 *
-	 * Action: oy_gmb_busy_compute
-	 */
 	public function ajax_compute_interest_index() {
 		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
 
@@ -511,7 +412,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			wp_send_json_error( array( 'message' => __( 'Clase Lealez_GMB_API no encontrada.', 'lealez' ) ) );
 		}
 
-		// ── Rango: 90 días hasta ayer ─────────────────────────────────────────
 		$end_ts   = strtotime( 'yesterday' );
 		$start_ts = $end_ts - ( 89 * DAY_IN_SECONDS );
 
@@ -526,7 +426,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			'day'   => (int) gmdate( 'j', $end_ts ),
 		);
 
-		// Todas las métricas definidas en self::$metric_weights
 		$all_metrics = array_keys( self::$metric_weights );
 
 		$result = Lealez_GMB_API::get_location_performance_metrics(
@@ -535,26 +434,22 @@ class OY_Location_GMB_BusyHours_Metabox {
 			$all_metrics,
 			$start_date,
 			$end_date,
-			true // usar caché (TTL 6h definido en el método API)
+			true
 		);
 
 		if ( is_wp_error( $result ) ) {
-			wp_send_json_error( array(
-				'message' => $result->get_error_message(),
-				'code'    => $result->get_error_code(),
-			) );
+			wp_send_json_error(
+				array(
+					'message' => $result->get_error_message(),
+					'code'    => $result->get_error_code(),
+				)
+			);
 		}
 
-		// ── Estructura de acumulación ─────────────────────────────────────────
-		// gmdate('w'): 0=Sunday … 6=Saturday
-		$dow_map = array( 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday' );
-
-		// scores_by_date[date_str][metric_key] = valor_diario
-		$scores_by_date = array();
-		// Qué métricas realmente devolvió la API (algunas pueden tener todo 0 o no existir)
+		$dow_map         = array( 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday' );
+		$scores_by_date  = array();
 		$metrics_received = array();
 
-		// ── Parsear multiDailyMetricTimeSeries ────────────────────────────────
 		$outer_list = isset( $result['multiDailyMetricTimeSeries'] )
 			? (array) $result['multiDailyMetricTimeSeries']
 			: array();
@@ -575,7 +470,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 
 				$metric_key = isset( $item['dailyMetric'] ) ? strtoupper( (string) $item['dailyMetric'] ) : '';
 
-				// Solo procesar métricas conocidas y ponderadas
 				if ( ! isset( self::$metric_weights[ $metric_key ] ) ) {
 					continue;
 				}
@@ -594,12 +488,11 @@ class OY_Location_GMB_BusyHours_Metabox {
 					$d        = $dv['date'];
 					$date_str = sprintf(
 						'%04d-%02d-%02d',
-						isset( $d['year'] )  ? (int) $d['year']  : 0,
+						isset( $d['year'] ) ? (int) $d['year'] : 0,
 						isset( $d['month'] ) ? (int) $d['month'] : 0,
-						isset( $d['day'] )   ? (int) $d['day']   : 0
+						isset( $d['day'] ) ? (int) $d['day'] : 0
 					);
 
-					// API devuelve value como string; ausencia del key = 0
 					$val = 0;
 					if ( array_key_exists( 'value', $dv ) && null !== $dv['value'] ) {
 						$val = (int) $dv['value'];
@@ -624,15 +517,16 @@ class OY_Location_GMB_BusyHours_Metabox {
 		$metrics_received = array_unique( $metrics_received );
 
 		if ( empty( $scores_by_date ) ) {
-			wp_send_json_error( array(
-				'message' => __( 'No se recibieron datos de la Performance API. Verifica que el scope OAuth businessprofileperformance.readonly esté habilitado y que existan datos para este período.', 'lealez' ),
-			) );
+			wp_send_json_error(
+				array(
+					'message' => __( 'No se recibieron datos de la Performance API. Verifica que el scope OAuth businessprofileperformance.readonly esté habilitado y que existan datos para este período.', 'lealez' ),
+				)
+			);
 		}
 
-		// ── Acumular score ponderado por día de semana ────────────────────────
-		$dow_scores      = array_fill_keys( $dow_map, 0.0 );
-		$dow_counts      = array_fill_keys( $dow_map, 0 );
-		// Desglose por grupo: $dow_group_scores[dow][group_key] = score_acumulado
+		$dow_scores = array_fill_keys( $dow_map, 0.0 );
+		$dow_counts = array_fill_keys( $dow_map, 0 );
+
 		$dow_group_scores = array();
 		foreach ( $dow_map as $dk ) {
 			$dow_group_scores[ $dk ] = array(
@@ -643,7 +537,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			);
 		}
 
-		// Mapear métrica → grupo para lookup rápido
 		$metric_to_group = array();
 		foreach ( self::$metric_groups as $gk => $gd ) {
 			foreach ( $gd['metrics'] as $mk ) {
@@ -653,7 +546,7 @@ class OY_Location_GMB_BusyHours_Metabox {
 
 		foreach ( $scores_by_date as $date_str => $metric_vals ) {
 			$ts      = strtotime( $date_str );
-			$dow_idx = (int) gmdate( 'w', $ts ); // 0-6
+			$dow_idx = (int) gmdate( 'w', $ts );
 			$dow_key = $dow_map[ $dow_idx ];
 
 			$day_score = 0.0;
@@ -661,9 +554,9 @@ class OY_Location_GMB_BusyHours_Metabox {
 				if ( ! isset( self::$metric_weights[ $mk ] ) ) {
 					continue;
 				}
-				$weighted           = (float) $val * self::$metric_weights[ $mk ];
-				$day_score         += $weighted;
-				$group              = $metric_to_group[ $mk ] ?? 'impressions';
+				$weighted = (float) $val * self::$metric_weights[ $mk ];
+				$day_score += $weighted;
+				$group = $metric_to_group[ $mk ] ?? 'impressions';
 				$dow_group_scores[ $dow_key ][ $group ] += $weighted;
 			}
 
@@ -671,7 +564,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			$dow_counts[ $dow_key ] += 1;
 		}
 
-		// ── Calcular promedios por DOW ────────────────────────────────────────
 		$dow_averages       = array();
 		$dow_group_averages = array();
 
@@ -685,12 +577,13 @@ class OY_Location_GMB_BusyHours_Metabox {
 			}
 		}
 
-		// ── Normalizar a 0-100 ────────────────────────────────────────────────
 		$max_avg = max( $dow_averages );
 		if ( $max_avg <= 0 ) {
-			wp_send_json_error( array(
-				'message' => __( 'Todos los indicadores tienen valor cero para este período. No hay suficiente actividad registrada.', 'lealez' ),
-			) );
+			wp_send_json_error(
+				array(
+					'message' => __( 'Todos los indicadores tienen valor cero para este período. No hay suficiente actividad registrada.', 'lealez' ),
+				)
+			);
 		}
 
 		$day_weights     = array();
@@ -699,7 +592,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 		foreach ( $dow_averages as $dk => $avg ) {
 			$day_weights[ $dk ] = (int) round( $avg / $max_avg * 100 );
 
-			// Normalizar desglose de grupos al mismo factor
 			$group_breakdown[ $dk ] = array();
 			foreach ( $dow_group_averages[ $dk ] as $gk => $gav ) {
 				$group_breakdown[ $dk ][ $gk ] = round( $gav / $max_avg * 100, 1 );
@@ -714,29 +606,23 @@ class OY_Location_GMB_BusyHours_Metabox {
 
 		$period = array(
 			'start' => sprintf( '%04d-%02d-%02d', $start_date['year'], $start_date['month'], $start_date['day'] ),
-			'end'   => sprintf( '%04d-%02d-%02d', $end_date['year'],   $end_date['month'],   $end_date['day'] ),
+			'end'   => sprintf( '%04d-%02d-%02d', $end_date['year'], $end_date['month'], $end_date['day'] ),
 		);
 
-		wp_send_json_success( array(
-			'day_weights'     => $day_weights,
-			'scores_raw'      => $dow_averages,
-			'group_breakdown' => $group_breakdown,
-			'metrics_used'    => count( $metrics_received ),
-			'metrics_list'    => $metrics_received,
-			'days_processed'  => count( $scores_by_date ),
-			'period'          => $period,
-			'computed_at'     => gmdate( 'Y-m-d\TH:i:s\Z' ),
-		) );
+		wp_send_json_success(
+			array(
+				'day_weights'     => $day_weights,
+				'scores_raw'      => $dow_averages,
+				'group_breakdown' => $group_breakdown,
+				'metrics_used'    => count( $metrics_received ),
+				'metrics_list'    => $metrics_received,
+				'days_processed'  => count( $scores_by_date ),
+				'period'          => $period,
+				'computed_at'     => gmdate( 'Y-m-d\TH:i:s\Z' ),
+			)
+		);
 	}
 
-	// ── AJAX: Save peak hours to post meta ───────────────────────────────────
-
-	/**
-	 * Guarda el JSON de horas pico en el meta del post.
-	 * Actualiza también gmb_busiest_day_of_week y gmb_busiest_hour_of_day.
-	 *
-	 * Action: oy_gmb_busy_save
-	 */
 	public function ajax_save_peak_hours() {
 		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
 
@@ -761,7 +647,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			wp_send_json_error( array( 'message' => __( 'JSON inválido recibido.', 'lealez' ) ) );
 		}
 
-		// ── Sanitizar distribución horaria ────────────────────────────────────
 		$day_keys    = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
 		$clean_hours = array();
 		$hours_input = isset( $peak_data['hours'] ) ? (array) $peak_data['hours'] : array();
@@ -776,7 +661,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			}
 		}
 
-		// ── Sanitizar pesos ───────────────────────────────────────────────────
 		$clean_weights = array();
 		$weights_input = isset( $peak_data['day_weights'] ) ? (array) $peak_data['day_weights'] : array();
 		foreach ( $day_keys as $dk ) {
@@ -785,10 +669,9 @@ class OY_Location_GMB_BusyHours_Metabox {
 				: 0;
 		}
 
-		// ── Sanitizar desglose de grupos ──────────────────────────────────────
-		$clean_breakdown  = array();
-		$breakdown_input  = isset( $peak_data['metric_breakdown'] ) ? (array) $peak_data['metric_breakdown'] : array();
-		$valid_groups     = array( 'high_intent', 'visit_intent', 'research', 'impressions' );
+		$clean_breakdown = array();
+		$breakdown_input = isset( $peak_data['metric_breakdown'] ) ? (array) $peak_data['metric_breakdown'] : array();
+		$valid_groups    = array( 'high_intent', 'visit_intent', 'research', 'impressions' );
 		foreach ( $day_keys as $dk ) {
 			$clean_breakdown[ $dk ] = array();
 			$dbd = isset( $breakdown_input[ $dk ] ) ? (array) $breakdown_input[ $dk ] : array();
@@ -799,18 +682,16 @@ class OY_Location_GMB_BusyHours_Metabox {
 			}
 		}
 
-		// ── Período ───────────────────────────────────────────────────────────
 		$period = array();
 		if ( isset( $peak_data['period'] ) && is_array( $peak_data['period'] ) ) {
 			$period['start'] = sanitize_text_field( $peak_data['period']['start'] ?? '' );
-			$period['end']   = sanitize_text_field( $peak_data['period']['end']   ?? '' );
+			$period['end']   = sanitize_text_field( $peak_data['period']['end'] ?? '' );
 		}
 
-		// ── Payload final ─────────────────────────────────────────────────────
 		$clean_data = array(
 			'hours'            => $clean_hours,
 			'day_weights'      => $clean_weights,
-			'day_scores_raw'   => array(), // se guarda vacío si no viene
+			'day_scores_raw'   => array(),
 			'metric_breakdown' => $clean_breakdown,
 			'avg_stay_min'     => max( 5, min( 480, (int) ( $peak_data['avg_stay_min'] ?? 45 ) ) ),
 			'avg_stay_max'     => max( 5, min( 480, (int) ( $peak_data['avg_stay_max'] ?? 90 ) ) ),
@@ -820,7 +701,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 			'source'           => 'api',
 		);
 
-		// Scores raw opcionales
 		if ( isset( $peak_data['day_scores_raw'] ) && is_array( $peak_data['day_scores_raw'] ) ) {
 			foreach ( $day_keys as $dk ) {
 				$clean_data['day_scores_raw'][ $dk ] = isset( $peak_data['day_scores_raw'][ $dk ] )
@@ -832,7 +712,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 		$json_to_save = wp_json_encode( $clean_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		update_post_meta( $post_id, self::META_KEY, $json_to_save );
 
-		// ── Meta fields individuales ──────────────────────────────────────────
 		$busiest_day = '';
 		$max_weight  = -1;
 		foreach ( $clean_data['day_weights'] as $dk => $w ) {
@@ -845,7 +724,6 @@ class OY_Location_GMB_BusyHours_Metabox {
 		if ( $busiest_day ) {
 			update_post_meta( $post_id, 'gmb_busiest_day_of_week', $busiest_day );
 
-			// Hora pico del día más activo (score = hours × day_weight)
 			$day_hours    = $clean_data['hours'][ $busiest_day ] ?? array();
 			$best_val     = -1;
 			$busiest_hour = 0;
@@ -859,31 +737,25 @@ class OY_Location_GMB_BusyHours_Metabox {
 			update_post_meta( $post_id, 'gmb_busiest_hour_of_day', $busiest_hour );
 		}
 
-		wp_send_json_success( array(
-			'message'     => __( 'Horario de mayor interés guardado correctamente.', 'lealez' ),
-			'busiest_day' => $busiest_day,
-		) );
+		wp_send_json_success(
+			array(
+				'message'     => __( 'Horario de mayor interés guardado correctamente.', 'lealez' ),
+				'busiest_day' => $busiest_day,
+			)
+		);
 	}
-
-	// ── Inline JavaScript ────────────────────────────────────────────────────
 
 	private function get_inline_js() {
 		return <<<'JSEOF'
 (function ($) {
     'use strict';
 
-    /* =====================================================================
-     * OyBusyHours v2 — Horario de Mayor Interés
-     * Pesos de días: 100% desde Performance API (no manuales)
-     * Distribución horaria: plantillas por tipo de negocio + edición manual
-     * ===================================================================== */
     var OyBusyHours = {
-
-        config:     null,
-        chart:      null,
+        config: null,
+        chart: null,
         currentDay: 'monday',
-        data:       null,
-        editMode:   false,
+        data: null,
+        editMode: false,
 
         DAYS: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
 
@@ -913,17 +785,15 @@ class OY_Location_GMB_BusyHours_Metabox {
             impressions:  'Visibilidad pasiva'
         },
 
-        // ── Inicialización ──────────────────────────────────────────────────
-
         init: function (config) {
             this.config = config;
 
             if (config.savedData && config.savedData.day_weights) {
                 this.data = config.savedData;
-                if (!this.data.hours)          this.data.hours          = this.buildEmptyHours();
+                if (!this.data.hours) this.data.hours = this.buildEmptyHours();
                 if (!this.data.metric_breakdown) this.data.metric_breakdown = {};
-                if (!this.data.avg_stay_min)   this.data.avg_stay_min   = 45;
-                if (!this.data.avg_stay_max)   this.data.avg_stay_max   = 90;
+                if (!this.data.avg_stay_min) this.data.avg_stay_min = 45;
+                if (!this.data.avg_stay_max) this.data.avg_stay_max = 90;
             } else {
                 this.data = this.buildDefaultData();
             }
@@ -938,7 +808,6 @@ class OY_Location_GMB_BusyHours_Metabox {
             this.updateBreakdown(this.currentDay);
             this.updateStayDisplay();
 
-            // Auto-compute si GMB conectado y no hay datos guardados
             if (!config.savedData && config.gmbConnected && config.hasLocationId) {
                 setTimeout(function () {
                     OyBusyHours.showStatusMsg(
@@ -949,20 +818,18 @@ class OY_Location_GMB_BusyHours_Metabox {
             }
         },
 
-        // ── Constructores de datos ──────────────────────────────────────────
-
         buildDefaultData: function () {
             return {
-                hours:            this.buildEmptyHours(),
-                day_weights:      { monday:0, tuesday:0, wednesday:0, thursday:0, friday:0, saturday:0, sunday:0 },
-                day_scores_raw:   {},
+                hours: this.buildEmptyHours(),
+                day_weights: { monday:0, tuesday:0, wednesday:0, thursday:0, friday:0, saturday:0, sunday:0 },
+                day_scores_raw: {},
                 metric_breakdown: {},
-                avg_stay_min:     45,
-                avg_stay_max:     90,
-                last_computed:    '',
-                period:           {},
-                metrics_used:     0,
-                source:           'api'
+                avg_stay_min: 45,
+                avg_stay_max: 90,
+                last_computed: '',
+                period: {},
+                metrics_used: 0,
+                source: 'api'
             };
         },
 
@@ -971,8 +838,6 @@ class OY_Location_GMB_BusyHours_Metabox {
             this.DAYS.forEach(function (d) { h[d] = new Array(24).fill(0); });
             return h;
         },
-
-        // ── Binding ─────────────────────────────────────────────────────────
 
         bindEvents: function () {
             var self = this;
@@ -991,7 +856,9 @@ class OY_Location_GMB_BusyHours_Metabox {
 
             $('#oy-busy-template-sel').on('change', function () {
                 var tpl = $(this).val();
-                if (tpl) { self.applyTemplate(tpl); }
+                if (tpl) {
+                    self.applyTemplate(tpl);
+                }
             });
 
             $('#oy-busy-edit-toggle').on('change', function () {
@@ -1005,8 +872,6 @@ class OY_Location_GMB_BusyHours_Metabox {
             });
         },
 
-        // ── Cambio de día ───────────────────────────────────────────────────
-
         switchDay: function (day) {
             this.currentDay = day;
             $('.oy-busy-day-tab').removeClass('oy-busy-day-tab--active');
@@ -1016,16 +881,18 @@ class OY_Location_GMB_BusyHours_Metabox {
             this.updateStatusLabel(day);
             this.updateBreakdown(day);
 
-            if (this.editMode) { this.buildSliders(day); }
+            if (this.editMode) {
+                this.buildSliders(day);
+            }
         },
-
-        // ── Actualizar todas las tabs ────────────────────────────────────────
 
         updateAllDayTabs: function () {
             var weights = this.data.day_weights || {};
             var vals    = Object.values(weights);
             var max     = vals.length ? Math.max.apply(null, vals) : 1;
-            if (max <= 0) { max = 1; }
+            if (max <= 0) {
+                max = 1;
+            }
 
             this.DAYS.forEach(function (day) {
                 var w   = weights[day] || 0;
@@ -1035,33 +902,25 @@ class OY_Location_GMB_BusyHours_Metabox {
             });
         },
 
-        // ── Gráfico Chart.js ────────────────────────────────────────────────
-
         renderChart: function (day) {
-            var rawHours = (this.data.hours && this.data.hours[day])
-                           ? this.data.hours[day]
-                           : new Array(24).fill(0);
+            var rawHours = (this.data.hours && this.data.hours[day]) ? this.data.hours[day] : new Array(24).fill(0);
             var weight   = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
-                           ? (this.data.day_weights[day] / 100)
-                           : 0;
+                ? (this.data.day_weights[day] / 100)
+                : 0;
 
-            // Aplicar peso del día a la curva horaria
             var values = rawHours.map(function (v) {
                 return Math.min(100, Math.round(v * weight));
             });
 
-            // Mostrar 6a.m. (índice 6) → 11p.m. (índice 23)
             var displayValues = values.slice(6, 24);
             var displayLabels = this.HOUR_LABELS.slice(6, 24);
 
-            // Detectar hora actual para marcarla
             var todayDows = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
             var todayDay  = todayDows[new Date().getDay()];
             var curHour   = new Date().getHours();
             var isToday   = (todayDay === day);
             var curBarIdx = (isToday && curHour >= 6 && curHour <= 23) ? (curHour - 6) : -1;
 
-            // Paleta: coral para hora actual, gris con intensidad por valor
             var bgColors = displayValues.map(function (v, i) {
                 if (i === curBarIdx) { return 'rgba(199,90,72,0.88)'; }
                 if (v >= 70) { return 'rgba(120,120,120,0.85)'; }
@@ -1072,7 +931,10 @@ class OY_Location_GMB_BusyHours_Metabox {
 
             var ctx = document.getElementById('oy-busy-chart');
             if (!ctx) { return; }
-            if (this.chart) { this.chart.destroy(); this.chart = null; }
+            if (this.chart) {
+                this.chart.destroy();
+                this.chart = null;
+            }
             if (typeof Chart === 'undefined') {
                 console.warn('[OyBusyHours] Chart.js no disponible todavía.');
                 return;
@@ -1083,19 +945,19 @@ class OY_Location_GMB_BusyHours_Metabox {
                 data: {
                     labels: displayLabels,
                     datasets: [{
-                        data:               displayValues,
-                        backgroundColor:    bgColors,
-                        borderColor:        bgColors,
-                        borderRadius:       4,
-                        borderSkipped:      false,
-                        barPercentage:      0.80,
+                        data: displayValues,
+                        backgroundColor: bgColors,
+                        borderColor: bgColors,
+                        borderRadius: 4,
+                        borderSkipped: false,
+                        barPercentage: 0.80,
                         categoryPercentage: 0.90
                     }]
                 },
                 options: {
-                    responsive:          true,
+                    responsive: true,
                     maintainAspectRatio: false,
-                    animation:           { duration: 200 },
+                    animation: { duration: 200 },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
@@ -1113,26 +975,26 @@ class OY_Location_GMB_BusyHours_Metabox {
                                 }
                             },
                             backgroundColor: 'rgba(20,20,20,0.93)',
-                            titleColor:      '#fff',
-                            bodyColor:       '#ddd',
-                            padding:         10,
-                            cornerRadius:    6
+                            titleColor: '#fff',
+                            bodyColor: '#ddd',
+                            padding: 10,
+                            cornerRadius: 6
                         }
                     },
                     scales: {
                         x: {
-                            grid:   { display: false },
+                            grid: { display: false },
                             border: { display: false },
-                            ticks:  { color:'#aaa', font:{ size:10 }, maxRotation:0, autoSkip:true, maxTicksLimit:9 }
+                            ticks: { color:'#aaa', font:{ size:10 }, maxRotation:0, autoSkip:true, maxTicksLimit:9 }
                         },
                         y: { display:false, min:0, max:100 }
                     }
                 }
             });
 
-            // Actualizar badge de score del día
             var w = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
-                    ? this.data.day_weights[day] : 0;
+                ? this.data.day_weights[day] : 0;
+
             if (w > 0) {
                 $('#oy-busy-score-num').text(w);
                 $('#oy-busy-day-score-badge').show();
@@ -1141,63 +1003,60 @@ class OY_Location_GMB_BusyHours_Metabox {
             }
         },
 
-        // ── Etiqueta de interés del día ──────────────────────────────────────
-
         updateStatusLabel: function (day) {
             var w = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
-                    ? this.data.day_weights[day] : 0;
+                ? this.data.day_weights[day] : 0;
             var hours = (this.data.hours && this.data.hours[day]) ? this.data.hours[day] : [];
             var hasHours = hours.some(function (v) { return v > 0; });
             var title, subtitle, dotColor;
 
             if (w === 0 && !hasHours) {
-                title    = 'Sin datos — calcule el índice desde GMB';
+                title = 'Sin datos — calcule el índice desde GMB';
                 subtitle = 'Haga clic en "Calcular índice desde GMB" para obtener el índice real';
                 dotColor = '#757575';
             } else if (w >= 85) {
-                title    = 'Día de máximo interés';
+                title = 'Día de máximo interés';
                 subtitle = 'Este es uno de los días de mayor actividad del negocio';
                 dotColor = '#e53935';
             } else if (w >= 65) {
-                title    = 'Alto interés';
+                title = 'Alto interés';
                 subtitle = 'Actividad por encima del promedio semanal';
                 dotColor = '#f57c00';
             } else if (w >= 40) {
-                title    = 'Interés moderado';
+                title = 'Interés moderado';
                 subtitle = 'Actividad en línea con el promedio de la semana';
                 dotColor = '#fbc02d';
             } else if (w >= 15) {
-                title    = 'Bajo interés';
+                title = 'Bajo interés';
                 subtitle = 'Actividad por debajo del promedio semanal';
                 dotColor = '#43a047';
             } else {
-                title    = 'Muy bajo interés';
+                title = 'Muy bajo interés';
                 subtitle = 'Poca actividad registrada este día';
                 dotColor = '#757575';
             }
 
             $('#oy-busy-status-title').text(title);
             $('#oy-busy-status-subtitle').text(subtitle);
-            $('#oy-busy-live-dot').css('background', dotColor)
-                                  .css('box-shadow', '0 0 6px ' + dotColor + '88');
+            $('#oy-busy-live-dot').css('background', dotColor).css('box-shadow', '0 0 6px ' + dotColor + '88');
         },
 
-        // ── Desglose de grupos de métricas ───────────────────────────────────
-
         updateBreakdown: function (day) {
-            var self      = this;
-            var breakdown = (this.data.metric_breakdown && this.data.metric_breakdown[day])
-                            ? this.data.metric_breakdown[day] : null;
+            var self = this;
+            var breakdown = (this.data.metric_breakdown && this.data.metric_breakdown[day]) ? this.data.metric_breakdown[day] : null;
 
             if (!breakdown) {
                 $('#oy-busy-breakdown').hide();
                 return;
             }
 
-            var groups    = ['high_intent','visit_intent','research','impressions'];
-            var total     = 0;
+            var groups = ['high_intent','visit_intent','research','impressions'];
+            var total = 0;
             groups.forEach(function (g) { total += (breakdown[g] || 0); });
-            if (total <= 0) { $('#oy-busy-breakdown').hide(); return; }
+            if (total <= 0) {
+                $('#oy-busy-breakdown').hide();
+                return;
+            }
 
             var $bars = $('#oy-busy-breakdown-bars').empty();
 
@@ -1221,8 +1080,6 @@ class OY_Location_GMB_BusyHours_Metabox {
             $('#oy-busy-breakdown').show();
         },
 
-        // ── Permanencia ─────────────────────────────────────────────────────
-
         updateStayDisplay: function () {
             var minM = this.data.avg_stay_min || 45;
             var maxM = this.data.avg_stay_max || 90;
@@ -1236,8 +1093,6 @@ class OY_Location_GMB_BusyHours_Metabox {
             $('#oy-busy-stay-display').text('Entre ' + fmt(minM) + ' y ' + fmt(maxM));
         },
 
-        // ── Aplicar plantilla horaria ────────────────────────────────────────
-
         applyTemplate: function (tplKey) {
             var tpl = (this.config.templates || {})[tplKey];
             if (!tpl) { return; }
@@ -1250,8 +1105,6 @@ class OY_Location_GMB_BusyHours_Metabox {
             if (this.editMode) { this.buildSliders(this.currentDay); }
             this.showStatusMsg('Plantilla "' + tplKey + '" aplicada a todos los días. Ajusta si lo necesitas y guarda.', 'info');
         },
-
-        // ── Edit mode ───────────────────────────────────────────────────────
 
         toggleEditMode: function (on) {
             this.editMode = on;
@@ -1273,8 +1126,7 @@ class OY_Location_GMB_BusyHours_Metabox {
                 var $item = $('<div class="oy-busy-slider-item"></div>');
                 var $lbl  = $('<span class="oy-busy-slider-label">' + this.HOUR_LABELS[h] + '</span>');
                 var $val  = $('<span class="oy-busy-slider-val">' + val + '</span>');
-                var $inp  = $('<input type="range" class="oy-busy-slider-range" min="0" max="100" step="5" />')
-                            .val(val).attr('data-hour', h);
+                var $inp  = $('<input type="range" class="oy-busy-slider-range" min="0" max="100" step="5" />').val(val).attr('data-hour', h);
 
                 $inp.on('input', (function (hour, $vd) {
                     return function () {
@@ -1291,31 +1143,25 @@ class OY_Location_GMB_BusyHours_Metabox {
             }
         },
 
-        // ── Compute desde Performance API ───────────────────────────────────
-
         computeFromAPI: function () {
             var self = this;
             var $btn = $('#oy-busy-compute-btn');
 
-            $btn.prop('disabled', true).html(
-                '<span class="dashicons dashicons-update oy-spin" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calculando…'
-            );
+            $btn.prop('disabled', true).html('<span class="dashicons dashicons-update oy-spin" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calculando…');
             this.showStatusMsg('Consultando Performance API (90 días, 11 métricas ponderadas)…', 'loading');
 
             $.ajax({
-                url:     this.config.ajaxUrl,
-                method:  'POST',
+                url: this.config.ajaxUrl,
+                method: 'POST',
                 timeout: 60000,
                 data: {
-                    action:  'oy_gmb_busy_compute',
-                    nonce:   this.config.nonce,
+                    action: 'oy_gmb_busy_compute',
+                    nonce: this.config.nonce,
                     post_id: this.config.postId
                 },
                 success: function (response) {
                     if (response.success) {
                         var d = response.data;
-
-                        // Actualizar datos en memoria
                         self.data.day_weights      = d.day_weights;
                         self.data.day_scores_raw   = d.scores_raw;
                         self.data.metric_breakdown = d.group_breakdown;
@@ -1324,7 +1170,6 @@ class OY_Location_GMB_BusyHours_Metabox {
                         self.data.metrics_used     = d.metrics_used;
                         self.data.source           = 'api';
 
-                        // Re-renderizar todo
                         self.updateAllDayTabs();
                         self.renderChart(self.currentDay);
                         self.updateStatusLabel(self.currentDay);
@@ -1335,7 +1180,6 @@ class OY_Location_GMB_BusyHours_Metabox {
                                   'Selecciona la forma horaria de tu negocio y guarda.';
                         self.showStatusMsg(msg, 'success');
 
-                        // Marcar encabezado
                         $('.oy-busy-computed-header').remove();
                     } else {
                         var errMsg = (response.data && response.data.message) ? response.data.message : 'Error desconocido';
@@ -1344,18 +1188,15 @@ class OY_Location_GMB_BusyHours_Metabox {
                 },
                 error: function (xhr) {
                     var msg = (xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message)
-                              ? xhr.responseJSON.data.message : xhr.statusText;
+                        ? xhr.responseJSON.data.message
+                        : xhr.statusText;
                     self.showStatusMsg('Error de conexión: ' + msg, 'error');
                 },
                 complete: function () {
-                    $btn.prop('disabled', false).html(
-                        '<span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calcular índice desde GMB'
-                    );
+                    $btn.prop('disabled', false).html('<span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calcular índice desde GMB');
                 }
             });
         },
-
-        // ── Guardar ─────────────────────────────────────────────────────────
 
         saveData: function () {
             var self = this;
@@ -1368,13 +1209,13 @@ class OY_Location_GMB_BusyHours_Metabox {
             this.showStatusMsg('Guardando…', 'loading');
 
             $.ajax({
-                url:     this.config.ajaxUrl,
-                method:  'POST',
+                url: this.config.ajaxUrl,
+                method: 'POST',
                 timeout: 30000,
                 data: {
-                    action:    'oy_gmb_busy_save',
-                    nonce:     this.config.nonce,
-                    post_id:   this.config.postId,
+                    action: 'oy_gmb_busy_save',
+                    nonce: this.config.nonce,
+                    post_id: this.config.postId,
                     peak_data: JSON.stringify(this.data)
                 },
                 success: function (response) {
@@ -1389,14 +1230,10 @@ class OY_Location_GMB_BusyHours_Metabox {
                     self.showStatusMsg('Error de conexión. Intenta de nuevo.', 'error');
                 },
                 complete: function () {
-                    $btn.prop('disabled', false).html(
-                        '<span class="dashicons dashicons-saved" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Guardar'
-                    );
+                    $btn.prop('disabled', false).html('<span class="dashicons dashicons-saved" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Guardar');
                 }
             });
         },
-
-        // ── Status helper ────────────────────────────────────────────────────
 
         showStatusMsg: function (msg, type) {
             var $s = $('#oy-busy-status-msg');
@@ -1406,10 +1243,7 @@ class OY_Location_GMB_BusyHours_Metabox {
                 setTimeout(function () { $s.fadeOut(400); }, 6000);
             }
         }
-
-    }; // end OyBusyHours
-
-    // ── Bootstrap ─────────────────────────────────────────────────────────────
+    };
 
     $(document).ready(function () {
         if (typeof oyBusyConfig !== 'undefined' && document.getElementById('oy-busy-wrap')) {
@@ -1428,205 +1262,74 @@ class OY_Location_GMB_BusyHours_Metabox {
 JSEOF;
 	}
 
-	// ── Inline CSS ────────────────────────────────────────────────────────────
-
 	private function get_inline_css() {
 		return '
-/* ==========================================================================
-   OY Location — Horario de Mayor Interés v2
-   ========================================================================== */
 #oy-busy-wrap { font-size:13px; color:#1e1e1e; }
-
-.oy-busy-notice {
-    padding:10px 14px; border-radius:4px; margin-bottom:10px;
-    border:1px solid transparent; display:flex; align-items:center; gap:8px;
-}
+.oy-busy-notice { padding:10px 14px; border-radius:4px; margin-bottom:10px; border:1px solid transparent; display:flex; align-items:center; gap:8px; }
 .oy-busy-notice--warn { background:#fff3cd; border-color:#ffc107; color:#856404; }
-
-/* Computed header */
-.oy-busy-computed-header {
-    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
-    gap:8px; padding:8px 12px; margin-bottom:10px;
-    background:#e8f5e9; border:1px solid #a5d6a7; border-radius:6px;
-}
-.oy-busy-computed-header__left  { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.oy-busy-computed-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:8px 12px; margin-bottom:10px; background:#e8f5e9; border:1px solid #a5d6a7; border-radius:6px; }
+.oy-busy-computed-header__left { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .oy-busy-computed-header__right { display:flex; align-items:center; gap:8px; }
-.oy-busy-source-pill {
-    display:inline-flex; align-items:center; gap:4px;
-    padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600;
-    background:#2e7d32; color:#fff;
-}
+.oy-busy-source-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#2e7d32; color:#fff; }
 .oy-busy-source-pill--api { background:#2e7d32; }
 .oy-busy-period-label { font-size:11px; color:#555; }
-.oy-busy-peak-badge {
-    padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600;
-    background:#1a73e8; color:#fff;
-}
-
-/* Toolbar */
-.oy-busy-toolbar {
-    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
-    gap:8px; background:#f6f7f7; border:1px solid #ddd; border-radius:6px;
-    padding:10px 14px; margin-bottom:12px;
-}
-.oy-busy-toolbar__left  { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.oy-busy-peak-badge { padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#1a73e8; color:#fff; }
+.oy-busy-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; background:#f6f7f7; border:1px solid #ddd; border-radius:6px; padding:10px 14px; margin-bottom:12px; }
+.oy-busy-toolbar__left { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .oy-busy-toolbar__right { display:flex; gap:8px; flex-wrap:wrap; }
-.oy-busy-field-group    { display:flex; align-items:center; gap:6px; }
+.oy-busy-field-group { display:flex; align-items:center; gap:6px; }
 .oy-busy-field-group label { font-weight:600; font-size:12px; white-space:nowrap; }
 .oy-busy-select { min-width:170px; }
-
-/* Status messages */
-.oy-busy-status {
-    padding:9px 14px; border-radius:4px; margin-bottom:10px;
-    border:1px solid transparent; font-size:12px; line-height:1.5;
-}
+.oy-busy-status { padding:9px 14px; border-radius:4px; margin-bottom:10px; border:1px solid transparent; font-size:12px; line-height:1.5; }
 .oy-busy-status--loading { background:#e8f4fb; border-color:#bee5eb; color:#0c5460; }
-.oy-busy-status--error   { background:#fff3cd; border-color:#ffc107; color:#856404; }
-.oy-busy-status--info    { background:#d1ecf1; border-color:#bee5eb; color:#0c5460; }
+.oy-busy-status--error { background:#fff3cd; border-color:#ffc107; color:#856404; }
+.oy-busy-status--info { background:#d1ecf1; border-color:#bee5eb; color:#0c5460; }
 .oy-busy-status--success { background:#d4edda; border-color:#c3e6cb; color:#155724; }
-
-/* ── Dark panel ── */
-.oy-busy-dark-panel {
-    background:#2d2d2d; border-radius:8px;
-    padding:0 0 16px; margin-bottom:12px; overflow:hidden;
-}
-
-/* Day tabs */
-.oy-busy-day-tabs {
-    display:flex; align-items:flex-end; gap:0;
-    background:#252525; padding:8px 8px 0;
-}
-.oy-busy-day-tab {
-    flex:1; display:flex; flex-direction:column; align-items:center;
-    gap:3px; padding:6px 4px 8px;
-    background:transparent; border:none; cursor:pointer;
-    color:#888; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase;
-    transition:color .15s; position:relative;
-}
+.oy-busy-dark-panel { background:#2d2d2d; border-radius:8px; padding:0 0 16px; margin-bottom:12px; overflow:hidden; }
+.oy-busy-day-tabs { display:flex; align-items:flex-end; gap:0; background:#252525; padding:8px 8px 0; }
+.oy-busy-day-tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 4px 8px; background:transparent; border:none; cursor:pointer; color:#888; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; transition:color .15s; position:relative; }
 .oy-busy-day-tab:hover { color:#ccc; }
 .oy-busy-day-tab--active { color:#fff; border-bottom:2px solid #fff; margin-bottom:-2px; }
-
-/* Mini bar en cada tab */
-.oy-busy-day-bar-track {
-    width:24px; height:32px;
-    background:rgba(255,255,255,0.07); border-radius:3px 3px 0 0;
-    display:flex; align-items:flex-end; overflow:hidden;
-}
-.oy-busy-day-bar {
-    width:100%; background:rgba(160,160,160,0.50);
-    border-radius:3px 3px 0 0; transition:height .4s ease; min-height:3px;
-}
+.oy-busy-day-bar-track { width:24px; height:32px; background:rgba(255,255,255,0.07); border-radius:3px 3px 0 0; display:flex; align-items:flex-end; overflow:hidden; }
+.oy-busy-day-bar { width:100%; background:rgba(160,160,160,0.50); border-radius:3px 3px 0 0; transition:height .4s ease; min-height:3px; }
 .oy-busy-day-tab--active .oy-busy-day-bar { background:rgba(255,255,255,0.70); }
-.oy-busy-day-name  { font-size:10px; margin-top:2px; }
+.oy-busy-day-name { font-size:10px; margin-top:2px; }
 .oy-busy-day-index { font-size:10px; color:#aaa; margin-top:1px; font-weight:400; }
 .oy-busy-day-tab--active .oy-busy-day-index { color:#fff; font-weight:700; }
-
-/* Status row */
-.oy-busy-status-row {
-    display:flex; align-items:flex-start; gap:10px;
-    padding:14px 18px 10px; position:relative;
-}
-.oy-busy-live-dot {
-    width:12px; height:12px; border-radius:50%;
-    background:#e53935; margin-top:3px; flex-shrink:0;
-    transition:background .3s, box-shadow .3s;
-}
-.oy-busy-status-title   { font-weight:700; font-size:13px; color:#fff; line-height:1.3; }
+.oy-busy-status-row { display:flex; align-items:flex-start; gap:10px; padding:14px 18px 10px; position:relative; }
+.oy-busy-live-dot { width:12px; height:12px; border-radius:50%; background:#e53935; margin-top:3px; flex-shrink:0; transition:background .3s, box-shadow .3s; }
+.oy-busy-status-title { font-weight:700; font-size:13px; color:#fff; line-height:1.3; }
 .oy-busy-status-subtitle { font-size:11px; color:#aaa; font-style:italic; margin-top:2px; }
-
-/* Score badge */
-.oy-busy-day-score-badge {
-    margin-left:auto; flex-shrink:0;
-    display:flex; flex-direction:column; align-items:center;
-    background:rgba(255,255,255,.08); border-radius:8px;
-    padding:6px 12px; min-width:54px;
-}
-.oy-busy-score-num   { font-size:22px; font-weight:800; color:#fff; line-height:1; }
+.oy-busy-day-score-badge { margin-left:auto; flex-shrink:0; display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.08); border-radius:8px; padding:6px 12px; min-width:54px; }
+.oy-busy-score-num { font-size:22px; font-weight:800; color:#fff; line-height:1; }
 .oy-busy-score-label { font-size:10px; color:#aaa; margin-top:2px; letter-spacing:.04em; }
-
-/* Chart */
-.oy-busy-chart-container {
-    position:relative; height:160px; width:100%;
-    padding:0 12px; box-sizing:border-box;
-}
-.oy-busy-chart-container canvas {
-    display:block !important; width:100% !important; height:100% !important;
-}
-
-/* Desglose */
-.oy-busy-breakdown {
-    padding:10px 18px 6px;
-    border-top:1px solid rgba(255,255,255,.07);
-    margin-top:8px;
-}
-.oy-busy-breakdown__label {
-    font-size:11px; color:#999; font-weight:600;
-    display:block; margin-bottom:8px; letter-spacing:.03em;
-}
+.oy-busy-chart-container { position:relative; height:160px; width:100%; padding:0 12px; box-sizing:border-box; }
+.oy-busy-chart-container canvas { display:block !important; width:100% !important; height:100% !important; }
+.oy-busy-breakdown { padding:10px 18px 6px; border-top:1px solid rgba(255,255,255,.07); margin-top:8px; }
+.oy-busy-breakdown__label { font-size:11px; color:#999; font-weight:600; display:block; margin-bottom:8px; letter-spacing:.03em; }
 .oy-busy-breakdown__bars { display:flex; flex-direction:column; gap:5px; }
-.oy-busy-bd-item {
-    display:flex; align-items:center; gap:7px; font-size:11px;
-}
-.oy-busy-bd-dot   { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.oy-busy-bd-item { display:flex; align-items:center; gap:7px; font-size:11px; }
+.oy-busy-bd-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
 .oy-busy-bd-label { color:#bbb; min-width:130px; white-space:nowrap; }
-.oy-busy-bd-track {
-    flex:1; height:6px; background:rgba(255,255,255,.1);
-    border-radius:3px; overflow:hidden;
-}
-.oy-busy-bd-fill  { height:100%; border-radius:3px; transition:width .4s ease; }
-.oy-busy-bd-pct   { color:#888; min-width:32px; text-align:right; font-weight:600; }
-
-/* Stay row */
-.oy-busy-stay-row {
-    display:flex; align-items:center; gap:4px;
-    font-size:12px; color:#ccc;
-    border-top:1px solid rgba(255,255,255,.07);
-    padding:10px 18px 0; margin-top:6px;
-}
+.oy-busy-bd-track { flex:1; height:6px; background:rgba(255,255,255,.1); border-radius:3px; overflow:hidden; }
+.oy-busy-bd-fill { height:100%; border-radius:3px; transition:width .4s ease; }
+.oy-busy-bd-pct { color:#888; min-width:32px; text-align:right; font-weight:600; }
+.oy-busy-stay-row { display:flex; align-items:center; gap:4px; font-size:12px; color:#ccc; border-top:1px solid rgba(255,255,255,.07); padding:10px 18px 0; margin-top:6px; }
 .oy-busy-stay-row strong { color:#fff; }
-
-/* Edit header */
-.oy-busy-edit-header {
-    display:flex; align-items:center; gap:4px; flex-wrap:wrap;
-    padding:8px 12px; background:#f0f4ff;
-    border:1px solid #c8d8ff; border-radius:6px; margin-bottom:8px;
-}
-.oy-busy-toggle-wrap {
-    display:flex; align-items:center; gap:6px;
-    cursor:pointer; font-weight:600; font-size:12px; color:#3d4d7a;
-}
+.oy-busy-edit-header { display:flex; align-items:center; gap:4px; flex-wrap:wrap; padding:8px 12px; background:#f0f4ff; border:1px solid #c8d8ff; border-radius:6px; margin-bottom:8px; }
+.oy-busy-toggle-wrap { display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600; font-size:12px; color:#3d4d7a; }
 .oy-busy-toggle-label { display:flex; align-items:center; gap:4px; }
-
-/* Sliders */
-.oy-busy-sliders-grid {
-    display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr));
-    gap:8px; background:#fff; border:1px solid #ddd;
-    border-radius:6px; padding:12px; margin-bottom:4px;
-}
-.oy-busy-slider-item  { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.oy-busy-sliders-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:8px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:12px; margin-bottom:4px; }
+.oy-busy-slider-item { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .oy-busy-slider-label { font-size:10px; font-weight:700; color:#555; text-transform:uppercase; letter-spacing:.03em; }
-.oy-busy-slider-range {
-    -webkit-appearance:slider-vertical; writing-mode:vertical-lr;
-    direction:rtl; height:70px; accent-color:#1a73e8; width:100%;
-}
-@media (max-width:782px) {
-    .oy-busy-slider-range { writing-mode:horizontal-tb; direction:ltr; -webkit-appearance:auto; height:auto; }
-}
+.oy-busy-slider-range { -webkit-appearance:slider-vertical; writing-mode:vertical-lr; direction:rtl; height:70px; accent-color:#1a73e8; width:100%; }
+@media (max-width:782px) { .oy-busy-slider-range { writing-mode:horizontal-tb; direction:ltr; -webkit-appearance:auto; height:auto; } }
 .oy-busy-slider-val { font-size:11px; font-weight:700; color:#1a73e8; min-width:26px; text-align:center; }
-
-/* Spin animation para botón computing */
 @keyframes oy-spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
 .oy-spin { display:inline-block; animation:oy-spin .8s linear infinite; }
-
-/* Footer */
-.oy-busy-footer {
-    font-size:11px; color:#888; padding:8px 2px 4px;
-    border-top:1px solid #eee; margin-top:8px; line-height:1.6;
-}
+.oy-busy-footer { font-size:11px; color:#888; padding:8px 2px 4px; border-top:1px solid #eee; margin-top:8px; line-height:1.6; }
 ';
 	}
-
 }
-// end class OY_Location_GMB_BusyHours_Metabox
 
-endif; // class_exists OY_Location_GMB_BusyHours_Metabox
+endif;
