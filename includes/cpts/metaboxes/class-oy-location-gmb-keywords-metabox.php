@@ -56,41 +56,50 @@ class OY_Location_GMB_Keywords_Metabox {
     // Scripts / Styles
     // -----------------------------------------------------------------------
 
-    public function enqueue_scripts( $hook ) {
-        global $post;
+public function enqueue_scripts( $hook ) {
+    global $post;
 
-        if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
-            return;
-        }
-
-        if ( ! $post || 'oy_location' !== $post->post_type ) {
-            return;
-        }
-
-        // Chart.js 4 — only register if not already registered by performance metabox
-        if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
-            wp_register_script(
-                'chartjs-v4',
-                'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js',
-                array(),
-                '4.4.3',
-                true
-            );
-        }
-        wp_enqueue_script( 'chartjs-v4' );
-
-        $nonce = wp_create_nonce( 'oy_gmb_keywords_nonce' );
-
-        wp_localize_script( 'chartjs-v4', 'oyKwConfig', array(
-            'postId'  => $post->ID,
-            'nonce'   => $nonce,
-            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-            'isDebug' => ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ? 1 : 0,
-        ) );
-
-        wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
-        wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
+    if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
+        return;
     }
+
+    if ( ! $post || 'oy_location' !== $post->post_type ) {
+        return;
+    }
+
+    // ── Chart.js 4.4.3 — LOCAL (no CDN) ──
+    // La performance metabox lo registra primero; este bloque es fallback
+    // por si este metabox se carga en ausencia de la performance metabox.
+    if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
+        if ( defined( 'LEALEZ_ASSETS_URL' ) ) {
+            $chartjs_url = LEALEZ_ASSETS_URL . 'js/vendor/chart.umd.min.js';
+        } else {
+            $plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
+            $chartjs_url = plugins_url( 'assets/js/vendor/chart.umd.min.js', $plugin_root . '/index.php' );
+        }
+
+        wp_register_script(
+            'chartjs-v4',
+            $chartjs_url,
+            array(),
+            '4.4.3',
+            true
+        );
+    }
+    wp_enqueue_script( 'chartjs-v4' );
+
+    $nonce = wp_create_nonce( 'oy_gmb_keywords_nonce' );
+
+    wp_localize_script( 'chartjs-v4', 'oyKwConfig', array(
+        'postId'  => $post->ID,
+        'nonce'   => $nonce,
+        'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+        'isDebug' => ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ? 1 : 0,
+    ) );
+
+    wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
+    wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
+}
 
     // -----------------------------------------------------------------------
     // Render Metabox HTML
