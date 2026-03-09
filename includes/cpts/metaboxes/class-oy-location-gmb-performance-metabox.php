@@ -71,7 +71,7 @@ public function enqueue_scripts( $hook ) {
         return;
     }
 
-    // ── Chart.js 4 desde cdnjs (solo si no está ya registrado por keywords metabox) ──
+    // ── Chart.js 4 desde cdnjs ──
     if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
         wp_register_script(
             'chartjs-v4',
@@ -83,7 +83,7 @@ public function enqueue_scripts( $hook ) {
     }
     wp_enqueue_script( 'chartjs-v4' );
 
-    // ── waitForChart guard: garantiza que new Chart() no se ejecute antes de que Chart.js esté listo ──
+    // ── waitForChart guard ──
     $guard_js = 'if(!window.waitForChart){' .
         'window._chartJSQueue=window._chartJSQueue||[];' .
         'window.waitForChart=function(fn){' .
@@ -103,20 +103,41 @@ public function enqueue_scripts( $hook ) {
     '}';
     wp_add_inline_script( 'chartjs-v4', $guard_js, 'before' );
 
-    // ── JS externo del dashboard de rendimiento ──
-    $js_url = defined( 'LEALEZ_ASSETS_URL' )
-        ? LEALEZ_ASSETS_URL . 'js/oy-perf-dashboard.js'
-        : plugins_url( 'assets/js/oy-perf-dashboard.js', dirname( dirname( dirname( __FILE__ ) ) ) . '/index.php' );
+    // ── Resolución de URL del JS externo ──
+    if ( defined( 'LEALEZ_ASSETS_URL' ) ) {
+        $js_url = LEALEZ_ASSETS_URL . 'js/oy-perf-dashboard.js';
+    } else {
+        // Sube 4 niveles desde este archivo hasta la raíz del plugin:
+        // metaboxes/ → cpts/ → includes/ → plugin-root/
+        $plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
+        $js_url      = plugins_url( 'assets/js/oy-perf-dashboard.js', $plugin_root . '/index.php' );
+    }
+
+    // ── DEBUG PHP — visible en wp-content/debug.log cuando WP_DEBUG=true ──
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OyPerf] enqueue_scripts() ejecutado para post #' . $post->ID );
+        error_log( '[OyPerf] LEALEZ_ASSETS_URL definida: ' . ( defined( 'LEALEZ_ASSETS_URL' ) ? 'SÍ = ' . LEALEZ_ASSETS_URL : 'NO' ) );
+        error_log( '[OyPerf] JS URL registrada: ' . $js_url );
+
+        // Verificar si el archivo existe en disco
+        if ( defined( 'LEALEZ_PLUGIN_PATH' ) ) {
+            $js_disk = LEALEZ_PLUGIN_PATH . 'assets/js/oy-perf-dashboard.js';
+        } else {
+            $plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
+            $js_disk     = $plugin_root . '/assets/js/oy-perf-dashboard.js';
+        }
+        error_log( '[OyPerf] Ruta en disco: ' . $js_disk );
+        error_log( '[OyPerf] Archivo existe en disco: ' . ( file_exists( $js_disk ) ? 'SÍ ✅' : 'NO ❌ — ESTA ES LA CAUSA DEL PROBLEMA' ) );
+    }
 
     wp_enqueue_script(
         'oy-perf-dashboard',
         $js_url,
         array( 'jquery', 'chartjs-v4' ),
-        '1.1.0',
+        '1.2.0',
         true
     );
 
-    // ── Configuración pasada al JS vía wp_localize_script ──
     $nonce = wp_create_nonce( 'oy_gmb_performance_nonce' );
 
     $impressions_keys = array(
@@ -144,7 +165,6 @@ public function enqueue_scripts( $hook ) {
         'actKeys'    => $actions_keys,
     ) );
 
-    // ── CSS inline (sin cambios) ──
     wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
 }
 
@@ -287,15 +307,13 @@ public function enqueue_scripts( $hook ) {
             <!-- KPI CARDS -->
             <div id="oy-perf-kpis" class="oy-perf-kpis" style="display:none;"></div>
 
-            <!-- CHART -->
+<!-- CHART -->
             <div id="oy-perf-chart-wrap" class="oy-perf-chart-wrap" style="display:none;">
                 <div class="oy-perf-chart-header">
                     <h4 id="oy-perf-chart-title"><?php esc_html_e( 'Gráfico', 'lealez' ); ?></h4>
                     <div class="oy-perf-chart-header-right">
-                        <!-- Selector de métrica única (barras) -->
                         <label id="oy-perf-chart-metric-label" for="oy-perf-single-metric" style="display:none;"><?php esc_html_e( 'Indicador:', 'lealez' ); ?></label>
                         <select id="oy-perf-single-metric" class="oy-perf-select oy-perf-single-metric-sel" style="display:none;" title="<?php esc_attr_e( 'Indicador a graficar', 'lealez' ); ?>"></select>
-                        <!-- Badge torta -->
                         <span id="oy-perf-chart-pie-badge" class="oy-perf-badge oy-perf-badge--pie" style="display:none;"><?php esc_html_e( 'Móvil vs Escritorio', 'lealez' ); ?></span>
                         <span id="oy-perf-chart-period" class="oy-perf-badge"></span>
                     </div>
@@ -307,6 +325,8 @@ public function enqueue_scripts( $hook ) {
                 <div class="oy-perf-chart-container" id="oy-perf-chart-container">
                     <canvas id="oy-perf-chart"></canvas>
                 </div>
+                <!-- DEBUG PANEL — eliminar cuando el gráfico ya funcione -->
+                <div id="oy-perf-chart-debug" class="oy-perf-chart-debug" style="display:none;"></div>
             </div>
 
             <!-- DATA TABLE -->
@@ -1196,8 +1216,10 @@ public function enqueue_scripts( $hook ) {
     background:#e8f0fe; color:#1a73e8; padding:2px 10px;
     border-radius:20px; font-size:12px; font-weight:600;
 }
-.oy-perf-chart-container { position:relative; height:280px; }
-.oy-perf-chart-container canvas { max-height:100%; }
+.oy-perf-chart-container { position:relative; height:280px; width:100%; display:block; }
+.oy-perf-chart-container canvas { display:block !important; width:100% !important; height:100% !important; max-height:none !important; box-sizing:border-box; }
+/* Panel de debug visual */
+.oy-perf-chart-debug { font-size:11px; font-family:monospace; background:#fffbe6; border:1px solid #f0c040; border-radius:4px; padding:8px 12px; margin-top:8px; line-height:1.8; color:#444; }
 
 /* View Mode Toggle */
 .oy-perf-view-toggle {
