@@ -57,22 +57,18 @@ class OY_Location_GMB_Performance_Metabox {
     // Script / Style enqueue
     // -----------------------------------------------------------------------
 
-public function enqueue_scripts( $hook ) {
-    global $post;
+    public function enqueue_scripts( $hook ) {
+        global $post;
 
-    if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
-        return;
-    }
+        if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
+            return;
+        }
 
-    if ( ! $post || 'oy_location' !== $post->post_type ) {
-        return;
-    }
+        if ( ! $post || 'oy_location' !== $post->post_type ) {
+            return;
+        }
 
-    /**
-     * Chart.js compartido como dependencia.
-     * El metabox de keywords ya no inyecta su app inline directamente sobre chartjs-v4.
-     */
-    if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
+        // Chart.js 4 from cdnjs (no API key required, only vanilla canvas)
         wp_register_script(
             'chartjs-v4',
             'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js',
@@ -80,57 +76,26 @@ public function enqueue_scripts( $hook ) {
             '4.4.3',
             true
         );
+        wp_enqueue_script( 'chartjs-v4' );
+
+        $nonce = wp_create_nonce( 'oy_gmb_performance_nonce' );
+
+        // Inject config via wp_localize_script to avoid PHP variable interpolation issues in JS nowdoc
+        $impressions_keys = array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' );
+        $actions_keys     = array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' );
+
+        wp_localize_script( 'chartjs-v4', 'oyPerfConfig', array(
+            'postId'     => $post->ID,
+            'nonce'      => $nonce,
+            'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+            'metricsDef' => $this->get_all_metrics_definition(),
+            'impKeys'    => $impressions_keys,
+            'actKeys'    => $actions_keys,
+        ) );
+
+        wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
+        wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
     }
-    wp_enqueue_script( 'chartjs-v4' );
-
-    /**
-     * Handle PROPIO del metabox de keywords.
-     * Así no pisamos ni mezclamos localize/inline con el panel de rendimiento.
-     */
-    if ( ! wp_script_is( 'oy-gmb-keywords-admin', 'registered' ) ) {
-        wp_register_script(
-            'oy-gmb-keywords-admin',
-            false,
-            array( 'jquery', 'chartjs-v4' ),
-            defined( 'LEALEZ_VERSION' ) ? LEALEZ_VERSION : '1.0.0',
-            true
-        );
-    }
-    wp_enqueue_script( 'oy-gmb-keywords-admin' );
-
-    $nonce = wp_create_nonce( 'oy_gmb_keywords_nonce' );
-
-    wp_localize_script(
-        'oy-gmb-keywords-admin',
-        'oyKwConfig',
-        array(
-            'postId'  => $post->ID,
-            'nonce'   => $nonce,
-            'ajaxUrl' => admin_url( 'admin-ajax.php' ),
-            'isDebug' => ( defined( 'WP_DEBUG' ) && WP_DEBUG ) ? 1 : 0,
-        )
-    );
-
-    wp_add_inline_script(
-        'oy-gmb-keywords-admin',
-        $this->get_inline_js(),
-        'after'
-    );
-
-    /**
-     * CSS inline aislado del metabox de keywords.
-     */
-    if ( ! wp_style_is( 'oy-gmb-keywords-admin', 'registered' ) ) {
-        wp_register_style(
-            'oy-gmb-keywords-admin',
-            false,
-            array(),
-            defined( 'LEALEZ_VERSION' ) ? LEALEZ_VERSION : '1.0.0'
-        );
-    }
-    wp_enqueue_style( 'oy-gmb-keywords-admin' );
-    wp_add_inline_style( 'oy-gmb-keywords-admin', $this->get_inline_css() );
-}
 
     // -----------------------------------------------------------------------
     // Render Metabox HTML
