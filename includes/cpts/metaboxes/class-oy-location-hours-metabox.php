@@ -1,995 +1,1274 @@
 <?php
 /**
- * OY Location Address & Geolocation Metabox
+ * OY Location – Metabox de Horarios de Atención
  *
- * Externalized metabox for "Dirección y Geolocalización" to keep CPT file smaller.
+ * Registro, renderizado, guardado (form save) y sincronización AJAX
+ * de los horarios de atención de la ubicación con Google My Business.
+ *
+ * Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
+ *
+ * Cargado desde: includes/cpts/class-oy-location-cpt.php  (constructor)
  *
  * @package Lealez
  * @subpackage CPTs/Metaboxes
  * @since 1.0.0
  */
 
-// Exit if accessed directly
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
+/**
+ * Class OY_Location_Hours_Metabox
+ */
+class OY_Location_Hours_Metabox {
 
-    class OY_Location_Address_Metabox {
+    /** @var string CPT slug */
+    private $post_type = 'oy_location';
 
-        /**
-         * Post type slug
-         *
-         * @var string
-         */
-        private $post_type = 'oy_location';
+    /** @var string Nombre del campo oculto de nonce (form save) */
+    private $nonce_name = 'oy_hours_meta_nonce';
 
-        /**
-         * Nonce name/action usados por OY_Location_CPT
-         * (reutilizamos el mismo para no romper el flujo de guardado)
-         */
-        private $nonce_name   = 'oy_location_meta_nonce';
-        private $nonce_action = 'oy_location_save_meta';
+    /** @var string Acción del nonce de form save */
+    private $nonce_action = 'oy_hours_save_meta';
 
-        /**
-         * Constructor
-         */
-        public function __construct() {
-            add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+    /** @var string Acción del nonce para la llamada AJAX del botón de sincronización */
+    private $ajax_nonce_action = 'oy_hours_gmb_sync';
 
-            /**
-             * ✅ Guardado propio SOLO para campos de este metabox que NO están
-             * contemplados en el save_meta_boxes del CPT.
-             *
-             * Importante:
-             * - No tocamos otros metas para evitar interferencia.
-             * - Usamos el mismo nonce del CPT.
-             */
-            add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 18, 2 );
-        }
+    // ─────────────────────────────────────────────────────────────────────────
+    // Constructor
+    // ─────────────────────────────────────────────────────────────────────────
 
-        /**
-         * Register metabox
-         */
-        public function register_metabox() {
+    public function __construct() {
+        // Registrar el metabox
+        add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
 
-            add_meta_box(
-                'oy_location_address',
-                __( 'Dirección y Geolocalización', 'lealez' ),
-                array( $this, 'render_meta_box' ),
-                $this->post_type,
-                'normal',
-                'high'
+        // Guardar campos al publicar/actualizar — prioridad 25 (después del save principal a 20)
+        add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 25, 2 );
+
+        // Endpoint AJAX exclusivo del botón "Sincronizar Horario desde GMB"
+        add_action( 'wp_ajax_oy_sync_location_hours_from_gmb', array( $this, 'ajax_sync_hours' ) );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Registro del metabox
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function register_metabox() {
+        add_meta_box(
+            'oy_location_hours',
+            __( 'Horarios de Atención', 'lealez' ),
+            array( $this, 'render_metabox' ),
+            $this->post_type,
+            'normal',
+            'default'
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Renderizado
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function render_metabox( $post ) {
+
+        // Nonce propio de este metabox (para form save)
+        wp_nonce_field( $this->nonce_action, $this->nonce_name );
+
+        // Nonce AJAX para el botón de sincronización
+        $ajax_sync_nonce = wp_create_nonce( $this->ajax_nonce_action );
+
+        $days = array(
+            'monday'    => __( 'Lunes',      'lealez' ),
+            'tuesday'   => __( 'Martes',     'lealez' ),
+            'wednesday' => __( 'Miércoles',  'lealez' ),
+            'thursday'  => __( 'Jueves',     'lealez' ),
+            'friday'    => __( 'Viernes',    'lealez' ),
+            'saturday'  => __( 'Sábado',     'lealez' ),
+            'sunday'    => __( 'Domingo',    'lealez' ),
+        );
+
+        $timezone     = get_post_meta( $post->ID, 'location_hours_timezone', true );
+        $hours_status = get_post_meta( $post->ID, 'location_hours_status',   true );
+
+        if ( empty( $timezone ) )     { $timezone     = 'America/Bogota'; }
+        if ( empty( $hours_status ) ) { $hours_status = 'open_with_hours'; }
+
+        // ✅ Auditoría: última sincronización hecha específicamente por el botón del metabox de Horarios
+        $last_sync_source = (string) get_post_meta( $post->ID, 'oy_hours_last_sync_source', true );
+        $last_sync_at     = (string) get_post_meta( $post->ID, 'oy_hours_last_sync_at', true );
+
+        if ( 'hours_metabox_button' === $last_sync_source && ! empty( $last_sync_at ) ) {
+            $last_sync_label = sprintf(
+                __( 'Última sincronización (botón Horarios): %s', 'lealez' ),
+                $last_sync_at
             );
+        } else {
+            $last_sync_label = __( 'Última sincronización (botón Horarios): — (aún no se ha ejecutado)', 'lealez' );
         }
 
-        /**
-         * ✅ Parse helper: convertir serviceArea RAW (Google) a lista "humana" de labels.
-         *
-         * La API de GBP puede variar la forma:
-         * - serviceArea.places.placeInfos[] con placeName / name / placeId
-         * - serviceArea.places.placeNames[] (strings)
-         * - otros casos: usamos placeId o regionCode como fallback
-         *
-         * @param array $service_area_raw
-         * @return array array de strings (labels) únicos
-         */
-        private function parse_service_area_labels_from_raw( $service_area_raw ) {
-            if ( ! is_array( $service_area_raw ) || empty( $service_area_raw ) ) {
-                return array();
+        // ── Opciones de horario: "24 horas" + intervalos de 15 min ─────────────
+        $time_options = array();
+        $time_options['24_hours'] = __( '24 horas', 'lealez' );
+        for ( $h = 0; $h < 24; $h++ ) {
+            foreach ( array( 0, 15, 30, 45 ) as $m ) {
+                $hh     = sprintf( '%02d', $h );
+                $mm     = sprintf( '%02d', $m );
+                $period = $h < 12 ? 'a.m.' : 'p.m.';
+                $h12    = $h % 12;
+                if ( $h12 === 0 ) { $h12 = 12; }
+                $time_options[ $hh . ':' . $mm ] = sprintf( '%d:%s %s', $h12, $mm, $period );
             }
+        }
 
-            $labels = array();
-
-            // Caso A: places.placeInfos[]
-            if (
-                isset( $service_area_raw['places'] )
-                && is_array( $service_area_raw['places'] )
-                && isset( $service_area_raw['places']['placeInfos'] )
-                && is_array( $service_area_raw['places']['placeInfos'] )
-            ) {
-                foreach ( $service_area_raw['places']['placeInfos'] as $pi ) {
-                    if ( ! is_array( $pi ) ) {
-                        continue;
-                    }
-
-                    $label = '';
-                    if ( ! empty( $pi['placeName'] ) ) {
-                        $label = (string) $pi['placeName'];
-                    } elseif ( ! empty( $pi['displayName'] ) ) {
-                        $label = (string) $pi['displayName'];
-                    } elseif ( ! empty( $pi['name'] ) ) {
-                        $label = (string) $pi['name'];
-                    } elseif ( ! empty( $pi['placeId'] ) ) {
-                        $label = (string) $pi['placeId'];
-                    }
-
-                    $label = trim( $label );
-                    if ( '' !== $label ) {
-                        $labels[] = $label;
-                    }
-                }
+        // ── Helper: render un <select> de hora ──────────────────────────────────
+        $render_select = function( $name, $selected_val, $include_all_day, $disabled = false, $extra_class = '' ) use ( $time_options ) {
+            $out = '<select name="' . esc_attr( $name ) . '" class="oy-hours-sel' . ( $extra_class ? ' ' . esc_attr( $extra_class ) : '' ) . '" style="min-width:130px;"' . ( $disabled ? ' disabled' : '' ) . '>';
+            foreach ( $time_options as $tval => $tlabel ) {
+                if ( ! $include_all_day && $tval === '24_hours' ) { continue; }
+                $out .= '<option value="' . esc_attr( $tval ) . '"' . selected( $selected_val, $tval, false ) . '>' . esc_html( $tlabel ) . '</option>';
             }
+            $out .= '</select>';
+            return $out;
+        };
 
-            // Caso B: places.placeNames[] (strings)
-            if (
-                isset( $service_area_raw['places'] )
-                && is_array( $service_area_raw['places'] )
-                && isset( $service_area_raw['places']['placeNames'] )
-                && is_array( $service_area_raw['places']['placeNames'] )
-            ) {
-                foreach ( $service_area_raw['places']['placeNames'] as $pn ) {
-                    $pn = trim( (string) $pn );
-                    if ( '' !== $pn ) {
-                        $labels[] = $pn;
-                    }
-                }
-            }
+        // ── Metadatos del post para el JS ───────────────────────────────────────
+        $parent_business_id = get_post_meta( $post->ID, 'parent_business_id',  true );
+        $gmb_location_name  = get_post_meta( $post->ID, 'gmb_location_name',   true );
 
-            // Caso C: places[] directo
-            if ( isset( $service_area_raw['placeInfos'] ) && is_array( $service_area_raw['placeInfos'] ) ) {
-                foreach ( $service_area_raw['placeInfos'] as $pi ) {
-                    if ( ! is_array( $pi ) ) {
-                        continue;
-                    }
-                    $label = '';
-                    if ( ! empty( $pi['placeName'] ) ) {
-                        $label = (string) $pi['placeName'];
-                    } elseif ( ! empty( $pi['displayName'] ) ) {
-                        $label = (string) $pi['displayName'];
-                    } elseif ( ! empty( $pi['name'] ) ) {
-                        $label = (string) $pi['name'];
-                    } elseif ( ! empty( $pi['placeId'] ) ) {
-                        $label = (string) $pi['placeId'];
-                    }
-                    $label = trim( $label );
-                    if ( '' !== $label ) {
-                        $labels[] = $label;
-                    }
-                }
-            }
+        // ✅ Horario especial (editable) — estructura: array de filas
+        // Cada fila: ['date'=>'YYYY-MM-DD','closed'=>bool,'open'=>'HH:MM','close'=>'HH:MM']
+        $special_hours = get_post_meta( $post->ID, 'location_special_hours', true );
+        if ( ! is_array( $special_hours ) ) {
+            $special_hours = array();
+        }
 
-            // Fallback: si no sacamos nada, usar regionCode/placeId
-            if ( empty( $labels ) ) {
-                if ( ! empty( $service_area_raw['regionCode'] ) ) {
-                    $labels[] = trim( (string) $service_area_raw['regionCode'] );
-                }
-                if ( ! empty( $service_area_raw['placeId'] ) ) {
-                    $labels[] = trim( (string) $service_area_raw['placeId'] );
-                }
-            }
-
-            // Normalizar: unique + limpiar
-            $labels = array_map(
-                function( $v ) {
-                    $v = trim( (string) $v );
-                    $v = preg_replace( '/\s{2,}/', ' ', $v );
-                    return $v;
-                },
-                $labels
+        // Normalizar filas mínimas
+        $special_hours = array_values( array_filter( array_map( function( $row ) {
+            if ( ! is_array( $row ) ) { return null; }
+            $date   = isset( $row['date'] ) ? (string) $row['date'] : '';
+            $closed = ! empty( $row['closed'] );
+            $open   = isset( $row['open'] ) ? (string) $row['open'] : '09:00';
+            $close  = isset( $row['close'] ) ? (string) $row['close'] : '18:00';
+            if ( '' === $date ) { return null; }
+            return array(
+                'date'   => $date,
+                'closed' => $closed ? 1 : 0,
+                'open'   => $open,
+                'close'  => $close,
             );
+        }, $special_hours ) ) );
 
-            $labels = array_values( array_filter( array_unique( $labels ) ) );
+        ?>
+        <?php /* ── BARRA DE SINCRONIZACIÓN PROPIA ── */ ?>
+        <div id="oy-hours-sync-bar" style="background:#f0f6fc; border:1px solid #c3d4e4; border-radius:4px; padding:10px 14px; margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span style="font-weight:600; color:#1d5b8e;">
+                <span class="dashicons dashicons-clock" style="vertical-align:middle;"></span>
+                <?php _e( 'Horarios de Atención', 'lealez' ); ?>
+            </span>
 
-            return $labels;
-        }
+            <button type="button"
+                    id="oy-hours-sync-btn"
+                    class="button button-secondary"
+                    <?php echo ( $parent_business_id && $gmb_location_name ) ? '' : 'disabled'; ?>
+                    style="margin-left:auto;">
+                <span class="dashicons dashicons-update" style="vertical-align:middle; margin-top:2px;"></span>
+                <?php _e( 'Sincronizar Horario desde GMB', 'lealez' ); ?>
+            </button>
 
-        /**
-         * Save metabox (solo service areas)
-         *
-         * @param int     $post_id
-         * @param WP_Post $post
-         */
-        public function save_meta_box( $post_id, $post ) {
+            <div id="oy-hours-sync-msg" style="font-size:13px; color:#555;"></div>
 
-            // Security checks
-            if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
-                return;
-            }
+            <div id="oy-hours-sync-lastinfo" style="flex-basis:100%; font-size:12px; color:#666; margin-top:2px;">
+                <?php echo esc_html( $last_sync_label ); ?>
+            </div>
+        </div>
 
-            if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-                return;
-            }
+        <?php /* ── ZONA HORARIA ── */ ?>
+        <table class="form-table" style="margin-bottom:0;">
+            <tr>
+                <th scope="row" style="width:160px;">
+                    <label for="location_hours_timezone"><?php _e( 'Zona Horaria', 'lealez' ); ?></label>
+                </th>
+                <td>
+                    <select name="location_hours_timezone" id="location_hours_timezone" class="regular-text">
+                        <?php foreach ( timezone_identifiers_list() as $tz ) {
+                            printf( '<option value="%s" %s>%s</option>', esc_attr( $tz ), selected( $timezone, $tz, false ), esc_html( $tz ) );
+                        } ?>
+                    </select>
+                    <p class="description">⚙️ <?php _e( 'Solo manual — Google no retorna timezone en Business Information API.', 'lealez' ); ?></p>
+                </td>
+            </tr>
+        </table>
 
-            if ( ! current_user_can( 'edit_post', $post_id ) ) {
-                return;
-            }
+        <hr style="margin:12px 0;">
 
-            // ✅ Guardar location_service_areas[] (chips)
-            if ( isset( $_POST['location_service_areas'] ) && is_array( $_POST['location_service_areas'] ) ) {
-                $raw = wp_unslash( $_POST['location_service_areas'] );
-
-                $clean = array();
-                foreach ( $raw as $v ) {
-                    $v = sanitize_text_field( (string) $v );
-                    $v = trim( preg_replace( '/\s{2,}/', ' ', $v ) );
-                    if ( '' !== $v ) {
-                        $clean[] = $v;
-                    }
-                }
-
-                $clean = array_values( array_filter( array_unique( $clean ) ) );
-
-                update_post_meta( $post_id, 'location_service_areas', $clean );
-
-                // Si hay algo, marcamos flag (útil para UI/validaciones)
-                if ( ! empty( $clean ) ) {
-                    update_post_meta( $post_id, 'service_area_enabled', '1' );
-                } else {
-                    // Si el usuario lo dejó vacío manualmente, no borramos gmb_service_area_raw,
-                    // solo indicamos que no hay selección manual.
-                    delete_post_meta( $post_id, 'service_area_enabled' );
-                }
-            } else {
-                // Si no viene el array, no borramos nada automáticamente para evitar pérdida accidental.
-                // (ej: guardado parcial o conflicto de metaboxes)
-            }
-        }
-
-        /**
-         * Render Address meta box
-         *
-         * @param WP_Post $post
-         */
-        public function render_meta_box( $post ) {
-            $address_line1        = get_post_meta( $post->ID, 'location_address_line1', true );
-            $address_line2        = get_post_meta( $post->ID, 'location_address_line2', true );
-            $neighborhood         = get_post_meta( $post->ID, 'location_neighborhood', true );
-            $city                 = get_post_meta( $post->ID, 'location_city', true );
-            $state                = get_post_meta( $post->ID, 'location_state', true );
-            $country              = get_post_meta( $post->ID, 'location_country', true );
-            $postal_code          = get_post_meta( $post->ID, 'location_postal_code', true );
-            $latitude             = get_post_meta( $post->ID, 'location_latitude', true );
-            $longitude            = get_post_meta( $post->ID, 'location_longitude', true );
-
-            // ✅ Service areas (campo humano)
-            $service_areas = get_post_meta( $post->ID, 'location_service_areas', true );
-            if ( ! is_array( $service_areas ) ) {
-                $service_areas = array();
-            }
-
-            // ✅ Fallback: si no hay lista humana, intentar derivarla de RAW de GMB
-            if ( empty( $service_areas ) ) {
-                $gmb_service_area_raw = get_post_meta( $post->ID, 'gmb_service_area_raw', true );
-                if ( is_array( $gmb_service_area_raw ) ) {
-                    $derived = $this->parse_service_area_labels_from_raw( $gmb_service_area_raw );
-                    if ( ! empty( $derived ) ) {
-                        $service_areas = $derived;
-
-                        // Persistimos para que ya quede “humano” en el post
-                        update_post_meta( $post->ID, 'location_service_areas', $service_areas );
-                        update_post_meta( $post->ID, 'service_area_enabled', '1' );
-                    }
-                }
-            }
-
-            // ✅ Fallback coords desde gmb_latlng_raw
-            if ( ( $latitude === '' || $latitude === false ) || ( $longitude === '' || $longitude === false ) ) {
-                $latlng_raw = get_post_meta( $post->ID, 'gmb_latlng_raw', true );
-                if ( is_array( $latlng_raw ) ) {
-                    if ( ( $latitude === '' || $latitude === false ) && ! empty( $latlng_raw['latitude'] ) ) {
-                        $latitude = (string) $latlng_raw['latitude'];
-                        update_post_meta( $post->ID, 'location_latitude', sanitize_text_field( $latitude ) );
-                    }
-                    if ( ( $longitude === '' || $longitude === false ) && ! empty( $latlng_raw['longitude'] ) ) {
-                        $longitude = (string) $latlng_raw['longitude'];
-                        update_post_meta( $post->ID, 'location_longitude', sanitize_text_field( $longitude ) );
-                    }
-                }
-            }
-
-            $formatted_address    = get_post_meta( $post->ID, 'location_formatted_address', true );
-            $map_url              = get_post_meta( $post->ID, 'location_map_url', true );
-            $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
-            $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
-
-            if ( '' === $show_address ) {
-                $show_address = '1';
-            }
-
-            if ( empty( $country ) ) {
-                $country = '';
-            }
-
-            // Determine initial states
-            $is_service_area    = ( '1' === (string) $service_area_only );
-            $is_show_address    = ( '1' === (string) $show_address );
-            $address_hidden     = $is_service_area && ! $is_show_address;
-            $show_address_row   = $is_service_area;
-
-            // Build initial map embed URL
-            $has_coords   = ( $latitude && $longitude );
-            $embed_url    = '';
-            $map_link_url = $map_url;
-
-            $has_embed = false;
-            if ( $map_url && strpos( $map_url, 'cid=' ) !== false ) {
-                $parsed_cid = '';
-                parse_str( wp_parse_url( $map_url, PHP_URL_QUERY ), $qs );
-                if ( ! empty( $qs['cid'] ) ) {
-                    $parsed_cid = $qs['cid'];
-                }
-                if ( $parsed_cid ) {
-                    $embed_url = 'https://maps.google.com/maps?cid=' . rawurlencode( $parsed_cid ) . '&output=embed';
-                    $has_embed = true;
-                }
-            }
-
-            if ( ! $has_embed && $has_coords ) {
-                $embed_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude ) . '&z=17&output=embed';
-                $has_embed = true;
-            }
-
-            if ( empty( $map_link_url ) && $has_coords ) {
-                $map_link_url = 'https://maps.google.com/maps?q=' . rawurlencode( $latitude . ',' . $longitude );
-            }
-
-            $has_coords = $has_embed;
-            ?>
-
-            <?php /* ── Ubicación de la empresa (alineado con GMB) ── */ ?>
-            <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:16px;">
-                <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
-                    📍 <?php _e( 'Ubicación de la empresa', 'lealez' ); ?>
-                </h4>
-                <p class="description" style="margin:0 0 12px;">
-                    <?php _e( 'Si los clientes visitan tu empresa, agrega una dirección. Si solo ofreces servicios en el domicilio del cliente o en línea, activa la opción "Sin ubicación física".', 'lealez' ); ?>
-                </p>
-
-                <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
-                    <input type="checkbox"
-                           name="service_area_only"
-                           id="service_area_only"
-                           value="1"
-                        <?php checked( $service_area_only, '1' ); ?>>
-                    <strong><?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?></strong>
+        <?php /* ── ESTADO DEL HORARIO ── */ ?>
+        <div id="oy-hours-status-wrap" style="margin-bottom:16px;">
+            <h4 style="margin:0 0 8px;"><?php _e( 'Horario de atención', 'lealez' ); ?></h4>
+            <p class="description" style="margin-bottom:10px;"><?php _e( 'Establece el horario de atención principal o marca tu negocio como cerrado.', 'lealez' ); ?></p>
+            <?php
+            $status_options = array(
+                'open_with_hours'    => array(
+                    'label' => __( 'Abierto, con horarios de atención', 'lealez' ),
+                    'desc'  => __( 'Mostrar cuándo tu negocio está abierto', 'lealez' ),
+                ),
+                'open_without_hours' => array(
+                    'label' => __( 'Abierto, sin horarios de atención', 'lealez' ),
+                    'desc'  => __( 'No mostrar ningún horario de atención', 'lealez' ),
+                ),
+                'temporarily_closed' => array(
+                    'label' => __( 'Cerrado temporalmente', 'lealez' ),
+                    'desc'  => __( 'Indicar si tu empresa o negocio abrirán de nuevo en el futuro', 'lealez' ),
+                ),
+                'permanently_closed' => array(
+                    'label' => __( 'Cerrado permanentemente', 'lealez' ),
+                    'desc'  => __( 'Mostrar que tu empresa o negocio ya no existen', 'lealez' ),
+                ),
+            );
+            foreach ( $status_options as $val => $info ) : ?>
+                <label style="display:flex; align-items:flex-start; gap:10px; margin-bottom:8px; cursor:pointer;">
+                    <input type="radio" name="location_hours_status" value="<?php echo esc_attr( $val ); ?>"
+                           <?php checked( $hours_status, $val ); ?> class="oy-hours-status-radio" style="margin-top:3px; flex-shrink:0;">
+                    <span>
+                        <strong><?php echo esc_html( $info['label'] ); ?></strong><br>
+                        <span class="description"><?php echo esc_html( $info['desc'] ); ?></span>
+                    </span>
                 </label>
+            <?php endforeach; ?>
+        </div>
 
-                <div id="oy-show-address-row"
-                     style="display:<?php echo $show_address_row ? 'flex' : 'none'; ?>; align-items:center; gap:10px; margin-top:6px;">
-                    <label class="oy-toggle-label" style="display:flex; align-items:center; gap:8px;">
-                        <input type="checkbox"
-                               name="show_address_to_customers"
-                               id="show_address_to_customers"
-                               value="1"
-                            <?php checked( $show_address, '1' ); ?>>
-                        <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
-                    </label>
-                </div>
-            </div>
-
-            <?php /* ── Áreas de servicio (UI tipo GMB) ── */ ?>
-            <div style="background:#fff; border:1px solid #e2e4e7; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
-                <h4 style="margin:0 0 6px; font-size:14px; color:#1d2327;">
-                    🗺️ <?php _e( 'Áreas de servicio (Google)', 'lealez' ); ?>
-                </h4>
-                <p class="description" style="margin:0 0 12px;">
-                    <?php _e( 'Define en qué ciudades / regiones / países prestas servicio. Se sincroniza desde GMB (<code>serviceArea</code>) y puedes ajustarlo manualmente aquí. La UI está preparada para múltiples áreas, igual que en Google.', 'lealez' ); ?>
-                </p>
-
-                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
-                    <input type="text"
-                           id="oy-service-area-input"
-                           class="regular-text"
-                           placeholder="<?php esc_attr_e( 'Ej: Barranquilla, Atlántico, Colombia', 'lealez' ); ?>"
-                           style="min-width:280px; flex:1;">
-                    <button type="button" class="button" id="oy-service-area-add">+ <?php _e( 'Agregar', 'lealez' ); ?></button>
-                </div>
-
-                <div id="oy-service-area-tags" style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <?php if ( ! empty( $service_areas ) ) : ?>
-                        <?php foreach ( $service_areas as $sa ) :
-                            $sa = trim( (string) $sa );
-                            if ( '' === $sa ) { continue; }
-                            ?>
-                            <span class="oy-sa-tag" data-value="<?php echo esc_attr( $sa ); ?>" style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">
-                                <span class="oy-sa-text"><?php echo esc_html( $sa ); ?></span>
-                                <button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>
-                                <input type="hidden" name="location_service_areas[]" value="<?php echo esc_attr( $sa ); ?>">
-                            </span>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </div>
-
-                <p class="description" style="margin-top:10px;">
-                    <?php _e( 'Tip: si presionas Enter en el campo, también se agrega el área.', 'lealez' ); ?>
-                </p>
-            </div>
-
-            <?php /* ── Layout de dos columnas: Campos | Mapa (igual a la UI de GMB) ── */ ?>
-            <div id="oy-address-map-layout" style="display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap;">
-
-                <?php /* ── Columna izquierda: campos de dirección ── */ ?>
-                <div id="oy-address-fields-col" style="flex:1; min-width:280px;">
-
-                    <div id="oy-address-fields-wrap" <?php echo $address_hidden ? 'style="display:none;"' : ''; ?>>
-                        <table class="form-table" style="margin-top:0;">
-                            <tr>
-                                <th scope="row" style="width:160px;">
-                                    <label for="location_address_line1"><?php _e( 'Dirección Principal', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_address_line1"
-                                           id="location_address_line1"
-                                           value="<?php echo esc_attr( $address_line1 ); ?>"
-                                           class="large-text"
-                                           placeholder="<?php esc_attr_e( 'Ej: Calle 10 # 25-30', 'lealez' ); ?>">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.addressLines[0]</code>', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row">
-                                    <label for="location_address_line2"><?php _e( 'Complemento', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_address_line2"
-                                           id="location_address_line2"
-                                           value="<?php echo esc_attr( $address_line2 ); ?>"
-                                           class="large-text"
-                                           placeholder="<?php esc_attr_e( 'Ej: Local 202, Piso 2, Edificio Torre Norte', 'lealez' ); ?>">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.subPremise</code> o <code>addressLines[1]</code>', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row">
-                                    <label for="location_neighborhood"><?php _e( 'Barrio/Colonia', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_neighborhood"
-                                           id="location_neighborhood"
-                                           value="<?php echo esc_attr( $neighborhood ); ?>"
-                                           class="regular-text">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.sublocality</code> (si disponible). ⚙️ También editable manualmente.', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row">
-                                    <label for="location_city"><?php _e( 'Ciudad', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_city"
-                                           id="location_city"
-                                           value="<?php echo esc_attr( $city ); ?>"
-                                           class="regular-text">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.locality</code>', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row">
-                                    <label for="location_state"><?php _e( 'Estado/Departamento', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_state"
-                                           id="location_state"
-                                           value="<?php echo esc_attr( $state ); ?>"
-                                           class="regular-text">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.administrativeArea</code>', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row">
-                                    <label for="location_country"><?php _e( 'País (ISO 2)', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_country"
-                                           id="location_country"
-                                           value="<?php echo esc_attr( $country ); ?>"
-                                           class="regular-text"
-                                           placeholder="<?php esc_attr_e( 'CO, MX, US', 'lealez' ); ?>"
-                                           maxlength="2">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.regionCode</code> (ISO 3166-1 alpha-2).', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <tr>
-                                <th scope="row">
-                                    <label for="location_postal_code"><?php _e( 'Código Postal', 'lealez' ); ?></label>
-                                </th>
-                                <td>
-                                    <input type="text"
-                                           name="location_postal_code"
-                                           id="location_postal_code"
-                                           value="<?php echo esc_attr( $postal_code ); ?>"
-                                           class="regular-text">
-                                    <p class="description"><?php _e( 'Importado desde GMB: <code>storefrontAddress.postalCode</code>', 'lealez' ); ?></p>
-                                </td>
-                            </tr>
-                            <?php if ( $formatted_address ) : ?>
-                                <tr>
-                                    <th scope="row">
-                                        <label><?php _e( 'Dirección Formateada', 'lealez' ); ?></label>
-                                    </th>
-                                    <td>
-                                        <input type="text" readonly class="large-text" value="<?php echo esc_attr( $formatted_address ); ?>">
-                                        <p class="description"><?php _e( 'Auto-generada al importar desde GMB.', 'lealez' ); ?></p>
-                                    </td>
-                                </tr>
-                            <?php endif; ?>
-                        </table>
-                    </div><!-- #oy-address-fields-wrap -->
-
-                    <?php /* ── Coordenadas GPS: siempre visibles ── */ ?>
-                    <table class="form-table" id="oy-coords-map-wrap" style="margin-top:0;">
-                        <tr>
-                            <th scope="row" style="width:160px;">
-                                <label><?php _e( 'Coordenadas GPS', 'lealez' ); ?></label>
-                            </th>
-                            <td>
-                                <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                                    <div>
-                                        <label for="location_latitude"><?php _e( 'Latitud', 'lealez' ); ?></label>
-                                        <input type="text"
-                                               name="location_latitude"
-                                               id="location_latitude"
-                                               value="<?php echo esc_attr( $latitude ); ?>"
-                                               class="regular-text"
-                                               placeholder="6.2476376">
-                                    </div>
-                                    <div>
-                                        <label for="location_longitude"><?php _e( 'Longitud', 'lealez' ); ?></label>
-                                        <input type="text"
-                                               name="location_longitude"
-                                               id="location_longitude"
-                                               value="<?php echo esc_attr( $longitude ); ?>"
-                                               class="regular-text"
-                                               placeholder="-75.5658153">
-                                    </div>
-                                </div>
-                                <p class="description"><?php _e( 'Importado desde GMB: <code>latlng.latitude</code> / <code>latlng.longitude</code>', 'lealez' ); ?></p>
-                            </td>
-                        </tr>
-                        <tr>
-                            <th scope="row">
-                                <label for="location_map_url"><?php _e( 'URL en Google Maps', 'lealez' ); ?></label>
-                            </th>
-                            <td>
-                                <input type="url"
-                                       name="location_map_url"
-                                       id="location_map_url"
-                                       value="<?php echo esc_attr( $map_url ); ?>"
-                                       class="large-text">
-                                <p class="description">
-                                    <?php _e( 'Auto-importado desde GMB: <code>metadata.mapsUri</code>. Se llena automáticamente al sincronizar con Google My Business.', 'lealez' ); ?>
-                                    <?php if ( $map_url ) : ?>
-                                        &nbsp;<a href="<?php echo esc_url( $map_url ); ?>" target="_blank" id="oy-maps-open-link"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
-                                    <?php else : ?>
-                                        &nbsp;<a href="#" target="_blank" id="oy-maps-open-link" style="<?php echo $has_coords ? '' : 'display:none;'; ?>"><?php _e( 'Ver en Maps ↗', 'lealez' ); ?></a>
-                                    <?php endif; ?>
-                                </p>
-                            </td>
-                        </tr>
-                    </table>
-
-                </div><!-- #oy-address-fields-col -->
-
-                <?php /* ── Columna derecha: mapa embebido al estilo GMB ── */ ?>
-                <div id="oy-map-preview-col" style="flex:0 0 380px; min-width:280px;">
-                    <div id="oy-map-preview-wrap" style="
-                        border:1px solid #c3d4e6;
-                        border-radius:4px;
-                        overflow:hidden;
-                        background:#e8eaf0;
-                        position:relative;
-                        height:320px;
-                        display:<?php echo $has_coords ? 'block' : 'flex'; ?>;
-                        align-items:center;
-                        justify-content:center;
-                    ">
-                        <?php if ( $has_coords ) : ?>
-                            <iframe
-                                id="oy-map-iframe"
-                                src="<?php echo esc_url( $embed_url ); ?>"
-                                width="100%"
-                                height="320"
-                                style="border:0; display:block;"
-                                allowfullscreen=""
-                                loading="lazy"
-                                referrerpolicy="no-referrer-when-downgrade"
-                            ></iframe>
-                        <?php else : ?>
-                            <div id="oy-map-placeholder" style="text-align:center; color:#757575; padding:20px;">
-                                <span style="font-size:40px; display:block; margin-bottom:10px;">🗺️</span>
-                                <p style="margin:0; font-size:13px;"><?php _e( 'El mapa aparecerá cuando se ingresen las coordenadas GPS o se sincronice con GMB.', 'lealez' ); ?></p>
-                            </div>
-                            <iframe
-                                id="oy-map-iframe"
-                                src=""
-                                width="100%"
-                                height="320"
-                                style="border:0; display:none;"
-                                allowfullscreen=""
-                                loading="lazy"
-                                referrerpolicy="no-referrer-when-downgrade"
-                            ></iframe>
-                        <?php endif; ?>
-
-                        <?php if ( $map_link_url ) : ?>
-                            <a href="<?php echo esc_url( $map_link_url ); ?>"
-                               id="oy-map-adjust-btn"
-                               target="_blank"
-                               style="
-                                position:absolute;
-                                top:10px;
-                                right:10px;
-                                background:#fff;
-                                border:1px solid #dadce0;
-                                border-radius:4px;
-                                padding:6px 14px;
-                                font-size:13px;
-                                font-weight:500;
-                                color:#1a73e8;
-                                text-decoration:none;
-                                box-shadow:0 1px 3px rgba(0,0,0,.2);
-                                z-index:10;
-                                cursor:pointer;
-                                line-height:1.4;
-                               "><?php _e( 'Ajustar', 'lealez' ); ?></a>
-                        <?php else : ?>
-                            <a href="#"
-                               id="oy-map-adjust-btn"
-                               target="_blank"
-                               style="
-                                position:absolute;
-                                top:10px;
-                                right:10px;
-                                background:#fff;
-                                border:1px solid #dadce0;
-                                border-radius:4px;
-                                padding:6px 14px;
-                                font-size:13px;
-                                font-weight:500;
-                                color:#1a73e8;
-                                text-decoration:none;
-                                box-shadow:0 1px 3px rgba(0,0,0,.2);
-                                z-index:10;
-                                cursor:pointer;
-                                line-height:1.4;
-                                display:<?php echo $has_coords ? 'block' : 'none'; ?>;
-                               "><?php _e( 'Ajustar', 'lealez' ); ?></a>
-                        <?php endif; ?>
-                    </div>
-                    <p class="description" style="margin-top:6px; font-size:11px; color:#757575;">
-                        <?php _e( 'Vista previa del mapa. Se actualiza al cambiar las coordenadas GPS.', 'lealez' ); ?>
-                    </p>
-                </div><!-- #oy-map-preview-col -->
-
-            </div><!-- #oy-address-map-layout -->
+        <?php /* ── GRILLA DE HORARIOS POR DÍA — multi período ── */ ?>
+        <div id="oy-hours-grid-wrap" <?php echo ( $hours_status !== 'open_with_hours' ) ? 'style="display:none;"' : ''; ?>>
+            <p class="description" style="margin-bottom:8px;">
+                <?php _e( 'Importado desde GMB: <code>regularHours.periods</code>. Puedes editar manualmente también.', 'lealez' ); ?>
+            </p>
 
             <script type="text/javascript">
-                /**
-                 * oy_toggle_address_fields
-                 */
-                window.oy_toggle_address_fields = function() {
-                    var $ = jQuery;
-                    var isServiceAreaOnly  = $('#service_area_only').is(':checked');
-                    var showAddressChecked = $('#show_address_to_customers').is(':checked');
-
-                    if ( isServiceAreaOnly ) {
-                        $('#oy-show-address-row').css('display', 'flex');
-                    } else {
-                        $('#oy-show-address-row').css('display', 'none');
-                    }
-
-                    if ( isServiceAreaOnly && ! showAddressChecked ) {
-                        $('#oy-address-fields-wrap').hide();
-                    } else {
-                        $('#oy-address-fields-wrap').show();
-                    }
-                };
-
-                /**
-                 * oy_update_map_preview
-                 */
-                window.oy_update_map_preview = function() {
-                    var $ = jQuery;
-                    var lat        = $.trim( $('#location_latitude').val() );
-                    var lng        = $.trim( $('#location_longitude').val() );
-                    var savedMapUrl = $.trim( $('#location_map_url').val() );
-
-                    var hasCoords  = lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng));
-
-                    var embedUrl = '';
-                    var mapsUrl  = savedMapUrl || '';
-
-                    if ( savedMapUrl && savedMapUrl.indexOf('cid=') !== -1 ) {
-                        var cidMatch = savedMapUrl.match(/[?&]cid=([^&]+)/);
-                        if ( cidMatch && cidMatch[1] ) {
-                            embedUrl = 'https://maps.google.com/maps?cid=' + encodeURIComponent(cidMatch[1]) + '&output=embed';
-                        }
-                    }
-
-                    if ( ! embedUrl && hasCoords ) {
-                        embedUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng) + '&z=17&output=embed';
-                    }
-
-                    if ( ! mapsUrl && hasCoords ) {
-                        mapsUrl = 'https://maps.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng);
-                    }
-
-                    if ( ! embedUrl ) {
-                        $('#oy-map-iframe').hide().attr('src', '');
-                        $('#oy-map-placeholder').show();
-                        $('#oy-map-preview-wrap').css({ 'display': 'flex' });
-                        $('#oy-map-adjust-btn').hide();
-                        $('#oy-maps-open-link').hide();
-                        return;
-                    }
-
-                    $('#oy-map-placeholder').hide();
-                    $('#oy-map-iframe').attr('src', embedUrl).css('display', 'block');
-                    $('#oy-map-preview-wrap').css({ 'display': 'block' });
-
-                    if ( mapsUrl ) {
-                        $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
-                        $('#oy-maps-open-link').attr('href', mapsUrl).show();
-                    }
-                };
-
-                /**
-                 * ✅ UI helper: Service Areas (chips)
-                 * Exponemos una función global para que applyLocationToForm pueda usarla.
-                 */
-                window.oy_apply_service_areas = function(loc) {
-                    try {
-                        var $ = jQuery;
-                        if (!loc) return;
-
-                        var labels = [];
-
-                        var sa = loc.serviceArea || null;
-
-                        // Estructuras posibles
-                        if (sa && typeof sa === 'object') {
-
-                            // Caso A: sa.places.placeInfos[]
-                            if (sa.places && sa.places.placeInfos && Array.isArray(sa.places.placeInfos)) {
-                                sa.places.placeInfos.forEach(function(pi){
-                                    if(!pi) return;
-                                    var l = '';
-                                    if (pi.placeName) l = String(pi.placeName);
-                                    else if (pi.displayName) l = String(pi.displayName);
-                                    else if (pi.name) l = String(pi.name);
-                                    else if (pi.placeId) l = String(pi.placeId);
-                                    l = l.trim();
-                                    if (l) labels.push(l);
-                                });
-                            }
-
-                            // Caso B: sa.places.placeNames[]
-                            if (sa.places && sa.places.placeNames && Array.isArray(sa.places.placeNames)) {
-                                sa.places.placeNames.forEach(function(pn){
-                                    pn = String(pn || '').trim();
-                                    if (pn) labels.push(pn);
-                                });
-                            }
-
-                            // Caso C: sa.placeInfos[]
-                            if (sa.placeInfos && Array.isArray(sa.placeInfos)) {
-                                sa.placeInfos.forEach(function(pi){
-                                    if(!pi) return;
-                                    var l = '';
-                                    if (pi.placeName) l = String(pi.placeName);
-                                    else if (pi.displayName) l = String(pi.displayName);
-                                    else if (pi.name) l = String(pi.name);
-                                    else if (pi.placeId) l = String(pi.placeId);
-                                    l = l.trim();
-                                    if (l) labels.push(l);
-                                });
-                            }
-
-                            // Fallback regionCode/placeId
-                            if (!labels.length) {
-                                if (sa.regionCode) labels.push(String(sa.regionCode).trim());
-                                if (sa.placeId) labels.push(String(sa.placeId).trim());
-                            }
-                        }
-
-                        // Normalizar unique
-                        var map = {};
-                        var out = [];
-                        labels.forEach(function(v){
-                            v = String(v || '').trim().replace(/\s{2,}/g,' ');
-                            if (!v) return;
-                            if (map[v]) return;
-                            map[v] = true;
-                            out.push(v);
-                        });
-
-                        // Pintar chips
-                        var $wrap = $('#oy-service-area-tags');
-                        if (!$wrap.length) return;
-
-                        // Limpiar chips actuales
-                        $wrap.find('.oy-sa-tag').remove();
-
-                        // Render
-                        out.forEach(function(v){
-                            var chip =
-                                '<span class="oy-sa-tag" data-value="'+ $('<div>').text(v).html() +'" ' +
-                                'style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">' +
-                                    '<span class="oy-sa-text">'+ $('<div>').text(v).html() +'</span>' +
-                                    '<button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>' +
-                                    '<input type="hidden" name="location_service_areas[]" value="'+ $('<div>').text(v).html() +'">' +
-                                '</span>';
-                            $wrap.append(chip);
-                        });
-
-                    } catch(e) {
-                        if (window.console && window.console.warn) {
-                            console.warn('[OY Address] oy_apply_service_areas error:', e);
-                        }
-                    }
-                };
-
-
-                /**
- * ✅ Hook defensivo para que "Importar Ahora" SIEMPRE pinte Áreas de servicio
- * aunque applyLocationToForm() (en el CPT) no lo llame explícitamente.
- *
- * Estrategia:
- * - Si existe window.applyLocationToForm y NO está envuelta, la envolvemos.
- * - Ejecutamos la original.
- * - Luego llamamos window.oy_apply_service_areas(loc) para renderizar chips.
- * - Incluye reintento por si applyLocationToForm se define después.
- */
-(function() {
-    function wrapApplyLocationToForm() {
-        try {
-            if (typeof window.applyLocationToForm !== 'function') {
-                return false;
-            }
-            if (window.applyLocationToForm.__oy_service_area_wrapped) {
-                return true;
-            }
-
-            var original = window.applyLocationToForm;
-
-            var wrapped = function(loc) {
-                var result;
-                try {
-                    result = original.call(this, loc);
-                } catch (e1) {
-                    // Si la original falla, no bloqueamos el resto
-                    if (window.console && window.console.warn) {
-                        console.warn('[OY Address] applyLocationToForm original error:', e1);
-                    }
-                }
-
-                // ✅ Después del import: pintar áreas de servicio si existe helper
-                try {
-                    if (typeof window.oy_apply_service_areas === 'function') {
-                        window.oy_apply_service_areas(loc);
-                    }
-                } catch (e2) {
-                    if (window.console && window.console.warn) {
-                        console.warn('[OY Address] oy_apply_service_areas error:', e2);
-                    }
-                }
-
-                return result;
+            var oyHoursTimeOptions = <?php
+                $js_opts = array();
+                foreach ( $time_options as $tv => $tl ) { $js_opts[] = array( 'value' => $tv, 'label' => $tl ); }
+                echo wp_json_encode( $js_opts );
+            ?>;
+            var oyHoursI18n = {
+                addPeriod:    '<?php echo esc_js( __( 'Agregar otro turno', 'lealez' ) ); ?>',
+                removePeriod: '<?php echo esc_js( __( 'Eliminar turno', 'lealez' ) ); ?>',
+                opensAt:      '<?php echo esc_js( __( 'Abre a la(s)', 'lealez' ) ); ?>',
+                closesAt:     '<?php echo esc_js( __( 'Cierra a la(s)', 'lealez' ) ); ?>',
+                addSpecial:   '<?php echo esc_js( __( 'Agregar horario especial', 'lealez' ) ); ?>',
+                specialTitle: '<?php echo esc_js( __( 'Horario especial', 'lealez' ) ); ?>',
+                closedLabel:  '<?php echo esc_js( __( 'Cerrado', 'lealez' ) ); ?>',
+                dateLabel:    '<?php echo esc_js( __( 'Fecha', 'lealez' ) ); ?>'
             };
+            </script>
 
-            wrapped.__oy_service_area_wrapped = true;
-            window.applyLocationToForm = wrapped;
+            <div id="oy-hours-days-container">
+            <?php foreach ( $days as $day_key => $day_label ) :
+                $hours = get_post_meta( $post->ID, 'location_hours_' . $day_key, true );
 
-            return true;
-        } catch (e) {
-            if (window.console && window.console.warn) {
-                console.warn('[OY Address] wrapApplyLocationToForm error:', e);
-            }
-            return false;
-        }
-    }
-
-    // Intento inmediato (normalmente applyLocationToForm ya existe)
-    if (!wrapApplyLocationToForm()) {
-        // Reintento en load por si el orden de scripts cambia
-        window.addEventListener('load', function() {
-            wrapApplyLocationToForm();
-        });
-    }
-})();
-
-                
-                jQuery(document).ready(function($){
-
-                    // Toggle dirección
-                    $('#service_area_only').on('change', window.oy_toggle_address_fields);
-                    $('#show_address_to_customers').on('change', window.oy_toggle_address_fields);
-
-                    // Actualizar mapa al cambiar coordenadas (debounce)
-                    var oy_map_debounce_timer;
-                    $('#location_latitude, #location_longitude').on('input change', function() {
-                        clearTimeout(oy_map_debounce_timer);
-                        oy_map_debounce_timer = setTimeout(function() {
-                            window.oy_update_map_preview();
-                        }, 600);
-                    });
-
-                    // Ajustar links si cambia URL Maps manualmente
-                    $('#location_map_url').on('input change', function() {
-                        var mapUrl = $.trim( $(this).val() );
-                        if ( mapUrl ) {
-                            $('#oy-map-adjust-btn').attr('href', mapUrl).show();
-                            $('#oy-maps-open-link').attr('href', mapUrl).show();
-                        }
-                    });
-
-                    // ✅ Service Areas UI: add/remove
-                    function oyServiceAreaAdd(value) {
-                        value = String(value || '').trim().replace(/\s{2,}/g,' ');
-                        if (!value) return;
-
-                        // Evitar duplicados
-                        var exists = false;
-                        $('#oy-service-area-tags .oy-sa-tag').each(function(){
-                            var v = String($(this).attr('data-value') || '').trim();
-                            if (v === value) { exists = true; return false; }
-                        });
-                        if (exists) return;
-
-                        var chip =
-                            '<span class="oy-sa-tag" data-value="'+ $('<div>').text(value).html() +'" ' +
-                            'style="display:inline-flex;align-items:center;gap:8px;background:#f0f6fc;border:1px solid #c3d4e6;border-radius:18px;padding:6px 10px;font-size:12px;">' +
-                                '<span class="oy-sa-text">'+ $('<div>').text(value).html() +'</span>' +
-                                '<button type="button" class="button-link oy-sa-remove" style="color:#dc3232;text-decoration:none;font-weight:700;line-height:1;">✕</button>' +
-                                '<input type="hidden" name="location_service_areas[]" value="'+ $('<div>').text(value).html() +'">' +
-                            '</span>';
-
-                        $('#oy-service-area-tags').append(chip);
+                if ( ! is_array( $hours ) ) {
+                    $hours = array( 'closed' => false, 'all_day' => false, 'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ) );
+                }
+                if ( ! isset( $hours['periods'] ) || ! is_array( $hours['periods'] ) || empty( $hours['periods'] ) ) {
+                    $old_open  = isset( $hours['open'] )  ? $hours['open']  : '09:00';
+                    $old_close = isset( $hours['close'] ) ? $hours['close'] : '18:00';
+                    if ( $old_open === '24_hours' ) {
+                        $hours['all_day'] = true;
+                        $hours['periods'] = array( array( 'open' => '24_hours', 'close' => '' ) );
+                    } else {
+                        $hours['all_day'] = false;
+                        $hours['periods'] = array( array( 'open' => $old_open, 'close' => $old_close ) );
                     }
+                }
 
-                    $('#oy-service-area-add').on('click', function(e){
-                        e.preventDefault();
-                        var v = $('#oy-service-area-input').val();
-                        oyServiceAreaAdd(v);
-                        $('#oy-service-area-input').val('').focus();
-                    });
+                $is_closed  = ! empty( $hours['closed'] );
+                $is_all_day = ! empty( $hours['all_day'] );
+                $periods    = is_array( $hours['periods'] ) ? $hours['periods'] : array( array( 'open' => '09:00', 'close' => '18:00' ) );
+                if ( $is_all_day ) { $periods = array( array( 'open' => '24_hours', 'close' => '' ) ); }
+                ?>
+                <div class="oy-day-section" data-day="<?php echo esc_attr( $day_key ); ?>"
+                     style="display:flex; align-items:flex-start; gap:0; margin-bottom:4px; padding:6px 0; border-bottom:1px solid #f0f0f0;">
 
-                    $('#oy-service-area-input').on('keydown', function(e){
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            $('#oy-service-area-add').trigger('click');
+                    <div style="width:130px; flex-shrink:0; padding-top:8px;">
+                        <strong><?php echo esc_html( $day_label ); ?></strong>
+                    </div>
+
+                    <div style="width:80px; flex-shrink:0; text-align:center; padding-top:6px;">
+                        <input type="checkbox"
+                               name="location_hours_<?php echo esc_attr( $day_key ); ?>[closed]"
+                               value="1"
+                               <?php checked( $is_closed, true ); ?>
+                               class="oy-hours-closed-cb"
+                               data-day="<?php echo esc_attr( $day_key ); ?>"
+                               style="width:16px;height:16px;">
+                        <?php if ( $is_closed ) : ?>
+                            <br><small style="color:#999;"><?php _e( 'Cerrada', 'lealez' ); ?></small>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="oy-day-periods" data-day="<?php echo esc_attr( $day_key ); ?>"
+                         style="flex:1; <?php echo $is_closed ? 'opacity:0.5;' : ''; ?>">
+                        <?php foreach ( $periods as $pidx => $period ) :
+                            $popen   = isset( $period['open'] )  ? $period['open']  : '09:00';
+                            $pclose  = isset( $period['close'] ) ? $period['close'] : '18:00';
+                            $p24h    = ( $popen === '24_hours' );
+                            $is_first = ( $pidx === 0 );
+                            ?>
+                            <div class="oy-period-row" style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+                                <div>
+                                    <?php if ( $is_first ) : ?><div style="font-size:10px;color:#888;margin-bottom:2px;"><?php _e( 'Abre a la(s)', 'lealez' ); ?></div><?php endif; ?>
+                                    <?php echo $render_select(
+                                        'location_hours_' . $day_key . '[periods][' . $pidx . '][open]',
+                                        $popen,
+                                        true,
+                                        $is_closed,
+                                        'oy-period-open'
+                                    ); ?>
+                                </div>
+                                <div>
+                                    <?php if ( $is_first ) : ?><div style="font-size:10px;color:#888;margin-bottom:2px;"><?php _e( 'Cierra a la(s)', 'lealez' ); ?></div><?php endif; ?>
+                                    <?php echo $render_select(
+                                        'location_hours_' . $day_key . '[periods][' . $pidx . '][close]',
+                                        $pclose,
+                                        false,
+                                        ( $is_closed || $p24h ),
+                                        'oy-period-close'
+                                    ); ?>
+                                </div>
+                                <div style="<?php echo $is_first ? 'margin-top:18px;' : ''; ?>">
+                                    <?php if ( ! $is_all_day ) : ?>
+                                        <?php if ( $pidx === 0 ) : ?>
+                                            <button type="button" class="button oy-add-period" data-day="<?php echo esc_attr( $day_key ); ?>"
+                                                    title="<?php esc_attr_e( 'Agregar otro turno', 'lealez' ); ?>" style="padding:2px 8px;min-height:28px;">＋</button>
+                                        <?php endif; ?>
+                                        <?php if ( $pidx > 0 ) : ?>
+                                            <button type="button" class="button oy-remove-period" data-day="<?php echo esc_attr( $day_key ); ?>"
+                                                    title="<?php esc_attr_e( 'Eliminar turno', 'lealez' ); ?>" style="padding:2px 8px;min-height:28px;color:#dc3232;">🗑</button>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+            </div><!-- #oy-hours-days-container -->
+        </div><!-- #oy-hours-grid-wrap -->
+
+        <hr style="margin:16px 0;">
+
+        <?php /* ── HORARIO ESPECIAL (Nuevo) ── */ ?>
+        <div id="oy-special-hours-wrap" style="margin-top:10px;">
+            <h4 style="margin:0 0 6px;"><?php _e( 'Horario especial', 'lealez' ); ?></h4>
+            <p class="description" style="margin:0 0 12px;">
+                <?php _e( 'Importado desde GMB: <code>specialHours.specialHourPeriods</code>. Estos horarios aplican por fecha específica (feriados u horarios puntuales).', 'lealez' ); ?>
+            </p>
+
+            <div id="oy-special-hours-list">
+                <?php if ( ! empty( $special_hours ) ) : ?>
+                    <?php foreach ( $special_hours as $idx => $row ) :
+                        $row_date   = isset( $row['date'] ) ? (string) $row['date'] : '';
+                        $row_closed = ! empty( $row['closed'] );
+                        $row_open   = isset( $row['open'] ) ? (string) $row['open'] : '09:00';
+                        $row_close  = isset( $row['close'] ) ? (string) $row['close'] : '18:00';
+                        ?>
+                        <div class="oy-special-row" data-idx="<?php echo esc_attr( $idx ); ?>" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e5e5; border-radius:4px; margin-bottom:10px; background:#fafafa;">
+                            <div style="min-width:160px;">
+                                <label style="display:block; font-size:11px; color:#666; margin-bottom:4px;"><?php _e( 'Fecha', 'lealez' ); ?></label>
+                                <input type="date"
+                                       name="location_special_hours[<?php echo esc_attr( $idx ); ?>][date]"
+                                       value="<?php echo esc_attr( $row_date ); ?>"
+                                       class="regular-text"
+                                       style="min-width:160px;">
+                            </div>
+
+                            <div style="min-width:120px; padding-top:18px;">
+                                <label style="display:flex; align-items:center; gap:8px;">
+                                    <input type="checkbox"
+                                           class="oy-special-closed"
+                                           name="location_special_hours[<?php echo esc_attr( $idx ); ?>][closed]"
+                                           value="1"
+                                           <?php checked( $row_closed, true ); ?>>
+                                    <strong style="font-size:12px;"><?php _e( 'Cerrado', 'lealez' ); ?></strong>
+                                </label>
+                            </div>
+
+                            <div>
+                                <label style="display:block; font-size:11px; color:#666; margin-bottom:4px;"><?php _e( 'Abre a la(s)', 'lealez' ); ?></label>
+                                <?php echo $render_select(
+                                    'location_special_hours[' . $idx . '][open]',
+                                    $row_open,
+                                    true,
+                                    $row_closed,
+                                    'oy-special-open'
+                                ); ?>
+                            </div>
+
+                            <div>
+                                <label style="display:block; font-size:11px; color:#666; margin-bottom:4px;"><?php _e( 'Cierra a la(s)', 'lealez' ); ?></label>
+                                <?php echo $render_select(
+                                    'location_special_hours[' . $idx . '][close]',
+                                    $row_close,
+                                    false,
+                                    $row_closed,
+                                    'oy-special-close'
+                                ); ?>
+                            </div>
+
+                            <div style="padding-top:18px;">
+                                <button type="button" class="button oy-remove-special" style="color:#dc3232;">✕ <?php _e( 'Eliminar', 'lealez' ); ?></button>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+
+            <button type="button" id="oy-add-special-hour" class="button button-secondary">
+                + <?php _e( 'Agregar horario especial', 'lealez' ); ?>
+            </button>
+        </div>
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+
+            // ── Radio: mostrar/ocultar grilla ───────────────────────────────
+            $('.oy-hours-status-radio').on('change', function() {
+                var v = $('input[name="location_hours_status"]:checked').val();
+                if (v === 'open_with_hours') {
+                    $('#oy-hours-grid-wrap').show();
+                } else {
+                    $('#oy-hours-grid-wrap').hide();
+                }
+            });
+
+            // ── Helper: generar <option> HTML para selects ──────────────────
+            function buildOptions(selectedVal, includeAllDay) {
+                var html = '';
+                for (var i = 0; i < oyHoursTimeOptions.length; i++) {
+                    var opt = oyHoursTimeOptions[i];
+                    if (!includeAllDay && opt.value === '24_hours') continue;
+                    html += '<option value="' + opt.value + '"' + (opt.value === selectedVal ? ' selected' : '') + '>' + opt.label + '</option>';
+                }
+                return html;
+            }
+
+            // ── Helper: construir un nuevo row de período (horario normal) ───────────────────
+            function buildPeriodRow(dayKey, idx, openVal, closeVal, isFirst) {
+                var marginTop = isFirst ? 'margin-top:18px;' : '';
+                var labelO = isFirst ? '<div style="font-size:10px;color:#888;margin-bottom:2px;">' + oyHoursI18n.opensAt  + '</div>' : '';
+                var labelC = isFirst ? '<div style="font-size:10px;color:#888;margin-bottom:2px;">' + oyHoursI18n.closesAt + '</div>' : '';
+                return '<div class="oy-period-row" style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">' +
+                    '<div>' + labelO + '<select name="location_hours_' + dayKey + '[periods][' + idx + '][open]" class="oy-hours-sel oy-period-open" style="min-width:130px;">' + buildOptions(openVal, true)  + '</select></div>' +
+                    '<div>' + labelC + '<select name="location_hours_' + dayKey + '[periods][' + idx + '][close]" class="oy-hours-sel oy-period-close" style="min-width:130px;">' + buildOptions(closeVal, false) + '</select></div>' +
+                    '<div style="' + marginTop + '"><button type="button" class="button oy-add-period" data-day="' + dayKey + '" title="' + oyHoursI18n.addPeriod + '" style="padding:2px 8px;min-height:28px;">＋</button></div>' +
+                '</div>';
+            }
+
+            // ── Helper: reindexar names y botones tras add/remove ───────────
+            function reindexPeriods(dayKey) {
+                var $rows = $('.oy-day-periods[data-day="' + dayKey + '"] .oy-period-row');
+                $rows.each(function(idx) {
+                    $(this).find('.oy-period-open' ).attr('name', 'location_hours_' + dayKey + '[periods][' + idx + '][open]');
+                    $(this).find('.oy-period-close').attr('name', 'location_hours_' + dayKey + '[periods][' + idx + '][close]');
+                    var $btnWrap = $(this).find('div:last-child');
+                    $btnWrap.find('.oy-add-period, .oy-remove-period').remove();
+                    if (idx === 0) {
+                        $btnWrap.append('<button type="button" class="button oy-add-period" data-day="' + dayKey + '" title="' + oyHoursI18n.addPeriod + '" style="padding:2px 8px;min-height:28px;">＋</button>');
+                    } else {
+                        $btnWrap.append('<button type="button" class="button oy-remove-period" data-day="' + dayKey + '" title="' + oyHoursI18n.removePeriod + '" style="padding:2px 8px;min-height:28px;color:#dc3232;">🗑</button>');
+                    }
+                });
+            }
+
+            // ── Checkbox "Cerrada" (horario normal) ───────────────────────────
+            $(document).on('change', '.oy-hours-closed-cb', function() {
+                var day    = $(this).data('day');
+                var closed = $(this).is(':checked');
+                $('.oy-day-periods[data-day="' + day + '"]').css('opacity', closed ? 0.5 : 1).find('select').prop('disabled', closed);
+            });
+
+            // ── Agregar período (horario normal) ──────────────────────────────
+            $(document).on('click', '.oy-add-period', function() {
+                var dayKey   = $(this).data('day');
+                var $periods = $('.oy-day-periods[data-day="' + dayKey + '"]');
+                var newIdx   = $periods.find('.oy-period-row').length;
+                $periods.append(buildPeriodRow(dayKey, newIdx, '09:00', '18:00', false));
+                reindexPeriods(dayKey);
+            });
+
+            // ── Eliminar período (horario normal) ─────────────────────────────
+            $(document).on('click', '.oy-remove-period', function() {
+                var dayKey = $(this).data('day');
+                $(this).closest('.oy-period-row').remove();
+                reindexPeriods(dayKey);
+            });
+
+            // ── Select "Abre a la(s)" = 24h → deshabilitar cierre (horario normal) ───────────
+            $(document).on('change', '.oy-period-open', function() {
+                var isAllDay = $(this).val() === '24_hours';
+                var $row = $(this).closest('.oy-period-row');
+                $row.find('.oy-period-close').prop('disabled', isAllDay);
+                if (isAllDay) { $row.find('.oy-period-close').val(''); }
+                $row.find('.oy-add-period')[ isAllDay ? 'hide' : 'show' ]();
+            });
+
+            // ── Exponer helpers a window ───────────────────────────────────────
+            window.oyHours_buildOptions  = buildOptions;
+            window.oyHours_buildRow      = buildPeriodRow;
+            window.oyHours_reindex       = reindexPeriods;
+
+            // ── Helper local: reconstruir DOM de períodos para un día concreto ──
+            function rebuildDayFromData(dayKey, dayData) {
+                var $pane = $('.oy-day-periods[data-day="' + dayKey + '"]');
+                var $cb   = $('[name="location_hours_' + dayKey + '[closed]"]');
+                if (!$pane.length) return;
+
+                var isClosed   = !!dayData.closed;
+                var isAllDay   = !!dayData.all_day;
+                var periodsArr = dayData.periods || [];
+
+                $cb.prop('checked', isClosed);
+                $cb.siblings('small').remove();
+                if (isClosed) {
+                    $cb.after('<br><small style="color:#999;"><?php echo esc_js( __( 'Cerrada', 'lealez' ) ); ?></small>');
+                }
+
+                $pane.css('opacity', isClosed ? 0.5 : 1);
+                $pane.find('.oy-period-row').remove();
+
+                if (isClosed) {
+                    $pane.append(buildPeriodRow(dayKey, 0, '09:00', '18:00', true));
+                    $pane.find('select').prop('disabled', true);
+                    return;
+                }
+
+                if (isAllDay || (periodsArr.length === 1 && periodsArr[0].open === '24_hours')) {
+                    $pane.append(buildPeriodRow(dayKey, 0, '24_hours', '', true));
+                    $pane.find('.oy-period-close').prop('disabled', true).val('');
+                    $pane.find('.oy-add-period').hide();
+                    return;
+                }
+
+                for (var ri = 0; ri < periodsArr.length; ri++) {
+                    var rowHtml = buildPeriodRow(
+                        dayKey,
+                        ri,
+                        (periodsArr[ri].open  || '09:00'),
+                        (periodsArr[ri].close || '18:00'),
+                        (ri === 0)
+                    );
+                    $pane.append(rowHtml);
+                }
+                reindexPeriods(dayKey);
+            }
+
+            // ─────────────────────────────────────────────────────────────────
+            // HORARIO ESPECIAL (JS)
+            // ─────────────────────────────────────────────────────────────────
+
+            function specialNextIdx() {
+                var max = -1;
+                $('#oy-special-hours-list .oy-special-row').each(function(){
+                    var idx = parseInt($(this).attr('data-idx'), 10);
+                    if (!isNaN(idx)) max = Math.max(max, idx);
+                });
+                return max + 1;
+            }
+
+            function buildSpecialRow(idx, row) {
+                row = row || {};
+                var dateVal   = row.date   ? String(row.date) : '';
+                var closedVal = row.closed ? true : false;
+                var openVal   = row.open   ? String(row.open) : '09:00';
+                var closeVal  = row.close  ? String(row.close) : '18:00';
+
+                var dis = closedVal ? ' disabled' : '';
+                var closeDis = closedVal ? ' disabled' : '';
+
+                var html  = '';
+                html += '<div class="oy-special-row" data-idx="' + idx + '" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e5e5; border-radius:4px; margin-bottom:10px; background:#fafafa;">';
+
+                html +=   '<div style="min-width:160px;">' +
+                            '<label style="display:block; font-size:11px; color:#666; margin-bottom:4px;">' + oyHoursI18n.dateLabel + '</label>' +
+                            '<input type="date" name="location_special_hours[' + idx + '][date]" value="' + $('<div>').text(dateVal).html() + '" class="regular-text" style="min-width:160px;">' +
+                          '</div>';
+
+                html +=   '<div style="min-width:120px; padding-top:18px;">' +
+                            '<label style="display:flex; align-items:center; gap:8px;">' +
+                                '<input type="checkbox" class="oy-special-closed" name="location_special_hours[' + idx + '][closed]" value="1"' + (closedVal ? ' checked' : '') + '>' +
+                                '<strong style="font-size:12px;">' + oyHoursI18n.closedLabel + '</strong>' +
+                            '</label>' +
+                          '</div>';
+
+                html +=   '<div>' +
+                            '<label style="display:block; font-size:11px; color:#666; margin-bottom:4px;">' + oyHoursI18n.opensAt + '</label>' +
+                            '<select name="location_special_hours[' + idx + '][open]" class="oy-hours-sel oy-special-open" style="min-width:130px;"' + dis + '>' + buildOptions(openVal, true) + '</select>' +
+                          '</div>';
+
+                html +=   '<div>' +
+                            '<label style="display:block; font-size:11px; color:#666; margin-bottom:4px;">' + oyHoursI18n.closesAt + '</label>' +
+                            '<select name="location_special_hours[' + idx + '][close]" class="oy-hours-sel oy-special-close" style="min-width:130px;"' + closeDis + '>' + buildOptions(closeVal, false) + '</select>' +
+                          '</div>';
+
+                html +=   '<div style="padding-top:18px;">' +
+                            '<button type="button" class="button oy-remove-special" style="color:#dc3232;">✕ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?></button>' +
+                          '</div>';
+
+                html += '</div>';
+                return html;
+            }
+
+            function rebuildSpecialHours(list) {
+                $('#oy-special-hours-list').empty();
+                if (!list || !Array.isArray(list) || !list.length) return;
+                for (var i=0;i<list.length;i++){
+                    $('#oy-special-hours-list').append(buildSpecialRow(i, list[i]));
+                }
+            }
+
+            // Add special row (manual)
+            $('#oy-add-special-hour').on('click', function(){
+                var idx = specialNextIdx();
+                $('#oy-special-hours-list').append(buildSpecialRow(idx, {date:'', closed:false, open:'09:00', close:'18:00'}));
+            });
+
+            // Remove special row
+            $(document).on('click', '.oy-remove-special', function(){
+                $(this).closest('.oy-special-row').remove();
+            });
+
+            // Toggle closed → disable selects
+            $(document).on('change', '.oy-special-closed', function(){
+                var $row = $(this).closest('.oy-special-row');
+                var closed = $(this).is(':checked');
+                $row.find('.oy-special-open, .oy-special-close').prop('disabled', closed);
+            });
+
+            // ─────────────────────────────────────────────────────────────────
+            // BOTÓN: Sincronizar Horario desde GMB
+            // ─────────────────────────────────────────────────────────────────
+
+            var _dayOrder = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+
+            $('#oy-hours-sync-btn').on('click', function() {
+                var $btn   = $(this);
+                var $msg   = $('#oy-hours-sync-msg');
+                var $last  = $('#oy-hours-sync-lastinfo');
+                var postId = $('#post_ID').val();
+                var bizId  = $('#parent_business_id').val();
+                var locName= $('#gmb_location_name').val();
+
+                if (!postId || !bizId || !locName) {
+                    $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Selecciona la empresa y la ubicación GMB primero.', 'lealez' ) ); ?></span>');
+                    return;
+                }
+
+                $btn.prop('disabled', true);
+                $msg.html('<span style="color:#555;"><?php echo esc_js( __( '⏳ Sincronizando horarios...', 'lealez' ) ); ?></span>');
+
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action:        'oy_sync_location_hours_from_gmb',
+                        nonce:         '<?php echo esc_js( $ajax_sync_nonce ); ?>',
+                        post_id:       postId,
+                        business_id:   bizId,
+                        location_name: locName
+                    },
+                    success: function(response) {
+                        $btn.prop('disabled', false);
+
+                        if (!response.success) {
+                            $msg.html('<span style="color:#dc3232;">⚠ ' + (response.data && response.data.message ? response.data.message : '<?php echo esc_js( __( 'Error al sincronizar.', 'lealez' ) ); ?>') + '</span>');
+                            return;
                         }
-                    });
 
-                    $(document).on('click', '.oy-sa-remove', function(e){
-                        e.preventDefault();
-                        $(this).closest('.oy-sa-tag').remove();
-                    });
+                        var d = response.data;
 
-                    // Ejecutar al cargar
-                    window.oy_toggle_address_fields();
+                        if (d.hours_status) {
+                            $('input[name="location_hours_status"][value="' + d.hours_status + '"]')
+                                .prop('checked', true)
+                                .trigger('change');
+                        }
 
-                    // Inicializar mapa
-                    (function() {
-                        var lat = $.trim( $('#location_latitude').val() );
-                        var lng = $.trim( $('#location_longitude').val() );
-                        if ( lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng)) ) {
-                            var iframeSrc = $('#oy-map-iframe').attr('src');
-                            var savedMapUrl = $.trim( $('#location_map_url').val() );
-                            var mapsUrl = savedMapUrl || 'https://maps.google.com/maps?q=' + encodeURIComponent(lat) + ',' + encodeURIComponent(lng);
-
-                            if ( iframeSrc && iframeSrc.length > 5 ) {
-                                $('#oy-map-adjust-btn').attr('href', mapsUrl).show();
-                                $('#oy-maps-open-link').attr('href', mapsUrl).show();
-                                $('#oy-map-placeholder').hide();
-                                $('#oy-map-iframe').css('display', 'block');
-                                $('#oy-map-preview-wrap').css('display', 'block');
-                            } else {
-                                window.oy_update_map_preview();
+                        if (d.days && typeof d.days === 'object') {
+                            for (var i = 0; i < _dayOrder.length; i++) {
+                                var dk = _dayOrder[i];
+                                if (d.days[dk] !== undefined) {
+                                    rebuildDayFromData(dk, d.days[dk]);
+                                }
                             }
                         }
-                    })();
+
+                        // ✅ Nuevo: Horario especial
+                        if (d.special_hours && Array.isArray(d.special_hours)) {
+                            rebuildSpecialHours(d.special_hours);
+                        }
+
+                        if (d.synced_at) {
+                            $last.text('<?php echo esc_js( __( 'Última sincronización (botón Horarios): ', 'lealez' ) ); ?>' + d.synced_at);
+                        } else {
+                            $last.text('<?php echo esc_js( __( 'Última sincronización (botón Horarios): (sin timestamp)', 'lealez' ) ); ?>');
+                        }
+
+                        $msg.html('<span style="color:#46b450;">✓ ' + (d.message ? d.message : '<?php echo esc_js( __( 'Horarios sincronizados', 'lealez' ) ); ?>') + '</span>');
+                    },
+                    error: function() {
+                        $btn.prop('disabled', false);
+                        $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Error de conexión al sincronizar.', 'lealez' ) ); ?></span>');
+                    }
                 });
-            </script>
-            <?php
+            });
+
+        }); // end jQuery ready
+        </script>
+        <?php
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Guardado al publicar/actualizar el post (form save)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function save_metabox( $post_id, $post ) {
+
+        if ( ! isset( $_POST[ $this->nonce_name ] ) || ! wp_verify_nonce( $_POST[ $this->nonce_name ], $this->nonce_action ) ) {
+            return;
         }
+
+        if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+            return;
+        }
+
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            return;
+        }
+
+        if ( get_post_type( $post_id ) !== $this->post_type ) {
+            return;
+        }
+
+        if ( isset( $_POST['location_hours_timezone'] ) ) {
+            update_post_meta( $post_id, 'location_hours_timezone', sanitize_text_field( wp_unslash( $_POST['location_hours_timezone'] ) ) );
+        }
+
+        $valid_hours_statuses = array( 'open_with_hours', 'open_without_hours', 'temporarily_closed', 'permanently_closed' );
+        if ( isset( $_POST['location_hours_status'] ) ) {
+            $hours_status_raw = sanitize_text_field( wp_unslash( $_POST['location_hours_status'] ) );
+            if ( in_array( $hours_status_raw, $valid_hours_statuses, true ) ) {
+                update_post_meta( $post_id, 'location_hours_status', $hours_status_raw );
+            }
+        }
+
+        // ── Guardar horario normal (por día) ───────────────────────────────────
+        $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        foreach ( $days as $day ) {
+            if ( ! isset( $_POST[ 'location_hours_' . $day ] ) ) {
+                continue;
+            }
+
+            $raw    = wp_unslash( $_POST[ 'location_hours_' . $day ] );
+            $closed = ! empty( $raw['closed'] );
+
+            $periods_raw   = isset( $raw['periods'] ) && is_array( $raw['periods'] ) ? $raw['periods'] : array();
+            $periods_clean = array();
+            $is_all_day    = false;
+
+            foreach ( $periods_raw as $praw ) {
+                if ( ! is_array( $praw ) ) { continue; }
+                $popen  = sanitize_text_field( isset( $praw['open'] )  ? $praw['open']  : '09:00' );
+                $pclose = sanitize_text_field( isset( $praw['close'] ) ? $praw['close'] : '18:00' );
+
+                if ( $popen === '24_hours' ) {
+                    $is_all_day    = true;
+                    $pclose        = '';
+                    $periods_clean = array( array( 'open' => '24_hours', 'close' => '' ) );
+                    break;
+                }
+                if ( empty( $popen ) ) { continue; }
+                $periods_clean[] = array( 'open' => $popen, 'close' => $pclose );
+            }
+
+            if ( empty( $periods_clean ) ) {
+                $periods_clean = array( array( 'open' => '09:00', 'close' => '18:00' ) );
+            }
+
+            $first_open  = isset( $periods_clean[0]['open'] )  ? $periods_clean[0]['open']  : '09:00';
+            $first_close = isset( $periods_clean[0]['close'] ) ? $periods_clean[0]['close'] : '18:00';
+
+            $hours_data = array(
+                'closed'  => $closed,
+                'all_day' => $is_all_day,
+                'periods' => $periods_clean,
+                'open'    => $is_all_day ? '24_hours' : $first_open,
+                'close'   => $is_all_day ? '' : $first_close,
+            );
+
+            update_post_meta( $post_id, 'location_hours_' . $day, $hours_data );
+        }
+
+        // ── Guardar Horario especial (Nuevo) ───────────────────────────────────
+        // POST: location_special_hours[idx][date|closed|open|close]
+        $special_raw = isset( $_POST['location_special_hours'] ) && is_array( $_POST['location_special_hours'] )
+            ? wp_unslash( $_POST['location_special_hours'] )
+            : array();
+
+        $special_clean = array();
+
+        foreach ( $special_raw as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $date = isset( $row['date'] ) ? sanitize_text_field( (string) $row['date'] ) : '';
+            $date = trim( $date );
+
+            if ( '' === $date ) {
+                continue;
+            }
+
+            // Validación mínima YYYY-MM-DD
+            if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date ) ) {
+                continue;
+            }
+
+            $closed = ! empty( $row['closed'] ) ? 1 : 0;
+            $open   = isset( $row['open'] ) ? sanitize_text_field( (string) $row['open'] ) : '09:00';
+            $close  = isset( $row['close'] ) ? sanitize_text_field( (string) $row['close'] ) : '18:00';
+
+            // Si está cerrado, no nos importa open/close
+            if ( $closed ) {
+                $open  = '09:00';
+                $close = '18:00';
+            }
+
+            $special_clean[] = array(
+                'date'   => $date,
+                'closed' => $closed,
+                'open'   => $open,
+                'close'  => $close,
+            );
+        }
+
+        // Ordenar por fecha ascendente para que se vea igual a GMB
+        usort( $special_clean, function( $a, $b ) {
+            return strcmp( (string) $a['date'], (string) $b['date'] );
+        } );
+
+        update_post_meta( $post_id, 'location_special_hours', $special_clean );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // AJAX: Sincronizar horarios desde GMB (botón propio del metabox)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function ajax_sync_hours() {
+
+        $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+        if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
+            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+        }
+
+        $post_id       = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+        $business_id   = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
+        $location_name = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
+
+        if ( ! $post_id || ! $business_id || empty( $location_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Parámetros inválidos. Verifica que el post, la empresa y la ubicación GMB estén seleccionados.', 'lealez' ) ) );
+        }
+
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Sin permisos para editar este post.', 'lealez' ) ) );
+        }
+
+        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+            wp_send_json_error( array( 'message' => __( 'La clase Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+        }
+
+        $data = Lealez_GMB_API::sync_location_data( $business_id, $location_name );
+
+        if ( is_wp_error( $data ) ) {
+            wp_send_json_error( array( 'message' => $data->get_error_message() ) );
+        }
+
+        if ( ! is_array( $data ) ) {
+            wp_send_json_error( array( 'message' => __( 'No se pudo obtener información de la ubicación desde Google.', 'lealez' ) ) );
+        }
+
+        $regular       = ( isset( $data['regularHours'] ) && is_array( $data['regularHours'] ) ) ? $data['regularHours'] : array();
+        $open_info_raw = ( isset( $data['openInfo'] ) && is_array( $data['openInfo'] ) ) ? $data['openInfo'] : array();
+        $special_raw   = ( isset( $data['specialHours'] ) && is_array( $data['specialHours'] ) ) ? $data['specialHours'] : array();
+
+        $open_status    = strtoupper( (string) ( isset( $open_info_raw['status'] ) ? $open_info_raw['status'] : '' ) );
+        $hours_type     = strtoupper( (string) ( isset( $open_info_raw['openingHoursType'] ) ? $open_info_raw['openingHoursType'] : '' ) );
+        $is_always_open = ( $hours_type === 'ALWAYS_OPEN' );
+
+        if ( $open_status === 'CLOSED_TEMPORARILY' ) {
+            $hours_status = 'temporarily_closed';
+        } elseif ( $open_status === 'CLOSED_PERMANENTLY' ) {
+            $hours_status = 'permanently_closed';
+        } else {
+            $has_periods  = ! empty( $regular['periods'] );
+            $hours_status = ( $has_periods || $is_always_open ) ? 'open_with_hours' : 'open_without_hours';
+        }
+
+        // ── Horario normal ────────────────────────────────────────────────────
+        $days_meta = array();
+        if ( $is_always_open ) {
+            $days_meta = $this->build_always_open_daily_meta();
+            update_post_meta( $post_id, 'gmb_regular_hours_raw', array( 'openingHoursType' => 'ALWAYS_OPEN' ) );
+        } elseif ( ! empty( $regular ) ) {
+            $days_meta = $this->map_gmb_regular_hours_to_daily_meta( $regular );
+            update_post_meta( $post_id, 'gmb_regular_hours_raw', $regular );
+        }
+
+        $all_days      = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        $days_response = array();
+
+        foreach ( $all_days as $dk ) {
+            if ( isset( $days_meta[ $dk ] ) ) {
+                update_post_meta( $post_id, 'location_hours_' . $dk, $days_meta[ $dk ] );
+                $days_response[ $dk ] = $days_meta[ $dk ];
+            }
+        }
+
+        // ── Horario especial (Nuevo) ──────────────────────────────────────────
+        $special_meta = array();
+        if ( ! empty( $special_raw ) ) {
+            // Guardar RAW tal cual (para metabox RAW)
+            update_post_meta( $post_id, 'gmb_special_hours_raw', $special_raw );
+
+            // Mapear y guardar vista editable
+            $special_meta = $this->map_gmb_special_hours_to_meta( $special_raw );
+            update_post_meta( $post_id, 'location_special_hours', $special_meta );
+        } else {
+            // Si Google no trae specialHours (o está vacío), dejamos RAW vacío y limpiamos vista editable
+            update_post_meta( $post_id, 'gmb_special_hours_raw', array() );
+            update_post_meta( $post_id, 'location_special_hours', array() );
+        }
+
+        if ( ! empty( $open_info_raw ) ) {
+            update_post_meta( $post_id, 'gmb_open_info_raw', $open_info_raw );
+        }
+        update_post_meta( $post_id, 'location_hours_status', $hours_status );
+
+        $synced_at = current_time( 'mysql' );
+        update_post_meta( $post_id, 'oy_hours_last_sync_source', 'hours_metabox_button' );
+        update_post_meta( $post_id, 'oy_hours_last_sync_at', $synced_at );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[OY Hours Sync] post_id=' . $post_id .
+                ' | hours_status=' . $hours_status .
+                ' | days_synced=' . count( $days_response ) .
+                ' | special_hours=' . ( is_array( $special_meta ) ? count( $special_meta ) : 0 ) .
+                ' | synced_at=' . $synced_at
+            );
+        }
+
+        wp_send_json_success( array(
+            'hours_status'   => $hours_status,
+            'days'           => $days_response,
+            'special_hours'  => $special_meta,
+            'synced_at'      => $synced_at,
+            'message'        => __( 'Horarios sincronizados correctamente.', 'lealez' ),
+        ) );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers privados de mapeo GMB → meta (horario normal)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private function map_gmb_regular_hours_to_daily_meta( $regular ) {
+        if ( ! is_array( $regular ) ) {
+            return array();
+        }
+
+        $periods = isset( $regular['periods'] ) && is_array( $regular['periods'] ) ? $regular['periods'] : array();
+        if ( empty( $periods ) ) {
+            return array();
+        }
+
+        $day_order = array(
+            'MONDAY' => 0, 'TUESDAY' => 1, 'WEDNESDAY' => 2, 'THURSDAY' => 3,
+            'FRIDAY' => 4, 'SATURDAY' => 5, 'SUNDAY'   => 6,
+        );
+        $day_map = array(
+            'MONDAY'    => 'monday',    'TUESDAY'   => 'tuesday',   'WEDNESDAY' => 'wednesday',
+            'THURSDAY'  => 'thursday',  'FRIDAY'    => 'friday',    'SATURDAY'  => 'saturday',
+            'SUNDAY'    => 'sunday',
+        );
+
+        $periods_by_day = array();
+
+        foreach ( $periods as $p ) {
+            if ( ! is_array( $p ) ) { continue; }
+
+            $open_day_raw = isset( $p['openDay'] ) ? strtoupper( (string) $p['openDay'] ) : '';
+            if ( ! $open_day_raw || ! isset( $day_map[ $open_day_raw ] ) ) { continue; }
+
+            $day_key = $day_map[ $open_day_raw ];
+
+            $open_time  = ( isset( $p['openTime'] ) && is_array( $p['openTime'] ) ) ? $p['openTime'] : array();
+            $close_time = ( isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ) ? $p['closeTime'] : null;
+
+            $open_h  = isset( $open_time['hours'] ) ? (int) $open_time['hours'] : 0;
+            $open_m  = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
+
+            $close_h = ( null !== $close_time && isset( $close_time['hours'] ) ) ? (int) $close_time['hours'] : 0;
+            $close_m = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
+
+            $close_day_raw = isset( $p['closeDay'] ) ? strtoupper( (string) $p['closeDay'] ) : $open_day_raw;
+            $open_day_idx  = isset( $day_order[ $open_day_raw ] )  ? $day_order[ $open_day_raw ]  : -1;
+            $close_day_idx = isset( $day_order[ $close_day_raw ] ) ? $day_order[ $close_day_raw ] : -1;
+
+            $is_next_day   = ( $close_day_idx >= 0 && $open_day_idx >= 0 )
+                             && ( $close_day_idx === ( ( $open_day_idx + 1 ) % 7 ) );
+
+            $is_24h = false;
+            if ( $open_h === 0 && $open_m === 0 && $close_h === 0 && $close_m === 0 && $is_next_day ) { $is_24h = true; }
+            if ( ! $is_24h && null !== $close_time && $close_h === 24 && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
+            if ( ! $is_24h && null === $close_time && $open_h === 0 && $open_m === 0 ) { $is_24h = true; }
+
+            if ( ! $is_24h && $close_h === 24 ) { $close_h = 0; $close_m = 0; }
+
+            if ( $is_24h ) {
+                $periods_by_day[ $day_key ] = array( 'is_24h' => true, 'periods' => array() );
+            } else {
+                if ( ! isset( $periods_by_day[ $day_key ] ) ) {
+                    $periods_by_day[ $day_key ] = array( 'is_24h' => false, 'periods' => array() );
+                }
+                if ( ! $periods_by_day[ $day_key ]['is_24h'] ) {
+                    $periods_by_day[ $day_key ]['periods'][] = array(
+                        'open'  => sprintf( '%02d:%02d', $open_h, $open_m ),
+                        'close' => sprintf( '%02d:%02d', $close_h, $close_m ),
+                    );
+                }
+            }
+        }
+
+        $out = array();
+        foreach ( $periods_by_day as $day_key => $day_data ) {
+            if ( $day_data['is_24h'] ) {
+                $out[ $day_key ] = array(
+                    'closed'  => false, 'all_day' => true,
+                    'periods' => array( array( 'open' => '24_hours', 'close' => '' ) ),
+                    'open'    => '24_hours', 'close' => '',
+                );
+            } else {
+                $day_periods = $day_data['periods'];
+                $first_open  = isset( $day_periods[0]['open'] ) ? $day_periods[0]['open'] : '09:00';
+                $first_close = isset( $day_periods[0]['close'] ) ? $day_periods[0]['close'] : '18:00';
+                $out[ $day_key ] = array(
+                    'closed'  => false, 'all_day' => false,
+                    'periods' => $day_periods,
+                    'open'    => $first_open, 'close' => $first_close,
+                );
+            }
+        }
+
+        $all_days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        foreach ( $all_days as $dk ) {
+            if ( ! isset( $out[ $dk ] ) ) {
+                $out[ $dk ] = array(
+                    'closed'  => true, 'all_day' => false,
+                    'periods' => array( array( 'open' => '09:00', 'close' => '18:00' ) ),
+                    'open'    => '09:00', 'close' => '18:00',
+                );
+            }
+        }
+
+        return $out;
+    }
+
+    private function build_always_open_daily_meta() {
+        $out  = array();
+        $days = array( 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday' );
+        foreach ( $days as $dk ) {
+            $out[ $dk ] = array(
+                'closed'  => false,
+                'all_day' => true,
+                'periods' => array( array( 'open' => '24_hours', 'close' => '' ) ),
+                'open'    => '24_hours',
+                'close'   => '',
+            );
+        }
+        return $out;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers privados de mapeo GMB → meta (HORARIO ESPECIAL)  ✅ NUEVO
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Mapea specialHours.specialHourPeriods de GMB a una lista plana por fecha para UI.
+     *
+     * Retorna: [
+     *   ['date'=>'YYYY-MM-DD','closed'=>0|1,'open'=>'HH:MM','close'=>'HH:MM'],
+     *   ...
+     * ]
+     *
+     * Soporta:
+     * - periodos por una fecha
+     * - periodos por rango (startDate/endDate) → se expanden día a día
+     * - closed=true
+     * - closeTime.hours=24 → normaliza a 00:00
+     */
+    private function map_gmb_special_hours_to_meta( $special_raw ) {
+        if ( ! is_array( $special_raw ) ) {
+            return array();
+        }
+
+        $periods = array();
+        if ( isset( $special_raw['specialHourPeriods'] ) && is_array( $special_raw['specialHourPeriods'] ) ) {
+            $periods = $special_raw['specialHourPeriods'];
+        } elseif ( isset( $special_raw['periods'] ) && is_array( $special_raw['periods'] ) ) {
+            // Compatibilidad si algún wrapper devuelve "periods"
+            $periods = $special_raw['periods'];
+        }
+
+        if ( empty( $periods ) ) {
+            return array();
+        }
+
+        $out = array();
+
+        foreach ( $periods as $p ) {
+            if ( ! is_array( $p ) ) {
+                continue;
+            }
+
+            $is_closed = ! empty( $p['closed'] );
+
+            // Fecha inicio/fin (puede ser 1 día o rango)
+            $start = isset( $p['startDate'] ) && is_array( $p['startDate'] ) ? $p['startDate'] : null;
+            $end   = isset( $p['endDate'] )   && is_array( $p['endDate'] )   ? $p['endDate']   : null;
+
+            if ( ! $start ) {
+                continue;
+            }
+
+            $start_str = $this->gmb_date_to_ymd( $start );
+            if ( '' === $start_str ) {
+                continue;
+            }
+
+            $end_str = $start_str;
+            if ( $end ) {
+                $tmp = $this->gmb_date_to_ymd( $end );
+                if ( '' !== $tmp ) {
+                    $end_str = $tmp;
+                }
+            }
+
+            // open/close
+            $open = '09:00';
+            $close = '18:00';
+
+            if ( ! $is_closed ) {
+                $open_time  = isset( $p['openTime'] )  && is_array( $p['openTime'] )  ? $p['openTime']  : array();
+                $close_time = isset( $p['closeTime'] ) && is_array( $p['closeTime'] ) ? $p['closeTime'] : null;
+
+                $oh = isset( $open_time['hours'] ) ? (int) $open_time['hours'] : 9;
+                $om = isset( $open_time['minutes'] ) ? (int) $open_time['minutes'] : 0;
+
+                $ch = ( null !== $close_time && isset( $close_time['hours'] ) ) ? (int) $close_time['hours'] : 18;
+                $cm = ( null !== $close_time && isset( $close_time['minutes'] ) ) ? (int) $close_time['minutes'] : 0;
+
+                // Normalizar closeTime.hours = 24 → 00:00
+                if ( 24 === $ch ) {
+                    $ch = 0;
+                    $cm = 0;
+                }
+
+                // Caso raro: si open=00:00 y close=00:00 sin closed → interpretar 24h (UI lo soporta)
+                if ( 0 === $oh && 0 === $om && 0 === $ch && 0 === $cm && null !== $close_time ) {
+                    $open  = '24_hours';
+                    $close = '';
+                } else {
+                    $open  = sprintf( '%02d:%02d', $oh, $om );
+                    $close = sprintf( '%02d:%02d', $ch, $cm );
+                }
+            }
+
+            // Expandir rango start→end (inclusive)
+            $dates = $this->expand_date_range_ymd( $start_str, $end_str );
+            foreach ( $dates as $ymd ) {
+                $out[] = array(
+                    'date'   => $ymd,
+                    'closed' => $is_closed ? 1 : 0,
+                    'open'   => $open,
+                    'close'  => $close,
+                );
+            }
+        }
+
+        // De-duplicar por fecha (si Google manda repetidos, gana el último)
+        $by_date = array();
+        foreach ( $out as $row ) {
+            if ( ! is_array( $row ) || empty( $row['date'] ) ) { continue; }
+            $by_date[ (string) $row['date'] ] = $row;
+        }
+
+        $out = array_values( $by_date );
+
+        // Ordenar por fecha ascendente
+        usort( $out, function( $a, $b ) {
+            return strcmp( (string) $a['date'], (string) $b['date'] );
+        } );
+
+        return $out;
+    }
+
+    /**
+     * Convierte un objeto Date de GMB {year,month,day} a YYYY-MM-DD
+     */
+    private function gmb_date_to_ymd( $date_obj ) {
+        if ( ! is_array( $date_obj ) ) {
+            return '';
+        }
+        $y = isset( $date_obj['year'] ) ? (int) $date_obj['year'] : 0;
+        $m = isset( $date_obj['month'] ) ? (int) $date_obj['month'] : 0;
+        $d = isset( $date_obj['day'] ) ? (int) $date_obj['day'] : 0;
+        if ( $y <= 0 || $m <= 0 || $d <= 0 ) {
+            return '';
+        }
+        return sprintf( '%04d-%02d-%02d', $y, $m, $d );
+    }
+
+    /**
+     * Expande rango YYYY-MM-DD inclusive.
+     */
+    private function expand_date_range_ymd( $start_ymd, $end_ymd ) {
+        $start_ymd = (string) $start_ymd;
+        $end_ymd   = (string) $end_ymd;
+
+        if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $start_ymd ) ) {
+            return array();
+        }
+        if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $end_ymd ) ) {
+            $end_ymd = $start_ymd;
+        }
+
+        try {
+            $start = new DateTime( $start_ymd );
+            $end   = new DateTime( $end_ymd );
+        } catch ( Exception $e ) {
+            return array( $start_ymd );
+        }
+
+        if ( $end < $start ) {
+            $end = $start;
+        }
+
+        $out = array();
+        $cur = clone $start;
+        while ( $cur <= $end ) {
+            $out[] = $cur->format( 'Y-m-d' );
+            $cur->modify( '+1 day' );
+            // Seguridad: evitar loops absurdos si algo viene mal
+            if ( count( $out ) > 400 ) {
+                break;
+            }
+        }
+        return $out;
     }
 }
