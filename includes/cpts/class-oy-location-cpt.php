@@ -227,12 +227,13 @@ if ( file_exists( $keywords_metabox_file ) ) {
 }
 
 /**
- * Metabox: Horario de Mayor Concurrencia (Popular Times)
+ * Metabox: Horario de Mayor Interés
  *
  * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-busyhours-metabox.php
  *
- * Visualiza pesos por día de semana (computados desde Performance API)
- * y distribución horaria manual con gráfico de barras estilo GMB.
+ * Índice de interés por día de semana calculado automáticamente desde
+ * Performance API (11 métricas ponderadas, 90 días). Distribución horaria
+ * por plantilla de tipo de negocio + ajuste manual fino.
  * AJAX: oy_gmb_busy_compute, oy_gmb_busy_save
  */
 $busyhours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-busyhours-metabox.php';
