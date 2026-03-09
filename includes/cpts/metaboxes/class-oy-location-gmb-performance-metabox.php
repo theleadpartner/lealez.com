@@ -2,8 +2,8 @@
 /**
  * Metabox: Panel de Rendimiento GMB (Business Profile Performance API)
  *
- * Dashboard completo de métricas de rendimiento desde la Business Profile Performance API v1.
- * Soporta múltiples métricas diarias, keywords de búsqueda mensual, comparativas y gráficas.
+ * Dashboard de métricas de rendimiento desde la Business Profile Performance API v1.
+ * Vistas en: Tarjetas (con comparativa), Gráfico (barras/torta), Tabla.
  *
  * Archivo destino: includes/cpts/metaboxes/class-oy-location-gmb-performance-metabox.php
  *
@@ -21,7 +21,11 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Registra, renderiza y gestiona el panel de rendimiento GMB vía AJAX.
  * Expone los handlers:
  *  - wp_ajax_oy_gmb_perf_fetch        → métricas diarias (fetchMultiDailyMetricsTimeSeries)
- *  - wp_ajax_oy_gmb_perf_keywords     → keywords de búsqueda mensual
+ *  - wp_ajax_oy_gmb_perf_sync         → sincroniza métricas a post meta
+ *  - wp_ajax_oy_gmb_perf_diagnostic   → diagnóstico raw de API
+ *
+ * NOTA: Las palabras clave de búsqueda se gestionan en
+ *       class-oy-location-gmb-keywords-metabox.php (OY_Location_GMB_Keywords_Metabox).
  */
 class OY_Location_GMB_Performance_Metabox {
 
@@ -33,7 +37,6 @@ class OY_Location_GMB_Performance_Metabox {
         add_action( 'add_meta_boxes',        array( $this, 'register_meta_box' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
         add_action( 'wp_ajax_oy_gmb_perf_fetch',      array( $this, 'ajax_fetch_metrics' ) );
-        add_action( 'wp_ajax_oy_gmb_perf_keywords',   array( $this, 'ajax_fetch_keywords' ) );
         add_action( 'wp_ajax_oy_gmb_perf_sync',       array( $this, 'ajax_sync_metrics' ) );
         add_action( 'wp_ajax_oy_gmb_perf_diagnostic', array( $this, 'ajax_diagnostic' ) );
     }
@@ -57,68 +60,64 @@ class OY_Location_GMB_Performance_Metabox {
     // Script / Style enqueue
     // -----------------------------------------------------------------------
 
-public function enqueue_scripts( $hook ) {
-    global $post;
+    public function enqueue_scripts( $hook ) {
+        global $post;
 
-    if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
-        return;
+        if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
+            return;
+        }
+
+        if ( ! $post || 'oy_location' !== $post->post_type ) {
+            return;
+        }
+
+        // Chart.js 4 desde cdnjs
+        wp_register_script(
+            'chartjs-v4',
+            'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js',
+            array(),
+            '4.4.3',
+            true
+        );
+        wp_enqueue_script( 'chartjs-v4' );
+
+        // ── waitForChart: garantiza que new Chart() no se ejecute antes de que Chart.js esté listo
+        $guard_js = 'if(!window.waitForChart){' .
+            'window._chartJSQueue=window._chartJSQueue||[];' .
+            'window.waitForChart=function(fn){' .
+                'if(typeof Chart!=="undefined"){fn();return;}' .
+                'window._chartJSQueue.push(fn);' .
+                'if(!window._chartJSWatcher){' .
+                    'window._chartJSWatcher=setInterval(function(){' .
+                        'if(typeof Chart!=="undefined"){' .
+                            'clearInterval(window._chartJSWatcher);' .
+                            'window._chartJSWatcher=null;' .
+                            'var q=window._chartJSQueue.splice(0);' .
+                            'q.forEach(function(f){try{f();}catch(e){console.warn("[Chart]",e);}});' .
+                        '}' .
+                    '},50);' .
+                '}' .
+            '};' .
+        '}';
+        wp_add_inline_script( 'chartjs-v4', $guard_js, 'before' );
+
+        $nonce = wp_create_nonce( 'oy_gmb_performance_nonce' );
+
+        $impressions_keys = array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' );
+        $actions_keys     = array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' );
+
+        wp_localize_script( 'chartjs-v4', 'oyPerfConfig', array(
+            'postId'     => $post->ID,
+            'nonce'      => $nonce,
+            'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+            'metricsDef' => $this->get_all_metrics_definition(),
+            'impKeys'    => $impressions_keys,
+            'actKeys'    => $actions_keys,
+        ) );
+
+        wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
+        wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
     }
-
-    if ( ! $post || 'oy_location' !== $post->post_type ) {
-        return;
-    }
-
-    // Chart.js 4 desde cdnjs
-    wp_register_script(
-        'chartjs-v4',
-        'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js',
-        array(),
-        '4.4.3',
-        true
-    );
-    wp_enqueue_script( 'chartjs-v4' );
-
-    // ── waitForChart: se inyecta ANTES del script CDN ──────────────────────────
-    // Garantiza que new Chart() nunca se ejecute antes de que Chart.js esté listo,
-    // sin importar si la CDN tarda, tiene async/defer o falla en primer intento.
-    $guard_js = 'if(!window.waitForChart){' .
-        'window._chartJSQueue=window._chartJSQueue||[];' .
-        'window.waitForChart=function(fn){' .
-            'if(typeof Chart!=="undefined"){fn();return;}' .
-            'window._chartJSQueue.push(fn);' .
-            'if(!window._chartJSWatcher){' .
-                'window._chartJSWatcher=setInterval(function(){' .
-                    'if(typeof Chart!=="undefined"){' .
-                        'clearInterval(window._chartJSWatcher);' .
-                        'window._chartJSWatcher=null;' .
-                        'var q=window._chartJSQueue.splice(0);' .
-                        'q.forEach(function(f){try{f();}catch(e){console.warn("[Chart]",e);}});' .
-                    '}' .
-                '},50);' .
-            '}' .
-        '};' .
-    '}';
-    wp_add_inline_script( 'chartjs-v4', $guard_js, 'before' );
-    // ───────────────────────────────────────────────────────────────────────────
-
-    $nonce = wp_create_nonce( 'oy_gmb_performance_nonce' );
-
-    // Inject config via wp_localize_script
-    $impressions_keys = array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' );
-    $actions_keys     = array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' );
-
-    wp_localize_script( 'chartjs-v4', 'oyPerfConfig', array(
-        'postId'     => $post->ID,
-        'nonce'      => $nonce,
-        'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
-        'metricsDef' => $this->get_all_metrics_definition(),
-        'impKeys'    => $impressions_keys,
-        'actKeys'    => $actions_keys,
-    ) );
-
-    wp_add_inline_script( 'chartjs-v4', $this->get_inline_js(), 'after' );
-    wp_add_inline_style( 'wp-admin', $this->get_inline_css() );
-}
 
     // -----------------------------------------------------------------------
     // Render Metabox HTML
@@ -127,15 +126,12 @@ public function enqueue_scripts( $hook ) {
     public function render_meta_box( $post ) {
         $location_id  = get_post_meta( $post->ID, 'gmb_location_id', true );
         $business_id  = get_post_meta( $post->ID, 'parent_business_id', true );
-        // Use _gmb_connected (private meta, set by Lealez_GMB_OAuth) as the authoritative connection flag.
-        // Fallback: also accept if a refresh token is present (covers legacy data).
         $gmb_connected = false;
         if ( $business_id ) {
             $flag          = get_post_meta( $business_id, '_gmb_connected', true );
             $has_refresh   = (bool) get_post_meta( $business_id, 'gmb_refresh_token', true );
             $gmb_connected = $flag || $has_refresh;
         }
-        $location_name = get_the_title( $post->ID );
 
         // ---- Guard: GMB no conectado ----
         if ( ! $gmb_connected || ! $location_id ) {
@@ -150,12 +146,7 @@ public function enqueue_scripts( $hook ) {
             return;
         }
 
-        // ---- Defaults ----
-        $default_period = '30';
-
-        // ---- Available Metrics ----
         $all_metrics = $this->get_all_metrics_definition();
-
         ?>
         <div id="oy-perf-dashboard" class="oy-perf-dashboard" data-post-id="<?php echo esc_attr( $post->ID ); ?>">
 
@@ -163,7 +154,7 @@ public function enqueue_scripts( $hook ) {
             <div class="oy-perf-toolbar">
                 <div class="oy-perf-toolbar__left">
 
-                    <!-- Period selector - Month/Year based -->
+                    <!-- Period selector -->
                     <div class="oy-perf-field-group">
                         <label for="oy-perf-period"><?php esc_html_e( 'Período', 'lealez' ); ?></label>
                         <select id="oy-perf-period" class="oy-perf-select">
@@ -183,25 +174,14 @@ public function enqueue_scripts( $hook ) {
                         <select id="oy-perf-month-to" class="oy-perf-select-month"></select>
                     </div>
 
-                    <!-- Chart type -->
-                    <div class="oy-perf-field-group">
+                    <!-- Chart type (only relevant when Gráfico view is active) -->
+                    <div class="oy-perf-field-group" id="oy-perf-chart-type-group">
                         <label for="oy-perf-chart-type"><?php esc_html_e( 'Gráfica', 'lealez' ); ?></label>
                         <select id="oy-perf-chart-type" class="oy-perf-select">
-                            <option value="line"><?php esc_html_e( 'Líneas', 'lealez' ); ?></option>
-                            <option value="bar"><?php esc_html_e( 'Barras (por día)', 'lealez' ); ?></option>
+                            <option value="bar" selected><?php esc_html_e( 'Barras (por día)', 'lealez' ); ?></option>
                             <option value="bar_month"><?php esc_html_e( 'Barras (por mes)', 'lealez' ); ?></option>
-                            <option value="bar_year"><?php esc_html_e( 'Barras (por año)', 'lealez' ); ?></option>
                             <option value="pie"><?php esc_html_e( 'Torta (distribución)', 'lealez' ); ?></option>
-                            <option value="doughnut"><?php esc_html_e( 'Dona (distribución)', 'lealez' ); ?></option>
                         </select>
-                    </div>
-
-                    <!-- Compare toggle -->
-                    <div class="oy-perf-field-group">
-                        <label class="oy-perf-toggle-label">
-                            <input type="checkbox" id="oy-perf-compare-toggle" checked />
-                            <?php esc_html_e( 'Comparar período anterior', 'lealez' ); ?>
-                        </label>
                     </div>
 
                 </div><!-- /.left -->
@@ -215,11 +195,11 @@ public function enqueue_scripts( $hook ) {
                         <span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:-2px;"></span>
                         <?php esc_html_e( 'Actualizar', 'lealez' ); ?>
                     </button>
-                    <button type="button" id="oy-perf-btn-sync" class="button button-secondary" title="<?php esc_attr_e( 'Sincroniza los totales de los últimos 30 y 7 días y los guarda en los meta-campos de esta ubicación', 'lealez' ); ?>">
+                    <button type="button" id="oy-perf-btn-sync" class="button button-secondary" title="<?php esc_attr_e( 'Sincroniza los totales y los guarda en los meta-campos de esta ubicación', 'lealez' ); ?>">
                         <span class="dashicons dashicons-cloud-saved" style="vertical-align:middle;margin-top:-2px;"></span>
                         <?php esc_html_e( 'Sincronizar métricas', 'lealez' ); ?>
                     </button>
-                    <button type="button" id="oy-perf-btn-diag" class="button" title="<?php esc_attr_e( 'Ejecuta diagnóstico raw de la API de rendimiento para depurar problemas de conexión o datos vacíos', 'lealez' ); ?>" style="color:#666;">
+                    <button type="button" id="oy-perf-btn-diag" class="button" title="<?php esc_attr_e( 'Ejecuta diagnóstico raw de la API para depurar problemas', 'lealez' ); ?>" style="color:#666;">
                         <span class="dashicons dashicons-info" style="vertical-align:middle;margin-top:-2px;"></span>
                         <?php esc_html_e( 'Diagnóstico API', 'lealez' ); ?>
                     </button>
@@ -259,16 +239,12 @@ public function enqueue_scripts( $hook ) {
                     <?php esc_html_e( 'Tarjetas', 'lealez' ); ?>
                 </button>
                 <button type="button" class="oy-perf-view-btn" data-view="chart">
-                    <span class="dashicons dashicons-chart-line" style="vertical-align:middle;margin-top:-2px;"></span>
+                    <span class="dashicons dashicons-chart-bar" style="vertical-align:middle;margin-top:-2px;"></span>
                     <?php esc_html_e( 'Gráfico', 'lealez' ); ?>
                 </button>
                 <button type="button" class="oy-perf-view-btn" data-view="table">
                     <span class="dashicons dashicons-list-view" style="vertical-align:middle;margin-top:-2px;"></span>
                     <?php esc_html_e( 'Tabla', 'lealez' ); ?>
-                </button>
-                <button type="button" class="oy-perf-view-btn" data-view="comparison">
-                    <span class="dashicons dashicons-arrow-left-alt" style="vertical-align:middle;margin-top:-2px;"></span>
-                    <?php esc_html_e( 'Comparativa', 'lealez' ); ?>
                 </button>
             </div>
 
@@ -282,23 +258,22 @@ public function enqueue_scripts( $hook ) {
             <!-- KPI CARDS -->
             <div id="oy-perf-kpis" class="oy-perf-kpis" style="display:none;"></div>
 
-<!-- CHART -->
+            <!-- CHART -->
             <div id="oy-perf-chart-wrap" class="oy-perf-chart-wrap" style="display:none;">
                 <div class="oy-perf-chart-header">
                     <h4 id="oy-perf-chart-title"><?php esc_html_e( 'Gráfico', 'lealez' ); ?></h4>
                     <div class="oy-perf-chart-header-right">
-                        <!-- Selector de métrica única (barras/líneas) -->
-                        <label id="oy-perf-chart-metric-label" for="oy-perf-single-metric" style="display:none;"><?php esc_html_e( 'Métrica:', 'lealez' ); ?></label>
+                        <!-- Selector de métrica única (barras) -->
+                        <label id="oy-perf-chart-metric-label" for="oy-perf-single-metric" style="display:none;"><?php esc_html_e( 'Indicador:', 'lealez' ); ?></label>
                         <select id="oy-perf-single-metric" class="oy-perf-select oy-perf-single-metric-sel" style="display:none;" title="<?php esc_attr_e( 'Indicador a graficar', 'lealez' ); ?>"></select>
-                        <!-- Badge torta/dona -->
+                        <!-- Badge torta -->
                         <span id="oy-perf-chart-pie-badge" class="oy-perf-badge oy-perf-badge--pie" style="display:none;"><?php esc_html_e( 'Móvil vs Escritorio', 'lealez' ); ?></span>
-                        <span id="oy-perf-chart-subtitle" class="oy-perf-chart-subtitle" style="display:none;"></span>
                         <span id="oy-perf-chart-period" class="oy-perf-badge"></span>
                     </div>
                 </div>
                 <!-- Aviso: torta sin impresiones seleccionadas -->
                 <div id="oy-perf-chart-nodata" class="oy-perf-status oy-perf-status--info" style="display:none;">
-                    <?php esc_html_e( 'ℹ️ Para Torta o Dona selecciona al menos una métrica de impresiones (Vistas Maps o Vistas Búsqueda).', 'lealez' ); ?>
+                    <?php esc_html_e( 'ℹ️ La vista Torta solo aplica para métricas de impresiones (Vistas Maps/Búsqueda). Selecciona al menos una.', 'lealez' ); ?>
                 </div>
                 <div class="oy-perf-chart-container" id="oy-perf-chart-container">
                     <canvas id="oy-perf-chart"></canvas>
@@ -323,55 +298,6 @@ public function enqueue_scripts( $hook ) {
                     </table>
                 </div>
             </div><!-- /.table-wrap -->
-
-            <!-- COMPARISON CARD -->
-            <div id="oy-perf-comparison-wrap" class="oy-perf-comparison-wrap" style="display:none;">
-                <h4><?php esc_html_e( 'Comparativa — período actual vs período anterior', 'lealez' ); ?></h4>
-                <div id="oy-perf-comparison-grid" class="oy-perf-comparison-grid"></div>
-            </div>
-
-            <!-- KEYWORDS SECTION -->
-            <div id="oy-perf-keywords-wrap" class="oy-perf-keywords-wrap" style="display:none;">
-                <div class="oy-perf-section-header">
-                    <h4><?php esc_html_e( '🔍 Palabras clave de búsqueda', 'lealez' ); ?></h4>
-                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                        <select id="oy-kw-month-filter" class="oy-perf-select" style="min-width:140px;font-size:12px;">
-                            <option value=""><?php esc_html_e( 'Todos los meses', 'lealez' ); ?></option>
-                        </select>
-                        <button type="button" id="oy-perf-btn-keywords" class="button button-small">
-                            <span class="dashicons dashicons-update" style="vertical-align:middle;margin-top:-2px;"></span>
-                            <?php esc_html_e( 'Actualizar', 'lealez' ); ?>
-                        </button>
-                    </div>
-                </div>
-                <div id="oy-perf-keywords-status" class="oy-perf-status" style="display:none;"></div>
-                <!-- KPI top 3 keywords -->
-                <div id="oy-kw-kpis" class="oy-kw-kpis" style="display:none;"></div>
-                <!-- Keywords chart -->
-                <div id="oy-kw-chart-wrap" class="oy-kw-chart-wrap" style="display:none;">
-                    <div class="oy-perf-chart-container" style="height:220px;">
-                        <canvas id="oy-kw-chart"></canvas>
-                    </div>
-                </div>
-                <!-- Keywords table -->
-                <div id="oy-perf-keywords-content" style="display:none;">
-                    <div class="oy-perf-table-scroll">
-                        <table class="wp-list-table widefat striped oy-perf-table">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th><?php esc_html_e( 'Palabra clave', 'lealez' ); ?></th>
-                                    <th><?php esc_html_e( 'Total impresiones', 'lealez' ); ?></th>
-                                    <th><?php esc_html_e( 'Mejor mes', 'lealez' ); ?></th>
-                                    <th><?php esc_html_e( 'Meses con datos', 'lealez' ); ?></th>
-                                    <th><?php esc_html_e( 'Tendencia', 'lealez' ); ?></th>
-                                </tr>
-                            </thead>
-                            <tbody id="oy-perf-keywords-body"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div><!-- /.keywords-wrap -->
 
             <!-- LAST SYNC INFO -->
             <div id="oy-perf-footer" class="oy-perf-footer" style="display:none;">
@@ -489,12 +415,10 @@ public function enqueue_scripts( $hook ) {
             wp_send_json_error( array( 'message' => __( 'ID de publicación inválido.', 'lealez' ) ) );
         }
 
-        // Validate post type
         if ( 'oy_location' !== get_post_type( $post_id ) ) {
             wp_send_json_error( array( 'message' => __( 'Tipo de publicación inválido.', 'lealez' ) ) );
         }
 
-        // Get location meta
         $location_name = get_post_meta( $post_id, 'gmb_location_id', true );
         $business_id   = get_post_meta( $post_id, 'parent_business_id', true );
 
@@ -502,14 +426,12 @@ public function enqueue_scripts( $hook ) {
             wp_send_json_error( array( 'message' => __( 'Faltan datos de configuración GMB (location_id o business_id).', 'lealez' ) ) );
         }
 
-        // Build date range
         $range = $this->build_date_range( $period, $date_from, $date_to );
         if ( is_wp_error( $range ) ) {
             wp_send_json_error( array( 'message' => $range->get_error_message() ) );
         }
 
-        // Sanitize metrics
-        $allowed_metrics = array_keys( $this->get_all_metrics_definition() );
+        $allowed_metrics   = array_keys( $this->get_all_metrics_definition() );
         $requested_metrics = array();
         foreach ( $metrics_raw as $m ) {
             $m = sanitize_text_field( $m );
@@ -519,11 +441,9 @@ public function enqueue_scripts( $hook ) {
         }
 
         if ( empty( $requested_metrics ) ) {
-            // Default: first 5 metrics
             $requested_metrics = array( 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_DIRECTION_REQUESTS' );
         }
 
-        // Call API (use_cache = !force)
         $result = Lealez_GMB_API::get_location_performance_metrics(
             $business_id,
             $location_name,
@@ -542,7 +462,6 @@ public function enqueue_scripts( $hook ) {
             ) );
         }
 
-        // Guard: API returned non-WP_Error but non-array
         if ( ! is_array( $result ) ) {
             wp_send_json_error( array(
                 'message'  => __( 'La API de rendimiento de Google devolvió una respuesta vacía o inválida. Verifica que el scope businessprofileperformance.readonly esté autorizado en tu cuenta Google.', 'lealez' ),
@@ -551,8 +470,7 @@ public function enqueue_scripts( $hook ) {
             ) );
         }
 
-        // Build debug payload (always returned, useful when series is empty)
-        $raw_outer  = isset( $result['multiDailyMetricTimeSeries'] ) ? (array) $result['multiDailyMetricTimeSeries'] : array();
+        $raw_outer   = isset( $result['multiDailyMetricTimeSeries'] ) ? (array) $result['multiDailyMetricTimeSeries'] : array();
         $inner_total = 0;
         foreach ( $raw_outer as $o ) {
             if ( is_array( $o ) && isset( $o['dailyMetricTimeSeries'] ) ) {
@@ -570,10 +488,8 @@ public function enqueue_scripts( $hook ) {
             'raw_preview'       => substr( wp_json_encode( $result ), 0, 800 ),
         );
 
-        // Process: build chart-ready structure
         $processed = $this->process_multi_metrics( $result, $requested_metrics );
 
-        // Comparison: skip when no series data (saves an extra API call)
         $comparison = array();
         if ( ! empty( $processed['series'] ) ) {
             $comparison = $this->fetch_comparison(
@@ -593,143 +509,6 @@ public function enqueue_scripts( $hook ) {
         ) );
     }
 
-    /**
-     * AJAX handler: keywords de búsqueda mensual
-     * Action: oy_gmb_perf_keywords
-     *
-     * POST params (optional):
-     *   kw_month_from  YYYY-MM  start month (defaults to 6 months ago)
-     *   kw_month_to    YYYY-MM  end month   (defaults to current month)
-     */
-    public function ajax_fetch_keywords() {
-        check_ajax_referer( 'oy_gmb_performance_nonce', 'nonce' );
-
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Permiso denegado.', 'lealez' ) ), 403 );
-        }
-
-        $post_id   = absint( $_POST['post_id'] ?? 0 );
-        $force     = ! empty( $_POST['force_refresh'] );
-        $kw_from   = sanitize_text_field( $_POST['kw_month_from'] ?? '' );
-        $kw_to     = sanitize_text_field( $_POST['kw_month_to'] ?? '' );
-
-        if ( ! $post_id || 'oy_location' !== get_post_type( $post_id ) ) {
-            wp_send_json_error( array( 'message' => __( 'Post ID inválido.', 'lealez' ) ) );
-        }
-
-        $location_name = get_post_meta( $post_id, 'gmb_location_id', true );
-        $business_id   = get_post_meta( $post_id, 'parent_business_id', true );
-
-        if ( ! $location_name || ! $business_id ) {
-            wp_send_json_error( array( 'message' => __( 'Faltan datos de configuración GMB.', 'lealez' ) ) );
-        }
-
-        // Build month range from POST params or fall back to last 6 months
-        if ( $kw_from && $kw_to ) {
-            $parts_from  = explode( '-', $kw_from );
-            $parts_to    = explode( '-', $kw_to );
-            if ( count( $parts_from ) === 2 && count( $parts_to ) === 2 ) {
-                $start_month = array( 'year' => (int) $parts_from[0], 'month' => (int) $parts_from[1] );
-                $end_month   = array( 'year' => (int) $parts_to[0],   'month' => (int) $parts_to[1] );
-            } else {
-                wp_send_json_error( array( 'message' => __( 'Formato de mes inválido. Usa YYYY-MM.', 'lealez' ) ) );
-                return;
-            }
-        } else {
-            // Default: last 6 months
-            $end_month   = array( 'year' => (int) gmdate( 'Y' ), 'month' => (int) gmdate( 'n' ) );
-            $start_ts    = mktime( 0, 0, 0, $end_month['month'] - 5, 1, $end_month['year'] );
-            $start_month = array( 'year' => (int) gmdate( 'Y', $start_ts ), 'month' => (int) gmdate( 'n', $start_ts ) );
-        }
-
-        $result = Lealez_GMB_API::get_location_search_keywords(
-            $business_id,
-            $location_name,
-            $start_month,
-            $end_month,
-            ! $force
-        );
-
-        if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array( 'message' => $result->get_error_message() ) );
-        }
-
-        // Build aggregated keyword data (total impressions per keyword + monthly breakdown)
-        $aggregated = $this->aggregate_keywords( $result );
-
-        wp_send_json_success( array(
-            'keywords'   => $result,
-            'aggregated' => $aggregated,
-            'period'     => array( 'start' => $start_month, 'end' => $end_month ),
-            'cached_at'  => current_time( 'mysql' ),
-        ) );
-    }
-
-    /**
-     * Aggregate raw keyword API response into totals and monthly breakdowns.
-     *
-     * @param array $keywords  Raw keyword response from Lealez_GMB_API::get_location_search_keywords
-     * @return array  [ ['keyword'=>string, 'total'=>int, 'monthly'=>['YYYY-MM'=>int, ...]], ... ]
-     *                Sorted by total descending.
-     */
-    private function aggregate_keywords( $keywords ) {
-        if ( ! is_array( $keywords ) ) {
-            return array();
-        }
-
-        $agg = array();
-
-        foreach ( $keywords as $kw ) {
-            // Extract keyword text (handle both API response shapes)
-            $text = '';
-            if ( ! empty( $kw['searchKeyword']['insightsValue']['value'] ) ) {
-                $text = (string) $kw['searchKeyword']['insightsValue']['value'];
-            } elseif ( ! empty( $kw['insightsValue']['value'] ) ) {
-                $text = (string) $kw['insightsValue']['value'];
-            }
-
-            if ( '' === $text ) {
-                continue;
-            }
-
-            if ( ! isset( $agg[ $text ] ) ) {
-                $agg[ $text ] = array( 'total' => 0, 'monthly' => array() );
-            }
-
-            // Monthly breakdown
-            if ( ! empty( $kw['monthlyMetrics'] ) && is_array( $kw['monthlyMetrics'] ) ) {
-                foreach ( $kw['monthlyMetrics'] as $mm ) {
-                    $val = isset( $mm['monthlyMetrics'] ) ? (int) $mm['monthlyMetrics'] : 0;
-                    $agg[ $text ]['total'] += $val;
-                    if ( isset( $mm['month']['year'], $mm['month']['month'] ) ) {
-                        $key = sprintf( '%04d-%02d', (int) $mm['month']['year'], (int) $mm['month']['month'] );
-                        $agg[ $text ]['monthly'][ $key ] = ( $agg[ $text ]['monthly'][ $key ] ?? 0 ) + $val;
-                    }
-                }
-            } elseif ( isset( $kw['impressionsValue']['value'] ) ) {
-                // Single-value fallback (no monthly breakdown)
-                $agg[ $text ]['total'] += (int) $kw['impressionsValue']['value'];
-            }
-        }
-
-        // Sort by total descending
-        uasort( $agg, function( $a, $b ) {
-            return $b['total'] - $a['total'];
-        } );
-
-        // Convert to indexed array
-        $result = array();
-        foreach ( $agg as $text => $data ) {
-            $result[] = array(
-                'keyword' => $text,
-                'total'   => $data['total'],
-                'monthly' => $data['monthly'],
-            );
-        }
-
-        return $result;
-    }
-
     // -----------------------------------------------------------------------
     // Data Processing Helpers
     // -----------------------------------------------------------------------
@@ -747,8 +526,8 @@ public function enqueue_scripts( $hook ) {
      *  - numeric       → last N days (legacy fallback)
      *
      * @param string $period
-     * @param string $date_from  'YYYY-MM' for month_range, 'Y-m-d' for custom
-     * @param string $date_to    'YYYY-MM' for month_range, 'Y-m-d' for custom
+     * @param string $date_from
+     * @param string $date_to
      * @return array|WP_Error
      */
     private function build_date_range( $period, $date_from = '', $date_to = '' ) {
@@ -787,9 +566,7 @@ public function enqueue_scripts( $hook ) {
                     return new WP_Error( 'invalid_range', __( 'Formato de mes inválido. Usa YYYY-MM.', 'lealez' ) );
                 }
                 $start_ts = mktime( 0, 0, 0, (int) $parts_from[1], 1, (int) $parts_from[0] );
-                // Last day of the to-month: day 0 of the next month = last day of to-month
                 $end_ts   = mktime( 23, 59, 59, (int) $parts_to[1] + 1, 0, (int) $parts_to[0] );
-                // Cap at yesterday (Performance API has ~2-day lag)
                 if ( $end_ts > $yesterday ) {
                     $end_ts = $yesterday;
                 }
@@ -799,7 +576,6 @@ public function enqueue_scripts( $hook ) {
                 break;
 
             case 'custom':
-                // Legacy: full Y-m-d dates
                 if ( ! $date_from || ! $date_to ) {
                     return new WP_Error( 'invalid_range', __( 'Debes especificar fecha de inicio y fin para el rango personalizado.', 'lealez' ) );
                 }
@@ -811,7 +587,6 @@ public function enqueue_scripts( $hook ) {
                 break;
 
             default:
-                // Legacy: numeric days (7, 30, 90, 180…)
                 $days     = absint( $period );
                 $days     = $days ? $days : 30;
                 $end_ts   = $yesterday;
@@ -843,28 +618,19 @@ public function enqueue_scripts( $hook ) {
     }
 
     /**
-     * Process the raw API response from fetchMultiDailyMetricsTimeSeries
-     * into a chart-ready structure.
-     *
-     * @param array $raw_response API response array
-     * @param array $requested_metrics
-     * @return array
-     */
-    /**
      * Process the raw API response from fetchMultiDailyMetricsTimeSeries.
      *
-     * Google's actual response structure (verified against raw diagnostic output):
-     *
+     * Google's actual response structure:
      *   {
-     *     "multiDailyMetricTimeSeries": [       ← outer array (one element per requested metric group)
+     *     "multiDailyMetricTimeSeries": [
      *       {
-     *         "dailyMetricTimeSeries": [         ← INNER array (one element per metric)
+     *         "dailyMetricTimeSeries": [
      *           {
      *             "dailyMetric": "CALL_CLICKS",
      *             "timeSeries": {
      *               "datedValues": [
      *                 { "date": {"year":2026,"month":2,"day":27}, "value": "2" },
-     *                 { "date": {"year":2026,"month":2,"day":28} }   ← absent value = 0
+     *                 { "date": {"year":2026,"month":2,"day":28} }   // absent value = 0
      *               ]
      *             }
      *           }
@@ -872,10 +638,6 @@ public function enqueue_scripts( $hook ) {
      *       }
      *     ]
      *   }
-     *
-     * Notes:
-     * - "value" is a STRING (e.g. "2"), not an integer.
-     * - Absent "value" key means 0, not null.
      *
      * @param array $raw_response
      * @param array $requested_metrics
@@ -886,12 +648,10 @@ public function enqueue_scripts( $hook ) {
         $series      = array();
         $all_dates   = array();
 
-        // Guard: non-array (should not happen after caller checks, but be safe)
         if ( ! is_array( $raw_response ) ) {
             return array( 'dates' => array(), 'series' => array() );
         }
 
-        // Outer array: each element wraps an inner dailyMetricTimeSeries array
         $outer_list = isset( $raw_response['multiDailyMetricTimeSeries'] )
             ? (array) $raw_response['multiDailyMetricTimeSeries']
             : array();
@@ -901,7 +661,6 @@ public function enqueue_scripts( $hook ) {
                 continue;
             }
 
-            // Inner array: each element is one metric series
             $inner_list = isset( $outer_item['dailyMetricTimeSeries'] )
                 ? (array) $outer_item['dailyMetricTimeSeries']
                 : array();
@@ -934,8 +693,6 @@ public function enqueue_scripts( $hook ) {
                         isset( $d['day'] )   ? (int) $d['day']   : 0
                     );
 
-                    // "value" is a string (e.g. "2") or absent (means 0).
-                    // Use array_key_exists so we catch null explicitly.
                     $val = 0;
                     if ( array_key_exists( 'value', $dv ) && null !== $dv['value'] ) {
                         $val = (int) $dv['value'];
@@ -973,12 +730,11 @@ public function enqueue_scripts( $hook ) {
      * @param string $location_name
      * @param array  $metrics
      * @param array  $range Current range
-     * @return array  metric_key => ['current_total', 'prev_total', 'change_pct']
+     * @return array  metric_key => ['prev_total', 'prev_period']
      */
     private function fetch_comparison( $business_id, $location_name, $metrics, $range ) {
         $days = max( 1, (int) ( $range['days'] ?? 30 ) );
 
-        // Build previous period
         $current_start_ts = mktime( 0, 0, 0, $range['start']['month'], $range['start']['day'], $range['start']['year'] );
         $prev_end_ts      = $current_start_ts - DAY_IN_SECONDS;
         $prev_start_ts    = $prev_end_ts - ( $days * DAY_IN_SECONDS );
@@ -1002,7 +758,7 @@ public function enqueue_scripts( $hook ) {
             $metrics,
             $prev_range['start'],
             $prev_range['end'],
-            true // use cache for previous period
+            true
         );
 
         if ( is_wp_error( $prev_result ) ) {
@@ -1077,7 +833,7 @@ public function enqueue_scripts( $hook ) {
             'BUSINESS_FOOD_MENU_CLICKS',
         );
 
-        $saved = array();
+        $saved  = array();
         $errors = array();
 
         // ── Sync 30-day period ────────────────────────────────────────────
@@ -1089,14 +845,13 @@ public function enqueue_scripts( $hook ) {
                 $all_metrics,
                 $range_30['start'],
                 $range_30['end'],
-                false // force fresh
+                false
             );
 
             if ( ! is_wp_error( $result_30 ) ) {
                 $processed_30 = $this->process_multi_metrics( $result_30, $all_metrics );
                 $series_30    = $processed_30['series'] ?? array();
 
-                // Impressions (views) = sum of all 4 impression metrics
                 $views_30 = 0;
                 foreach ( array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' ) as $imp_key ) {
                     $views_30 += isset( $series_30[ $imp_key ] ) ? (int) $series_30[ $imp_key ]['total'] : 0;
@@ -1155,7 +910,7 @@ public function enqueue_scripts( $hook ) {
                 $metrics_7,
                 $range_7['start'],
                 $range_7['end'],
-                false // force fresh
+                false
             );
 
             if ( ! is_wp_error( $result_7 ) ) {
@@ -1197,9 +952,9 @@ public function enqueue_scripts( $hook ) {
         }
 
         wp_send_json_success( array(
-            'message'  => __( 'Métricas sincronizadas y guardadas correctamente.', 'lealez' ),
-            'saved'    => $saved,
-            'errors'   => $errors,
+            'message'   => __( 'Métricas sincronizadas y guardadas correctamente.', 'lealez' ),
+            'saved'     => $saved,
+            'errors'    => $errors,
             'synced_at' => $sync_time,
         ) );
     }
@@ -1212,10 +967,7 @@ public function enqueue_scripts( $hook ) {
      * AJAX handler: Diagnóstico raw de la Performance API.
      *
      * Realiza una llamada fresca con CALL_CLICKS (últimos 7 días) y devuelve
-     * información detallada del response para identificar problemas:
-     * - OAuth scope faltante (businessprofileperformance.readonly)
-     * - Location ID incorrecto
-     * - Estructura de respuesta inesperada
+     * información detallada del response.
      *
      * Action: oy_gmb_perf_diagnostic
      */
@@ -1243,7 +995,6 @@ public function enqueue_scripts( $hook ) {
         $has_refresh = (bool) get_post_meta( $business_id, 'gmb_refresh_token', true );
         $token_exp   = get_post_meta( $business_id, 'gmb_token_expires_at', true );
 
-        // Test call: single metric, last 7 days, always fresh
         $range = $this->build_date_range( '7' );
         if ( is_wp_error( $range ) ) {
             wp_send_json_error( array( 'message' => $range->get_error_message() ) );
@@ -1255,7 +1006,7 @@ public function enqueue_scripts( $hook ) {
             array( 'CALL_CLICKS' ),
             $range['start'],
             $range['end'],
-            false // force fresh
+            false
         );
 
         $info = array(
@@ -1275,8 +1026,8 @@ public function enqueue_scripts( $hook ) {
             $info['error_message'] = $result->get_error_message();
             $err_data              = $result->get_error_data();
             if ( is_array( $err_data ) ) {
-                $info['http_code']  = $err_data['code'] ?? '';
-                $info['raw_body']   = isset( $err_data['raw_body'] ) ? substr( (string) $err_data['raw_body'], 0, 600 ) : '';
+                $info['http_code'] = $err_data['code'] ?? '';
+                $info['raw_body']  = isset( $err_data['raw_body'] ) ? substr( (string) $err_data['raw_body'], 0, 600 ) : '';
             }
             wp_send_json_success( array( 'diagnostic' => $info ) );
         }
@@ -1286,12 +1037,11 @@ public function enqueue_scripts( $hook ) {
             wp_send_json_success( array( 'diagnostic' => $info ) );
         }
 
-        // Decode structure
         $outer = isset( $result['multiDailyMetricTimeSeries'] ) ? (array) $result['multiDailyMetricTimeSeries'] : null;
-        $info['api_result']      = 'HTTP 200 array';
-        $info['response_keys']   = array_keys( $result );
-        $info['has_outer_key']   = ( null !== $outer ) ? 'yes' : 'NO — clave faltante';
-        $info['outer_count']     = is_array( $outer ) ? count( $outer ) : 0;
+        $info['api_result']    = 'HTTP 200 array';
+        $info['response_keys'] = array_keys( $result );
+        $info['has_outer_key'] = ( null !== $outer ) ? 'yes' : 'NO — clave faltante';
+        $info['outer_count']   = is_array( $outer ) ? count( $outer ) : 0;
 
         $inner_items = array();
         if ( is_array( $outer ) ) {
@@ -1307,12 +1057,12 @@ public function enqueue_scripts( $hook ) {
         $info['inner_series_count'] = count( $inner_items );
 
         if ( ! empty( $inner_items ) ) {
-            $first   = $inner_items[0];
-            $dated   = isset( $first['timeSeries']['datedValues'] ) ? (array) $first['timeSeries']['datedValues'] : array();
-            $info['first_metric']           = isset( $first['dailyMetric'] ) ? $first['dailyMetric'] : 'unknown';
-            $info['datedValues_count']       = count( $dated );
-            $info['datedValues_sample']      = ! empty( $dated ) ? array_slice( $dated, 0, 3 ) : 'empty';
-            $info['value_field_is_string']   = ( ! empty( $dated ) && isset( $dated[0]['value'] ) ) ? ( is_string( $dated[0]['value'] ) ? 'yes (string)' : 'no (int)' ) : 'n/a (absent)';
+            $first  = $inner_items[0];
+            $dated  = isset( $first['timeSeries']['datedValues'] ) ? (array) $first['timeSeries']['datedValues'] : array();
+            $info['first_metric']         = isset( $first['dailyMetric'] ) ? $first['dailyMetric'] : 'unknown';
+            $info['datedValues_count']    = count( $dated );
+            $info['datedValues_sample']   = ! empty( $dated ) ? array_slice( $dated, 0, 3 ) : 'empty';
+            $info['value_field_is_string'] = ( ! empty( $dated ) && isset( $dated[0]['value'] ) ) ? ( is_string( $dated[0]['value'] ) ? 'yes (string)' : 'no (int)' ) : 'n/a (absent)';
         } else {
             $info['diagnosis'] = 'No inner series encontradas. Causa probable: scope OAuth businessprofileperformance.readonly faltante, o no hay datos para el período.';
         }
@@ -1327,57 +1077,43 @@ public function enqueue_scripts( $hook ) {
     // -----------------------------------------------------------------------
 
     private function get_inline_js() {
-        $impressions_keys = wp_json_encode( array( 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH' ) );
-        $actions_keys     = wp_json_encode( array( 'BUSINESS_CONVERSATIONS', 'BUSINESS_DIRECTION_REQUESTS', 'CALL_CLICKS', 'WEBSITE_CLICKS', 'BUSINESS_BOOKINGS', 'BUSINESS_FOOD_ORDERS', 'BUSINESS_FOOD_MENU_CLICKS' ) );
-
         // phpcs:disable
         return <<<'JS'
 (function($){
     'use strict';
 
     var OyPerf = {
-        postId          : oyPerfConfig.postId,
-        nonce           : oyPerfConfig.nonce,
-        ajaxUrl         : oyPerfConfig.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php',
-        chartInstance   : null,
-        kwChartInstance : null,
-        metricsDef      : oyPerfConfig.metricsDef,
-        impKeys         : oyPerfConfig.impKeys,
-        actKeys         : oyPerfConfig.actKeys,
-        lastData        : null,
-        lastKeywordsData: null,
-        sortAsc         : true,
-        currentView     : 'all',   // 'all' | 'cards' | 'chart' | 'table' | 'comparison'
+        postId        : oyPerfConfig.postId,
+        nonce         : oyPerfConfig.nonce,
+        ajaxUrl       : oyPerfConfig.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php',
+        chartInstance : null,
+        metricsDef    : oyPerfConfig.metricsDef,
+        impKeys       : oyPerfConfig.impKeys,
+        actKeys       : oyPerfConfig.actKeys,
+        lastData      : null,
+        sortAsc       : true,
+        currentView   : 'all',   // 'all' | 'cards' | 'chart' | 'table'
 
-        // Month names in Spanish
         monthNames: ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'],
 
-init: function(){
+        // ----------------------------------------------------------------
+        // Init
+        // ----------------------------------------------------------------
+
+        init: function(){
             var self = this;
 
-            // Populate month selects before first fetch
             self.populateMonthSelects();
-
-            // Load automatically on page open with defaults
             self.fetchMetrics(false);
 
             // Period change → show/hide month range picker
             $('#oy-perf-period').on('change', function(){
-                if ('month_range' === $(this).val()) {
-                    $('#oy-perf-month-range').show();
-                } else {
-                    $('#oy-perf-month-range').hide();
-                }
+                $('#oy-perf-month-range').toggle('month_range' === $(this).val());
             });
 
             // Metric pill toggle (visual only)
             $(document).on('change', '.oy-perf-metric-chk', function(){
-                var $lbl = $(this).closest('.oy-perf-pill');
-                if ($(this).is(':checked')) {
-                    $lbl.addClass('oy-perf-pill--active');
-                } else {
-                    $lbl.removeClass('oy-perf-pill--active');
-                }
+                $(this).closest('.oy-perf-pill').toggleClass('oy-perf-pill--active', $(this).is(':checked'));
             });
 
             // Quick-select buttons
@@ -1400,17 +1136,13 @@ init: function(){
                 });
             });
 
-            // Apply / Refresh buttons
+            // Toolbar buttons
             $('#oy-perf-btn-apply').on('click', function(){ self.fetchMetrics(false); });
             $('#oy-perf-btn-refresh').on('click', function(){ self.fetchMetrics(true); });
-
-            // Sync button
             $('#oy-perf-btn-sync').on('click', function(){ self.syncMetrics(); });
-
-            // Diagnostic button
             $('#oy-perf-btn-diag').on('click', function(){ self.diagMetrics(); });
 
-            // Sort table
+            // Table sort
             $('#oy-perf-sort-date-asc').on('click', function(){
                 self.sortAsc = true;
                 if (self.lastData) self.buildTable(self.lastData);
@@ -1427,47 +1159,20 @@ init: function(){
 
             // View mode toggle buttons
             $(document).on('click', '.oy-perf-view-btn', function(){
-                var mode = $(this).data('view');
-                self.setViewMode(mode);
+                self.setViewMode($(this).data('view'));
             });
 
-            // Comparison toggle checkbox - re-apply view visibility
-            $('#oy-perf-compare-toggle').on('change', function(){
-                if (self.lastData) {
-                    if ($(this).is(':checked')) {
-                        self.buildComparison(self.lastData);
-                    } else {
-                        $('#oy-perf-comparison-wrap').hide();
-                    }
-                    self.applyViewMode();
-                }
-            });
-
-            // Chart type change: re-render with new type (ONE handler only)
+            // Chart type change: re-render
             $('#oy-perf-chart-type').on('change', function(){
                 if (self.lastData) {
-                    var newType = $(this).val();
-                    self.buildChart(self.lastData, newType);
-                    self.applyViewMode();
+                    self.buildChart(self.lastData, $(this).val());
                 }
             });
 
-            // Single-metric dropdown: re-render chart for the selected indicator
+            // Single-metric dropdown: re-render chart
             $('#oy-perf-single-metric').on('change', function(){
                 if (self.lastData) {
-                    var chartType = $('#oy-perf-chart-type').val() || 'bar';
-                    self.buildChart(self.lastData, chartType);
-                }
-            });
-
-            // Keywords refresh button (force)
-            $('#oy-perf-btn-keywords').on('click', function(){ self.fetchKeywords(true); });
-
-            // Keyword month filter
-            $('#oy-kw-month-filter').on('change', function(){
-                if (self.lastKeywordsData) {
-                    var selectedMonth = $(this).val();
-                    self.buildKeywordsTableEnhanced(self.lastKeywordsData.aggregated, selectedMonth);
+                    self.buildChart(self.lastData, $('#oy-perf-chart-type').val() || 'bar');
                 }
             });
         },
@@ -1481,7 +1186,6 @@ init: function(){
             var now  = new Date();
             var opts = '';
 
-            // Build 24 months, newest first
             for (var i = 0; i <= 23; i++) {
                 var d  = new Date(now.getFullYear(), now.getMonth() - i, 1);
                 var y  = d.getFullYear();
@@ -1496,33 +1200,9 @@ init: function(){
             $from.html(opts);
             $to.html(opts);
 
-            // Default: from = 6 months ago, to = current month
             var fromDate = new Date(now.getFullYear(), now.getMonth() - 5, 1);
             $from.val(fromDate.getFullYear() + '-' + String(fromDate.getMonth()+1).padStart(2,'0'));
             $to.val(now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0'));
-        },
-
-        getMonthRangeForKeywords: function(){
-            var self   = this;
-            var period = $('#oy-perf-period').val();
-            var now    = new Date();
-            var toVal  = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
-
-            if ('month_range' === period) {
-                return {
-                    from: $('#oy-perf-month-from').val(),
-                    to  : $('#oy-perf-month-to').val(),
-                };
-            }
-
-            var monthsBack = {this_month: 0, '3months': 2, '6months': 5, '12months': 11}[period];
-            if (monthsBack === undefined) { monthsBack = 5; }
-
-            var fromDate = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
-            return {
-                from: fromDate.getFullYear() + '-' + String(fromDate.getMonth()+1).padStart(2,'0'),
-                to  : toVal,
-            };
         },
 
         // ----------------------------------------------------------------
@@ -1532,18 +1212,16 @@ init: function(){
         setViewMode: function(mode){
             var self = this;
             self.currentView = mode || 'all';
-            // Update button active state
             $('.oy-perf-view-btn').removeClass('oy-perf-view-btn--active');
             $('.oy-perf-view-btn[data-view="'+self.currentView+'"]').addClass('oy-perf-view-btn--active');
             self.applyViewMode();
         },
 
-applyViewMode: function(){
-            var self = this;
-            var showCards      = false;
-            var showChart      = false;
-            var showTable      = false;
-            var showComparison = false;
+        applyViewMode: function(){
+            var self       = this;
+            var showCards  = false;
+            var showChart  = false;
+            var showTable  = false;
 
             switch (self.currentView) {
                 case 'cards':
@@ -1555,45 +1233,35 @@ applyViewMode: function(){
                 case 'table':
                     showTable = true;
                     break;
-                case 'comparison':
-                    showComparison = true;
-                    break;
                 case 'all':
                 default:
-                    showCards = showChart = showTable = showComparison = true;
+                    showCards = showChart = showTable = true;
                     break;
             }
 
-            // KPIs
-            if (showCards && self.lastData && self.lastData.data && Object.keys(self.lastData.data.series||{}).length > 0) {
+            var hasSeries = self.lastData && self.lastData.data && Object.keys(self.lastData.data.series||{}).length > 0;
+            var hasDates  = self.lastData && self.lastData.data && (self.lastData.data.dates||[]).length > 0;
+
+            if (showCards && hasSeries) {
                 $('#oy-perf-kpis').show();
             } else {
                 $('#oy-perf-kpis').hide();
             }
 
-            // Chart — el wrap se muestra si hay datos; buildChart gestiona canvas/nodata internamente
-            if (showChart && self.lastData && self.lastData.data && Object.keys(self.lastData.data.series||{}).length > 0) {
+            // Chart: show the wrap, canvas is already rendered inside
+            if (showChart && hasSeries) {
                 $('#oy-perf-chart-wrap').show();
             } else {
                 $('#oy-perf-chart-wrap').hide();
             }
 
-            // Table
-            if (showTable && self.lastData && self.lastData.data && (self.lastData.data.dates||[]).length > 0) {
+            if (showTable && hasDates) {
                 $('#oy-perf-table-wrap').show();
             } else {
                 $('#oy-perf-table-wrap').hide();
             }
-
-            // Comparison — also gated on the checkbox
-            var compareEnabled = $('#oy-perf-compare-toggle').is(':checked');
-            if (showComparison && compareEnabled && self.lastData && Object.keys(self.lastData.comparison||{}).length > 0) {
-                $('#oy-perf-comparison-wrap').show();
-            } else {
-                $('#oy-perf-comparison-wrap').hide();
-            }
         },
-            
+
         // ----------------------------------------------------------------
         // Core fetch
         // ----------------------------------------------------------------
@@ -1643,7 +1311,7 @@ applyViewMode: function(){
                 var pd = resp.data;
                 self.lastData = pd;
 
-                // If API returned no series, surface debug info automatically
+                // Surface debug info if no series data
                 var hasSeries = pd.data && pd.data.series && Object.keys(pd.data.series).length > 0;
                 if (!hasSeries && pd.debug) {
                     var dbg  = pd.debug;
@@ -1655,25 +1323,15 @@ applyViewMode: function(){
                     self.showStatus('info', hint);
                 }
 
-                // KPIs
+                // Build all views
                 self.buildKPIs(pd);
 
-                // Chart
-                var chartType = $('#oy-perf-chart-type').val() || 'line';
+                var chartType = $('#oy-perf-chart-type').val() || 'bar';
                 self.buildChart(pd, chartType);
 
-                // Table
                 self.buildTable(pd);
 
-                // Comparison (gated on checkbox)
-                var compareEnabled = $('#oy-perf-compare-toggle').is(':checked');
-                if (compareEnabled) {
-                    self.buildComparison(pd);
-                } else {
-                    $('#oy-perf-comparison-wrap').hide();
-                }
-
-                // Show & apply view mode
+                // Show view toggle and apply current mode
                 $('#oy-perf-view-toggle').show();
                 self.applyViewMode();
 
@@ -1686,335 +1344,395 @@ applyViewMode: function(){
                 $('#oy-perf-cache-info').text(' | ' + totalDays + ' días de datos');
                 $('#oy-perf-footer').show();
 
-                // Show keywords section and auto-load
-                $('#oy-perf-keywords-wrap').show();
-                self.fetchKeywords(false);
-
             }).fail(function(xhr){
                 self.showStatus('error', 'Error de conexión: ' + (xhr.statusText || 'unknown'));
             });
         },
 
         // ----------------------------------------------------------------
-        // Keywords
+        // Build KPIs
         // ----------------------------------------------------------------
 
-        fetchKeywords: function(forceRefresh){
-            var self      = this;
-            var kwRange   = self.getMonthRangeForKeywords();
-
-            self.showKeywordsStatus('loading', 'Cargando palabras clave...');
-            $('#oy-kw-kpis').hide();
-            $('#oy-kw-chart-wrap').hide();
-            $('#oy-perf-keywords-content').hide();
-
-            $.post(self.ajaxUrl, {
-                action        : 'oy_gmb_perf_keywords',
-                nonce         : self.nonce,
-                post_id       : self.postId,
-                force_refresh : forceRefresh ? 1 : 0,
-                kw_month_from : kwRange.from,
-                kw_month_to   : kwRange.to,
-            }, function(resp){
-                self.hideKeywordsStatus();
-                if (!resp.success) {
-                    self.showKeywordsStatus('error', resp.data.message || 'Error al cargar keywords');
-                    return;
-                }
-
-                var aggregated = resp.data.aggregated || [];
-                var period     = resp.data.period || {};
-
-                if (!aggregated.length) {
-                    self.showKeywordsStatus('info', 'No se encontraron palabras clave para el período.');
-                    return;
-                }
-
-                self.lastKeywordsData = resp.data;
-
-                // Populate month filter
-                if (period.start && period.end) {
-                    self.buildKeywordsMonthFilter(period.start, period.end);
-                }
-
-                // KPI top 3
-                self.buildKeywordsKPIs(aggregated);
-
-                // Chart top 10
-                self.buildKeywordsChart(aggregated);
-
-                // Table
-                self.buildKeywordsTableEnhanced(aggregated, '');
-
-            }).fail(function(xhr){
-                self.showKeywordsStatus('error', 'Error de conexión: ' + (xhr.statusText || 'unknown'));
-            });
-        },
-
-        buildKeywordsMonthFilter: function(startMonth, endMonth){
-            var self = this;
-            var opts = '<option value="">Todos los meses</option>';
-            var allMonths = [];
-            var y = startMonth.year;
-            var m = startMonth.month;
-
-            while ( y < endMonth.year || (y === endMonth.year && m <= endMonth.month) ) {
-                var val = y + '-' + String(m).padStart(2,'0');
-                allMonths.push({ val: val, label: self.monthNames[m-1] + ' ' + y });
-                m++;
-                if (m > 12) { m = 1; y++; }
-            }
-
-            // Newest first
-            allMonths.reverse();
-            $.each(allMonths, function(i, mo){
-                opts += '<option value="'+mo.val+'">'+mo.label+'</option>';
-            });
-            $('#oy-kw-month-filter').html(opts);
-        },
-
-        buildKeywordsKPIs: function(aggregated){
-            var self  = this;
-            var top3  = aggregated.slice(0, 3);
-            var $kpis = $('#oy-kw-kpis');
+        buildKPIs: function(pd){
+            var self   = this;
+            var series = pd.data.series || {};
+            var $kpis  = $('#oy-perf-kpis');
             $kpis.empty();
 
-            if (!top3.length) { $kpis.hide(); return; }
+            var keys = Object.keys(series);
+            if (!keys.length) {
+                $kpis.html('<p>No hay datos disponibles para el período.</p>');
+            } else {
+                $.each(keys, function(i, k){
+                    var s        = series[k];
+                    var c        = pd.comparison && pd.comparison[k] ? pd.comparison[k] : null;
+                    var chg      = '';
+                    var chgClass = '';
 
-            var colors = ['#4285f4','#34a853','#fbbc05'];
-            $.each(top3, function(i, kw){
-                $kpis.append(
-                    '<div class="oy-kw-kpi" style="border-top:3px solid '+colors[i]+';">' +
-                        '<div class="oy-kw-kpi__rank">#'+(i+1)+'</div>' +
-                        '<div class="oy-kw-kpi__keyword" title="'+self.escHtml(kw.keyword)+'">'+self.escHtml(kw.keyword)+'</div>' +
-                        '<div class="oy-kw-kpi__value">'+self.formatNum(kw.total)+' <span>imp.</span></div>' +
-                    '</div>'
-                );
-            });
+                    if (c && c.prev_total > 0) {
+                        var pct  = ((s.total - c.prev_total) / c.prev_total * 100).toFixed(1);
+                        var sign = pct > 0 ? '+' : '';
+                        chgClass = pct > 0 ? 'oy-perf-kpi__change--up' : (pct < 0 ? 'oy-perf-kpi__change--down' : 'oy-perf-kpi__change--flat');
+                        chg = '<span class="oy-perf-kpi__change '+chgClass+'">'+sign+pct+'%</span>';
+                    } else if (c && c.prev_total === 0 && s.total > 0) {
+                        chg = '<span class="oy-perf-kpi__change oy-perf-kpi__change--up">+∞</span>';
+                    }
+
+                    var prevInfo = '';
+                    if (c && c.prev_period) {
+                        prevInfo = '<div class="oy-perf-kpi__prev">Anterior: ' + self.formatNum(c.prev_total || 0) + '</div>';
+                    }
+
+                    $kpis.append(
+                        '<div class="oy-perf-kpi" style="border-top:3px solid '+s.color+';">' +
+                            '<div class="oy-perf-kpi__label">'+self.escHtml(s.label)+'</div>' +
+                            '<div class="oy-perf-kpi__value">'+self.formatNum(s.total)+chg+'</div>' +
+                            '<div class="oy-perf-kpi__meta">Prom: '+s.avg+' / día &nbsp;|&nbsp; Máx: '+self.formatNum(s.max)+'</div>' +
+                            prevInfo +
+                        '</div>'
+                    );
+                });
+            }
+
             $kpis.show();
         },
 
-buildKeywordsChart: function(aggregated){
-    var self   = this;
-    var top10  = aggregated.slice(0, 10);
-    var $wrap  = $('#oy-kw-chart-wrap');
-
-    if (!top10.length) { $wrap.hide(); return; }
-
-    // ── Guard: si Chart.js aún no está listo, reintenta cuando lo esté ────────
-    if (typeof Chart === 'undefined') {
-        if (typeof waitForChart === 'function') {
-            waitForChart(function(){ self.buildKeywordsChart(aggregated); });
-        } else {
-            console.warn('[OyPerf] Chart.js no disponible (buildKeywordsChart).');
-        }
-        return;
-    }
-    // ───────────────────────────────────────────────────────────────────────────
-
-    if (self.kwChartInstance) {
-        self.kwChartInstance.destroy();
-        self.kwChartInstance = null;
-    }
-
-    var labels  = top10.map(function(kw){ return kw.keyword; });
-    var values  = top10.map(function(kw){ return kw.total; });
-    var palette = ['#4285f4','#34a853','#fbbc05','#ea4335','#9c27b0','#00bcd4','#ff9800','#795548','#607d8b','#e91e63'];
-    var bgColors = labels.map(function(l, i){ return palette[i % palette.length]; });
-
-    var ctx = document.getElementById('oy-kw-chart');
-    if (!ctx) { return; }
-
-    self.kwChartInstance = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels  : labels,
-            datasets: [{
-                label          : 'Impresiones',
-                data           : values,
-                backgroundColor: bgColors,
-                borderRadius   : 4,
-            }]
-        },
-        options: {
-            indexAxis : 'y',
-            responsive: true,
-            plugins: {
-                legend : { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: function(ctx){
-                            return ' ' + self.formatNum(ctx.raw) + ' imp.';
-                        }
-                    }
-                }
-            },
-            scales: {
-                x: {
-                    beginAtZero: true,
-                    ticks: { callback: function(v){ return self.formatNum(v); } }
-                },
-                y: {
-                    ticks: {
-                        font: { size: 11 },
-                        callback: function(v){
-                            return String(v).length > 28 ? String(v).substring(0,25)+'…' : v;
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    $wrap.show();
-},
-
-        buildKeywordsTableEnhanced: function(aggregated, selectedMonth){
-            var self  = this;
-            var $tbody = $('#oy-perf-keywords-body');
-            var html  = '';
-            var data  = aggregated;
-
-            // Filter by month if selected
-            if (selectedMonth && selectedMonth !== '') {
-                data = [];
-                $.each(aggregated, function(i, kw){
-                    var monthVal = kw.monthly && kw.monthly[selectedMonth] ? kw.monthly[selectedMonth] : 0;
-                    if (monthVal > 0) {
-                        data.push({
-                            keyword: kw.keyword,
-                            total  : monthVal,
-                            monthly: kw.monthly,
-                        });
-                    }
-                });
-                data.sort(function(a,b){ return b.total - a.total; });
-            }
-
-            $.each(data, function(i, kw){
-                // Best month
-                var monthlyObj = kw.monthly || {};
-                var monthKeys  = Object.keys(monthlyObj).sort();
-                var bestMonth  = '—';
-                var bestVal    = 0;
-                $.each(monthlyObj, function(mk, mv){
-                    if (mv > bestVal) { bestVal = mv; bestMonth = mk; }
-                });
-                if (bestMonth !== '—') {
-                    var bp = bestMonth.split('-');
-                    bestMonth = self.monthNames[parseInt(bp[1],10)-1] + ' ' + bp[0] + ' (' + self.formatNum(bestVal) + ')';
-                }
-
-                var monthCount = monthKeys.length;
-
-                // Trend: compare last 2 available months
-                var trend = '';
-                if (monthKeys.length >= 2) {
-                    var last = monthlyObj[monthKeys[monthKeys.length-1]] || 0;
-                    var prev = monthlyObj[monthKeys[monthKeys.length-2]] || 0;
-                    if (last > prev)      trend = '<span style="color:#2e7d32;font-weight:700;">▲</span>';
-                    else if (last < prev) trend = '<span style="color:#c62828;font-weight:700;">▼</span>';
-                    else                  trend = '<span style="color:#999;">→</span>';
-                }
-
-                html += '<tr>' +
-                    '<td>'+(i+1)+'</td>' +
-                    '<td><strong>'+self.escHtml(String(kw.keyword))+'</strong></td>' +
-                    '<td>'+self.formatNum(kw.total)+'</td>' +
-                    '<td style="font-size:11px;color:#555;">'+self.escHtml(bestMonth)+'</td>' +
-                    '<td style="text-align:center;">'+monthCount+'</td>' +
-                    '<td style="text-align:center;">'+trend+'</td>' +
-                    '</tr>';
-            });
-
-            $tbody.html(html || '<tr><td colspan="6">Sin datos disponibles para este período/mes.</td></tr>');
-            $('#oy-perf-keywords-content').show();
-        },
-
         // ----------------------------------------------------------------
-        // Diagnostic (unchanged)
+        // Chart metric selector helper
         // ----------------------------------------------------------------
 
-        diagMetrics: function(){
+        updateChartMetricSelector: function(pd, chartType){
             var self    = this;
-            var $btn    = $('#oy-perf-btn-diag');
-            var $status = $('#oy-perf-diag-status');
+            var series  = pd.data.series || {};
+            var $sel    = $('#oy-perf-single-metric');
+            var $lbl    = $('#oy-perf-chart-metric-label');
+            var $pieBdg = $('#oy-perf-chart-pie-badge');
+            var isPie   = (chartType === 'pie');
 
-            $btn.prop('disabled', true);
-            $status.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
-                   .addClass('oy-perf-status--loading')
-                   .html('⏳ Ejecutando diagnóstico...')
-                   .show();
+            if (isPie) {
+                $lbl.hide();
+                $sel.hide();
+                $pieBdg.show();
+            } else {
+                $pieBdg.hide();
+                var keys       = Object.keys(series);
+                var currentVal = $sel.val();
+                var opts       = '';
+                $.each(keys, function(i, k){
+                    opts += '<option value="'+self.escHtml(k)+'">'+self.escHtml(series[k].label)+'</option>';
+                });
+                $sel.html(opts);
+                if (currentVal && series[currentVal]) {
+                    $sel.val(currentVal);
+                } else if (keys.length) {
+                    $sel.val(keys[0]);
+                }
+                $lbl.show();
+                $sel.show();
+            }
+        },
 
-            $.post(self.ajaxUrl, {
-                action  : 'oy_gmb_perf_diagnostic',
-                nonce   : self.nonce,
-                post_id : self.postId,
-            }, function(resp){
-                $btn.prop('disabled', false);
-                if (!resp.success) {
-                    $status.removeClass('oy-perf-status--loading')
-                           .addClass('oy-perf-status--error')
-                           .html('❌ Error: ' + self.escHtml(resp.data.message || 'Error desconocido'));
+        // ----------------------------------------------------------------
+        // Build Chart
+        // ----------------------------------------------------------------
+
+        buildChart: function(pd, chartType){
+            var self       = this;
+            var allDates   = pd.data.dates  || [];
+            var allSeries  = pd.data.series || {};
+            var $wrap      = $('#oy-perf-chart-wrap');
+            var $title     = $('#oy-perf-chart-title');
+            var $nodata    = $('#oy-perf-chart-nodata');
+            var $container = $('#oy-perf-chart-container');
+
+            $nodata.hide();
+            $container.show();
+
+            if (!Object.keys(allSeries).length) {
+                if (self.chartInstance) { self.chartInstance.destroy(); self.chartInstance = null; }
+                return;
+            }
+
+            // Guard: Chart.js no cargado aún
+            if (typeof Chart === 'undefined') {
+                if (typeof waitForChart === 'function') {
+                    waitForChart(function(){ self.buildChart(pd, chartType); });
+                } else {
+                    console.warn('[OyPerf] Chart.js no disponible (buildChart).');
+                }
+                return;
+            }
+
+            // Actualizar selector de métrica
+            self.updateChartMetricSelector(pd, chartType);
+
+            // Filtrar series según tipo
+            var series = {};
+            var dates  = allDates;
+            var isPie  = (chartType === 'pie');
+
+            if (isPie) {
+                // Torta: SOLO las 4 métricas de impresiones (móvil vs escritorio)
+                var impKeys = [
+                    'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
+                    'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+                    'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
+                    'BUSINESS_IMPRESSIONS_MOBILE_SEARCH'
+                ];
+                $.each(impKeys, function(i, k){
+                    if (allSeries[k]) { series[k] = allSeries[k]; }
+                });
+
+                if (!Object.keys(series).length) {
+                    if (self.chartInstance) { self.chartInstance.destroy(); self.chartInstance = null; }
+                    $nodata.show();
+                    $container.hide();
                     return;
                 }
-
-                var d = resp.data.diagnostic || {};
-                var rows = [];
-                rows.push('<strong>🔍 Diagnóstico de API de Rendimiento</strong>');
-                rows.push('<strong>Configuración:</strong>');
-                rows.push('• gmb_location_id almacenado: <code>' + self.escHtml(d.gmb_location_id_stored || '—') + '</code>');
-                rows.push('• parent_business_id: <code>' + (d.parent_business_id || '—') + '</code>');
-                rows.push('<strong>OAuth:</strong>');
-                rows.push('• _gmb_connected: <code>' + self.escHtml(d.gmb_connected_flag || '—') + '</code>');
-                rows.push('• Refresh token: <code>' + self.escHtml(d.has_refresh_token || '—') + '</code>');
-                rows.push('• Token expira: <code>' + self.escHtml(d.token_expires_at || '—') + '</code>');
-                rows.push('• Token expirado: <code>' + self.escHtml(d.token_expired_now || '—') + '</code>');
-                rows.push('<strong>Resultado API:</strong>');
-                rows.push('• Endpoint: <code style="font-size:11px;">' + self.escHtml(d.test_endpoint || '—') + '</code>');
-                rows.push('• Resultado: <code>' + self.escHtml(d.api_result || '—') + '</code>');
-
-                if (d.error_code) {
-                    rows.push('• Código error: <code>' + self.escHtml(String(d.error_code)) + '</code>');
-                    rows.push('• Mensaje: <code>' + self.escHtml(d.error_message || '') + '</code>');
-                    if (d.http_code) rows.push('• HTTP code: <code>' + d.http_code + '</code>');
-                    if (d.raw_body)  rows.push('• Raw body: <code style="font-size:11px;">' + self.escHtml(d.raw_body) + '</code>');
-                } else {
-                    rows.push('• Clave multiDailyMetricTimeSeries: <code>' + self.escHtml(d.has_outer_key || '—') + '</code>');
-                    rows.push('• Outer wrappers: <code>' + (d.outer_count !== undefined ? d.outer_count : '—') + '</code>');
-                    rows.push('• Inner series: <code>' + (d.inner_series_count !== undefined ? d.inner_series_count : '—') + '</code>');
-                    if (d.response_keys) rows.push('• Claves respuesta: <code>' + self.escHtml(d.response_keys.join(', ')) + '</code>');
-                    if (d.first_metric)  rows.push('• Primera métrica: <code>' + self.escHtml(d.first_metric) + '</code>');
-                    if (d.datedValues_count !== undefined) {
-                        rows.push('• datedValues count: <code>' + d.datedValues_count + '</code>');
-                        rows.push('• value es string: <code>' + self.escHtml(d.value_field_is_string || 'n/a') + '</code>');
-                    }
-                    if (d.datedValues_sample && Array.isArray(d.datedValues_sample)) {
-                        rows.push('• Muestra datedValues: <code>' + self.escHtml(JSON.stringify(d.datedValues_sample)) + '</code>');
-                    }
-                    if (d.diagnosis) rows.push('⚠️ <strong>' + self.escHtml(d.diagnosis) + '</strong>');
-                    if (d.raw_response_preview) {
-                        rows.push('<strong>Raw response (primeros 1500 chars):</strong>');
-                        rows.push('<code style="font-size:10px;word-break:break-all;white-space:pre-wrap;">' + self.escHtml(d.raw_response_preview) + '</code>');
-                    }
+            } else {
+                // Barras: UN solo indicador
+                var selectedKey = $('#oy-perf-single-metric').val();
+                if (!selectedKey || !allSeries[selectedKey]) {
+                    selectedKey = Object.keys(allSeries)[0] || '';
                 }
+                if (!selectedKey) { return; }
+                series[selectedKey] = allSeries[selectedKey];
+            }
 
-                var okClass = (d.inner_series_count > 0) ? 'oy-perf-status--success' : 'oy-perf-status--info';
-                $status.removeClass('oy-perf-status--loading')
-                       .addClass(okClass)
-                       .html(rows.join('<br>'))
-                       .show();
+            // Destruir instancia anterior
+            if (self.chartInstance) {
+                self.chartInstance.destroy();
+                self.chartInstance = null;
+            }
 
-            }).fail(function(xhr){
-                $btn.prop('disabled', false);
-                $status.removeClass('oy-perf-status--loading')
-                       .addClass('oy-perf-status--error')
-                       .html('❌ Error de conexión: ' + (xhr.statusText || 'unknown'));
-            });
+            // ── IMPORTANTE: mostrar el wrap ANTES de crear el chart ──
+            // Garantiza que el canvas tenga dimensiones cuando Chart.js lo mide.
+            $wrap.show();
+
+            var ctx = document.getElementById('oy-perf-chart');
+            if (!ctx) { return; }
+
+            var chartConfig = null;
+            var sk          = Object.keys(series)[0] || '';
+            var skLabel     = (sk && series[sk]) ? series[sk].label : '';
+
+            // --- PIE: distribución móvil vs escritorio -----------
+            if (isPie) {
+                var pieLabels = [];
+                var pieValues = [];
+                var pieColors = [];
+                $.each(series, function(k, s){
+                    pieLabels.push(s.label);
+                    pieValues.push(s.total);
+                    pieColors.push(s.color);
+                });
+
+                $title.text('Distribución Móvil vs Escritorio');
+                $container.css('height', '300px');
+
+                chartConfig = {
+                    type : 'pie',
+                    data : {
+                        labels  : pieLabels,
+                        datasets: [{
+                            data           : pieValues,
+                            backgroundColor: pieColors.map(function(c){ return c + 'CC'; }),
+                            borderColor    : pieColors,
+                            borderWidth    : 2,
+                        }]
+                    },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'right',
+                                labels  : { boxWidth: 14, padding: 10, font: { size: 11 } }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx){
+                                        var total = ctx.dataset.data.reduce(function(a,b){ return a+b; }, 0);
+                                        var pct   = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
+                                        return ' ' + ctx.label + ': ' + self.formatNum(ctx.raw) + ' (' + pct + '%)';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+            }
+
+            // --- BARRAS POR MES ---
+            else if (chartType === 'bar_month') {
+                if (!dates.length) { return; }
+
+                var monthMap  = {};
+                var monthList = [];
+                $.each(dates, function(i, d){
+                    var ym = d.substring(0, 7);
+                    if (!monthMap[ym]) { monthMap[ym] = 0; monthList.push(ym); }
+                    monthMap[ym] += (series[sk] && series[sk].data[d] !== undefined ? series[sk].data[d] : 0);
+                });
+
+                var monthLabels = monthList.map(function(ym){
+                    var parts  = ym.split('-');
+                    return self.monthNames[parseInt(parts[1],10)-1] + ' ' + parts[0];
+                });
+
+                $title.text(skLabel + ' — por mes');
+                $container.css('height', '280px');
+                chartConfig = {
+                    type : 'bar',
+                    data : {
+                        labels  : monthLabels,
+                        datasets: [{
+                            label          : skLabel,
+                            data           : monthList.map(function(ym){ return monthMap[ym] || 0; }),
+                            backgroundColor: (series[sk] ? series[sk].color : '#4285f4') + 'CC',
+                            borderColor    : series[sk] ? series[sk].color : '#4285f4',
+                            borderWidth    : 1.5,
+                            borderRadius   : 4,
+                        }]
+                    },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend : { display: false },
+                            tooltip: { callbacks: { label: function(ctx){ return ' ' + self.formatNum(ctx.raw); } } }
+                        },
+                        scales: {
+                            x: { ticks: { maxRotation: 45 } },
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
+                        }
+                    }
+                };
+            }
+
+            // --- BARRAS POR DÍA ---
+            else {
+                if (!dates.length) { return; }
+
+                var values = dates.map(function(d){ return series[sk] && series[sk].data[d] !== undefined ? series[sk].data[d] : null; });
+
+                $title.text(skLabel + ' — por día');
+                $container.css('height', '280px');
+                chartConfig = {
+                    type : 'bar',
+                    data : {
+                        labels  : dates,
+                        datasets: [{
+                            label          : skLabel,
+                            data           : values,
+                            backgroundColor: (series[sk] ? series[sk].color : '#4285f4') + 'BB',
+                            borderColor    : series[sk] ? series[sk].color : '#4285f4',
+                            borderWidth    : 1.5,
+                            borderRadius   : 2,
+                        }]
+                    },
+                    options: {
+                        responsive         : true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend : { display: false },
+                            tooltip: { callbacks: { label: function(ctx){ return ' ' + (ctx.raw !== null ? self.formatNum(ctx.raw) : '—'); } } }
+                        },
+                        scales: {
+                            x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
+                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
+                        }
+                    }
+                };
+            }
+
+            if (!chartConfig) { return; }
+
+            self.chartInstance = new Chart(ctx, chartConfig);
         },
 
         // ----------------------------------------------------------------
-        // Sync (unchanged)
+        // Build Table
+        // ----------------------------------------------------------------
+
+        buildTable: function(pd){
+            var self   = this;
+            var dates  = (pd.data.dates || []).slice();
+            var series = pd.data.series || {};
+            var keys   = Object.keys(series);
+
+            if (!dates.length || !keys.length) {
+                $('#oy-perf-table-wrap').hide();
+                return;
+            }
+
+            if (!self.sortAsc) { dates.reverse(); }
+
+            var $thead = $('#oy-perf-table-head');
+            var $tfoot = $('#oy-perf-table-foot');
+            var headHtml = '<tr><th>Fecha</th>';
+            $.each(keys, function(i, k){ headHtml += '<th style="color:'+series[k].color+';">'+self.escHtml(series[k].label)+'</th>'; });
+            headHtml += '</tr>';
+            $thead.html(headHtml);
+
+            var bodyHtml = '';
+            $.each(dates, function(i, d){
+                bodyHtml += '<tr><td><strong>'+d+'</strong></td>';
+                $.each(keys, function(j, k){
+                    var v = series[k].data[d];
+                    bodyHtml += '<td>'+(v !== undefined ? self.formatNum(v) : '—')+'</td>';
+                });
+                bodyHtml += '</tr>';
+            });
+            $('#oy-perf-table-body').html(bodyHtml);
+
+            var footHtml = '<tr><th>TOTAL</th>';
+            $.each(keys, function(i, k){ footHtml += '<th>'+self.formatNum(series[k].total)+'</th>'; });
+            footHtml += '</tr>';
+            $tfoot.html(footHtml);
+
+            $('#oy-perf-table-wrap').show();
+        },
+
+        // ----------------------------------------------------------------
+        // CSV Export
+        // ----------------------------------------------------------------
+
+        exportCSV: function(pd){
+            var dates  = (pd.data.dates || []).slice().sort();
+            var series = pd.data.series || {};
+            var keys   = Object.keys(series);
+            if (!dates.length || !keys.length) { return; }
+
+            var header = ['Fecha'].concat(keys.map(function(k){ return series[k].label; })).join(',');
+            var rows   = [header];
+
+            $.each(dates, function(i, d){
+                var row = [d];
+                $.each(keys, function(j, k){
+                    var v = series[k].data[d];
+                    row.push(v !== undefined ? v : 0);
+                });
+                rows.push(row.join(','));
+            });
+
+            var totals = ['TOTAL'];
+            $.each(keys, function(i, k){ totals.push(series[k].total); });
+            rows.push(totals.join(','));
+
+            var blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+            var url  = URL.createObjectURL(blob);
+            var a    = document.createElement('a');
+            a.href     = url;
+            a.download = 'gmb-performance-' + (pd.period ? pd.period.label.replace(/[^a-z0-9]/gi,'_') : 'export') + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        },
+
+        // ----------------------------------------------------------------
+        // Sync metrics
         // ----------------------------------------------------------------
 
         syncMetrics: function(){
@@ -2060,507 +1778,76 @@ buildKeywordsChart: function(aggregated){
         },
 
         // ----------------------------------------------------------------
-        // Build KPIs / Chart / Table / Comparison (unchanged)
+        // Diagnostic
         // ----------------------------------------------------------------
 
-        buildKPIs: function(pd){
+        diagMetrics: function(){
             var self    = this;
-            var series  = pd.data.series || {};
-            var $kpis   = $('#oy-perf-kpis');
-            $kpis.empty();
+            var $btn    = $('#oy-perf-btn-diag');
+            var $status = $('#oy-perf-diag-status');
 
-            var keys = Object.keys(series);
-            if (!keys.length) {
-                $kpis.html('<p>No hay datos disponibles para el período.</p>');
-            } else {
-                $.each(keys, function(i, k){
-                    var s        = series[k];
-                    var c        = pd.comparison && pd.comparison[k] ? pd.comparison[k] : null;
-                    var chg      = '';
-                    var chgClass = '';
+            $btn.prop('disabled', true);
+            $status.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
+                   .addClass('oy-perf-status--loading')
+                   .html('⏳ Ejecutando diagnóstico...')
+                   .show();
 
-                    if (c && c.prev_total > 0) {
-                        var pct  = ((s.total - c.prev_total) / c.prev_total * 100).toFixed(1);
-                        var sign = pct > 0 ? '+' : '';
-                        chgClass = pct > 0 ? 'oy-perf-kpi__change--up' : (pct < 0 ? 'oy-perf-kpi__change--down' : 'oy-perf-kpi__change--flat');
-                        chg = '<span class="oy-perf-kpi__change '+chgClass+'">'+sign+pct+'%</span>';
-                    } else if (c && c.prev_total === 0 && s.total > 0) {
-                        chg = '<span class="oy-perf-kpi__change oy-perf-kpi__change--up">+∞</span>';
-                    }
-
-                    $kpis.append(
-                        '<div class="oy-perf-kpi" style="border-top:3px solid '+s.color+';">' +
-                            '<div class="oy-perf-kpi__label">'+self.escHtml(s.label)+'</div>' +
-                            '<div class="oy-perf-kpi__value">'+self.formatNum(s.total)+chg+'</div>' +
-                            '<div class="oy-perf-kpi__meta">Prom: '+s.avg+' / día &nbsp;|&nbsp; Máx: '+self.formatNum(s.max)+'</div>' +
-                        '</div>'
-                    );
-                });
-            }
-
-            $kpis.show();
-        },
-
-
-// ----------------------------------------------------------------
-        // Chart metric selector helper
-        // ----------------------------------------------------------------
-
-        updateChartMetricSelector: function(pd, chartType){
-            var self    = this;
-            var series  = pd.data.series || {};
-            var $sel    = $('#oy-perf-single-metric');
-            var $lbl    = $('#oy-perf-chart-metric-label');
-            var $pieBdg = $('#oy-perf-chart-pie-badge');
-            var isPie   = (chartType === 'pie' || chartType === 'doughnut');
-
-            if (isPie) {
-                $lbl.hide();
-                $sel.hide();
-                $pieBdg.show();
-            } else {
-                $pieBdg.hide();
-                // Rebuild options from currently loaded series
-                var keys       = Object.keys(series);
-                var currentVal = $sel.val();
-                var opts       = '';
-                $.each(keys, function(i, k){
-                    opts += '<option value="'+self.escHtml(k)+'">'+self.escHtml(series[k].label)+'</option>';
-                });
-                $sel.html(opts);
-                // Restore previous selection if still valid in the new series set
-                if (currentVal && series[currentVal]) {
-                    $sel.val(currentVal);
-                } else if (keys.length) {
-                    $sel.val(keys[0]);
-                }
-                $lbl.show();
-                $sel.show();
-            }
-        },
-
-            
-
-buildChart: function(pd, chartType){
-            var self       = this;
-            var allDates   = pd.data.dates  || [];
-            var allSeries  = pd.data.series || {};
-            var $wrap      = $('#oy-perf-chart-wrap');
-            var $title     = $('#oy-perf-chart-title');
-            var $sub       = $('#oy-perf-chart-subtitle');
-            var $nodata    = $('#oy-perf-chart-nodata');
-            var $container = $('#oy-perf-chart-container');
-
-            // Reset nodata/canvas visibility
-            $nodata.hide();
-            $container.show();
-            $sub.hide();
-
-            if (!Object.keys(allSeries).length) {
-                if (self.chartInstance) { self.chartInstance.destroy(); self.chartInstance = null; }
-                return;
-            }
-
-            // ── Guard: Chart.js no cargado aún ──────────────────────────────
-            if (typeof Chart === 'undefined') {
-                if (typeof waitForChart === 'function') {
-                    waitForChart(function(){ self.buildChart(pd, chartType); });
-                } else {
-                    console.warn('[OyPerf] Chart.js no disponible (buildChart).');
-                }
-                return;
-            }
-
-            // ── Actualizar el selector de métrica única en la cabecera ───────
-            self.updateChartMetricSelector(pd, chartType);
-
-            // ── Filtrar series según tipo de gráfico ─────────────────────────
-            var series = {};
-            var dates  = allDates;
-            var isPie  = (chartType === 'pie' || chartType === 'doughnut');
-
-            if (isPie) {
-                // Torta/Dona: SOLO las 4 métricas de impresiones (móvil vs escritorio)
-                var impKeys = [
-                    'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
-                    'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
-                    'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
-                    'BUSINESS_IMPRESSIONS_MOBILE_SEARCH'
-                ];
-                $.each(impKeys, function(i, k){
-                    if (allSeries[k]) { series[k] = allSeries[k]; }
-                });
-
-                if (!Object.keys(series).length) {
-                    // Ninguna impresión seleccionada → aviso, sin canvas
-                    if (self.chartInstance) { self.chartInstance.destroy(); self.chartInstance = null; }
-                    $nodata.show();
-                    $container.hide();
+            $.post(self.ajaxUrl, {
+                action  : 'oy_gmb_perf_diagnostic',
+                nonce   : self.nonce,
+                post_id : self.postId,
+            }, function(resp){
+                $btn.prop('disabled', false);
+                if (!resp.success) {
+                    $status.removeClass('oy-perf-status--loading')
+                           .addClass('oy-perf-status--error')
+                           .html('❌ Error: ' + self.escHtml(resp.data.message || 'Error desconocido'));
                     return;
                 }
-            } else {
-                // Barras/Líneas: UN solo indicador seleccionado en el dropdown
-                var selectedKey = $('#oy-perf-single-metric').val();
-                if (!selectedKey || !allSeries[selectedKey]) {
-                    selectedKey = Object.keys(allSeries)[0] || '';
-                }
-                if (!selectedKey) { return; }
-                series[selectedKey] = allSeries[selectedKey];
-            }
 
-            // ── Destruir instancia anterior ──────────────────────────────────
-            if (self.chartInstance) {
-                self.chartInstance.destroy();
-                self.chartInstance = null;
-            }
+                var d = resp.data.diagnostic || {};
+                var rows = [];
+                rows.push('<strong>🔍 Diagnóstico de API de Rendimiento</strong>');
+                rows.push('<strong>Configuración:</strong>');
+                rows.push('• gmb_location_id almacenado: <code>' + self.escHtml(d.gmb_location_id_stored || '—') + '</code>');
+                rows.push('• parent_business_id: <code>' + (d.parent_business_id || '—') + '</code>');
+                rows.push('<strong>OAuth:</strong>');
+                rows.push('• _gmb_connected: <code>' + self.escHtml(d.gmb_connected_flag || '—') + '</code>');
+                rows.push('• Refresh token: <code>' + self.escHtml(d.has_refresh_token || '—') + '</code>');
+                rows.push('• Token expira: <code>' + self.escHtml(d.token_expires_at || '—') + '</code>');
+                rows.push('• Token expirado: <code>' + self.escHtml(d.token_expired_now || '—') + '</code>');
+                rows.push('<strong>Resultado API:</strong>');
+                rows.push('• Endpoint: <code style="font-size:11px;">' + self.escHtml(d.test_endpoint || '—') + '</code>');
+                rows.push('• Resultado: <code>' + self.escHtml(d.api_result || '—') + '</code>');
 
-            var ctx = document.getElementById('oy-perf-chart');
-            if (!ctx) { return; }
-
-            var chartConfig = null;
-            var sk          = Object.keys(series)[0] || '';
-            var skLabel     = (sk && series[sk]) ? series[sk].label : '';
-
-            // --- PIE / DOUGHNUT: distribución móvil vs escritorio -----------
-            if (isPie) {
-                var pieLabels = [];
-                var pieValues = [];
-                var pieColors = [];
-                $.each(series, function(k, s){
-                    pieLabels.push(s.label);
-                    pieValues.push(s.total);
-                    pieColors.push(s.color);
-                });
-
-                $title.text('Distribución Móvil vs Escritorio');
-                $sub.text('Total del período seleccionado').show();
-                $('#oy-perf-chart-container').css('height', '300px');
-
-                chartConfig = {
-                    type : chartType,
-                    data : {
-                        labels  : pieLabels,
-                        datasets: [{
-                            data           : pieValues,
-                            backgroundColor: pieColors.map(function(c){ return c + 'CC'; }),
-                            borderColor    : pieColors,
-                            borderWidth    : 2,
-                        }]
-                    },
-                    options: {
-                        responsive         : true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                position: 'right',
-                                labels  : { boxWidth: 14, padding: 10, font: { size: 11 } }
-                            },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(ctx){
-                                        var total = ctx.dataset.data.reduce(function(a,b){ return a+b; }, 0);
-                                        var pct   = total > 0 ? (ctx.raw / total * 100).toFixed(1) : 0;
-                                        return ' ' + ctx.label + ': ' + self.formatNum(ctx.raw) + ' (' + pct + '%)';
-                                    }
-                                }
-                            }
-                        }
+                if (d.error_code) {
+                    rows.push('• Código de error: <code>' + self.escHtml(d.error_code) + '</code>');
+                    rows.push('• Mensaje: ' + self.escHtml(d.error_message || '—'));
+                    if (d.http_code) rows.push('• HTTP Code: <code>' + d.http_code + '</code>');
+                    if (d.raw_body)  rows.push('• Raw body: <code style="font-size:10px;">' + self.escHtml(d.raw_body) + '</code>');
+                } else if (d.has_outer_key) {
+                    rows.push('• has_outer_key: <code>' + self.escHtml(d.has_outer_key) + '</code>');
+                    rows.push('• outer_count: <code>' + (d.outer_count || 0) + '</code>');
+                    rows.push('• inner_series_count: <code>' + (d.inner_series_count || 0) + '</code>');
+                    if (d.first_metric) {
+                        rows.push('• first_metric: <code>' + self.escHtml(d.first_metric) + '</code>');
+                        rows.push('• datedValues_count: <code>' + (d.datedValues_count || 0) + '</code>');
+                        rows.push('• value es string: <code>' + self.escHtml(d.value_field_is_string || '—') + '</code>');
                     }
-                };
-            }
-
-            // --- BARRAS POR MES ---------------------------------------------
-            else if (chartType === 'bar_month') {
-                if (!dates.length) { return; }
-
-                var monthMap  = {};
-                var monthList = [];
-                $.each(dates, function(i, d){
-                    var ym = d.substring(0, 7);
-                    if (!monthMap[ym]) { monthMap[ym] = {}; monthList.push(ym); }
-                    $.each(series, function(k, s){
-                        monthMap[ym][k] = (monthMap[ym][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
-                    });
-                });
-
-                var monthLabels = monthList.map(function(ym){
-                    var parts  = ym.split('-');
-                    var mNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-                    return mNames[parseInt(parts[1],10)-1] + ' ' + parts[0];
-                });
-
-                var datasets = [];
-                $.each(series, function(k, s){
-                    datasets.push({
-                        label          : s.label,
-                        data           : monthList.map(function(ym){ return monthMap[ym][k] || 0; }),
-                        backgroundColor: s.color + 'CC',
-                        borderColor    : s.color,
-                        borderWidth    : 1.5,
-                        borderRadius   : 4,
-                    });
-                });
-
-                $title.text(skLabel + ' — por mes');
-                $('#oy-perf-chart-container').css('height', '280px');
-                chartConfig = {
-                    type : 'bar',
-                    data : { labels: monthLabels, datasets: datasets },
-                    options: {
-                        responsive         : true,
-                        maintainAspectRatio: false,
-                        interaction        : { mode: 'index', intersect: false },
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(ctx){ return ' ' + self.formatNum(ctx.raw); }
-                                }
-                            }
-                        },
-                        scales: {
-                            x: { ticks: { maxRotation: 45 } },
-                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
-                        }
+                    if (d.diagnosis) {
+                        rows.push('⚠️ <strong>Diagnóstico: ' + self.escHtml(d.diagnosis) + '</strong>');
                     }
-                };
-            }
-
-            // --- BARRAS POR AÑO ---------------------------------------------
-            else if (chartType === 'bar_year') {
-                if (!dates.length) { return; }
-
-                var yearMap  = {};
-                var yearList = [];
-                $.each(dates, function(i, d){
-                    var yr = d.substring(0, 4);
-                    if (!yearMap[yr]) { yearMap[yr] = {}; yearList.push(yr); }
-                    $.each(series, function(k, s){
-                        yearMap[yr][k] = (yearMap[yr][k] || 0) + (s.data[d] !== undefined ? s.data[d] : 0);
-                    });
-                });
-
-                var datasets = [];
-                $.each(series, function(k, s){
-                    datasets.push({
-                        label          : s.label,
-                        data           : yearList.map(function(yr){ return yearMap[yr][k] || 0; }),
-                        backgroundColor: s.color + 'CC',
-                        borderColor    : s.color,
-                        borderWidth    : 1.5,
-                        borderRadius   : 4,
-                    });
-                });
-
-                $title.text(skLabel + ' — por año');
-                $('#oy-perf-chart-container').css('height', '280px');
-                chartConfig = {
-                    type : 'bar',
-                    data : { labels: yearList, datasets: datasets },
-                    options: {
-                        responsive         : true,
-                        maintainAspectRatio: false,
-                        interaction        : { mode: 'index', intersect: false },
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(ctx){ return ' ' + self.formatNum(ctx.raw); }
-                                }
-                            }
-                        },
-                        scales: {
-                            x: {},
-                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
-                        }
-                    }
-                };
-            }
-
-            // --- LÍNEAS / BARRAS POR DÍA ------------------------------------
-            else {
-                if (!dates.length) { return; }
-
-                var datasets = [];
-                $.each(series, function(k, s){
-                    var values = dates.map(function(d){ return s.data[d] !== undefined ? s.data[d] : null; });
-                    datasets.push({
-                        label          : s.label,
-                        data           : values,
-                        borderColor    : s.color,
-                        backgroundColor: chartType === 'bar' ? s.color + 'BB' : s.color + '22',
-                        borderWidth    : 2,
-                        tension        : 0.3,
-                        fill           : chartType === 'line',
-                        pointRadius    : dates.length > 60 ? 1 : 3,
-                        spanGaps       : true,
-                    });
-                });
-
-                $title.text(skLabel + (chartType === 'bar' ? ' — por día' : ' — evolución'));
-                $('#oy-perf-chart-container').css('height', '280px');
-                chartConfig = {
-                    type : chartType,
-                    data : { labels: dates, datasets: datasets },
-                    options: {
-                        responsive         : true,
-                        maintainAspectRatio: false,
-                        interaction        : { mode: 'index', intersect: false },
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(ctx){
-                                        return ' ' + (ctx.raw !== null ? self.formatNum(ctx.raw) : '—');
-                                    }
-                                }
-                            }
-                        },
-                        scales: {
-                            x: { ticks: { maxTicksLimit: 20, maxRotation: 45 } },
-                            y: { beginAtZero: true, ticks: { callback: function(v){ return self.formatNum(v); } } }
-                        }
-                    }
-                };
-            }
-
-            if (!chartConfig) { return; }
-
-            self.chartInstance = new Chart(ctx, chartConfig);
-            $wrap.show();
-        },
-
-        buildTable: function(pd){
-            var self   = this;
-            var dates  = (pd.data.dates || []).slice();
-            var series = pd.data.series || {};
-            var keys   = Object.keys(series);
-
-            if (!dates.length || !keys.length) {
-                $('#oy-perf-table-wrap').hide();
-                return;
-            }
-
-            if (!self.sortAsc) { dates.reverse(); }
-
-            var $thead = $('#oy-perf-table-head');
-            var $tfoot = $('#oy-perf-table-foot');
-            var headHtml = '<tr><th>Fecha</th>';
-            $.each(keys, function(i, k){ headHtml += '<th style="color:'+series[k].color+';">'+self.escHtml(series[k].label)+'</th>'; });
-            headHtml += '</tr>';
-            $thead.html(headHtml);
-
-            var bodyHtml = '';
-            $.each(dates, function(i, d){
-                bodyHtml += '<tr><td><strong>'+d+'</strong></td>';
-                $.each(keys, function(j, k){
-                    var v = series[k].data[d];
-                    bodyHtml += '<td>'+(v !== undefined ? self.formatNum(v) : '—')+'</td>';
-                });
-                bodyHtml += '</tr>';
-            });
-            $('#oy-perf-table-body').html(bodyHtml);
-
-            var footHtml = '<tr><th>TOTAL</th>';
-            $.each(keys, function(i, k){ footHtml += '<th>'+self.formatNum(series[k].total)+'</th>'; });
-            footHtml += '</tr>';
-            $tfoot.html(footHtml);
-
-            $('#oy-perf-table-wrap').show();
-        },
-
-        buildComparison: function(pd){
-            var self       = this;
-            var series     = pd.data.series || {};
-            var comparison = pd.comparison || {};
-            var $grid      = $('#oy-perf-comparison-grid');
-            var $wrap      = $('#oy-perf-comparison-wrap');
-            $grid.empty();
-
-            // Gate on the comparison toggle checkbox
-            var compareEnabled = $('#oy-perf-compare-toggle').is(':checked');
-            if (!compareEnabled) {
-                $wrap.hide();
-                return;
-            }
-
-            var hasComp = Object.keys(comparison).length > 0;
-            if (!hasComp) {
-                $wrap.hide();
-                return;
-            }
-
-            $.each(series, function(k, s){
-                var c = comparison[k];
-                if (!c) { return; }
-
-                var prev    = c.prev_total || 0;
-                var curr    = s.total || 0;
-                var chgHtml = '';
-
-                if (prev > 0) {
-                    var pct   = ((curr - prev) / prev * 100).toFixed(1);
-                    var sign  = pct > 0 ? '+' : '';
-                    var cls   = pct > 0 ? 'up' : (pct < 0 ? 'down' : 'flat');
-                    var arrow = pct > 0 ? '▲' : (pct < 0 ? '▼' : '→');
-                    chgHtml = '<span class="oy-perf-comp__arrow oy-perf-comp__arrow--'+cls+'">'+arrow+' '+sign+pct+'%</span>';
-                } else if (curr > 0) {
-                    chgHtml = '<span class="oy-perf-comp__arrow oy-perf-comp__arrow--up">▲ Nuevo</span>';
-                } else {
-                    chgHtml = '<span class="oy-perf-comp__arrow oy-perf-comp__arrow--flat">→ Sin cambio</span>';
                 }
 
-                $grid.append(
-                    '<div class="oy-perf-comp-card" style="border-left:4px solid '+s.color+';">' +
-                        '<div class="oy-perf-comp__label">'+self.escHtml(s.label)+'</div>' +
-                        '<div class="oy-perf-comp__values">' +
-                            '<div class="oy-perf-comp__current"><span>Actual</span><strong>'+self.formatNum(curr)+'</strong></div>' +
-                            '<div>'+chgHtml+'</div>' +
-                            '<div class="oy-perf-comp__prev"><span>Anterior</span><strong>'+self.formatNum(prev)+'</strong></div>' +
-                        '</div>' +
-                        '<div class="oy-perf-comp__period">Anterior: '+(c.prev_period || '')+'</div>' +
-                    '</div>'
-                );
+                $status.removeClass('oy-perf-status--loading')
+                       .addClass('oy-perf-status--info')
+                       .html(rows.join('<br>'));
+            }).fail(function(xhr){
+                $btn.prop('disabled', false);
+                $status.removeClass('oy-perf-status--loading')
+                       .addClass('oy-perf-status--error')
+                       .html('❌ Error de conexión: ' + (xhr.statusText || 'unknown'));
             });
-
-            $wrap.show();
-        },
-
-        // ----------------------------------------------------------------
-        // CSV Export (unchanged)
-        // ----------------------------------------------------------------
-
-        exportCSV: function(pd){
-            var dates  = (pd.data.dates || []).slice().sort();
-            var series = pd.data.series || {};
-            var keys   = Object.keys(series);
-            if (!dates.length || !keys.length) { return; }
-
-            var header = ['Fecha'].concat(keys.map(function(k){ return series[k].label; })).join(',');
-            var rows   = [header];
-
-            $.each(dates, function(i, d){
-                var row = [d];
-                $.each(keys, function(j, k){
-                    var v = series[k].data[d];
-                    row.push(v !== undefined ? v : 0);
-                });
-                rows.push(row.join(','));
-            });
-
-            var totals = ['TOTAL'];
-            $.each(keys, function(i, k){ totals.push(series[k].total); });
-            rows.push(totals.join(','));
-
-            var blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-            var url  = URL.createObjectURL(blob);
-            var a    = document.createElement('a');
-            a.href     = url;
-            a.download = 'gmb-performance-' + (pd.period ? pd.period.label.replace(/[^a-z0-9]/gi,'_') : 'export') + '.csv';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
         },
 
         // ----------------------------------------------------------------
@@ -2575,21 +1862,12 @@ buildChart: function(pd, chartType){
                .html((icons[type]||'') + ' ' + msg)
                .show();
         },
-        hideStatus: function(){ $('#oy-perf-status').hide(); },
 
-        showKeywordsStatus: function(type, msg){
-            var icons = { loading: '⏳', error: '❌', info: 'ℹ️', success: '✅' };
-            var $el = $('#oy-perf-keywords-status');
-            $el.removeClass('oy-perf-status--loading oy-perf-status--error oy-perf-status--info oy-perf-status--success')
-               .addClass('oy-perf-status--'+type)
-               .html((icons[type]||'') + ' ' + msg)
-               .show();
-        },
-        hideKeywordsStatus: function(){ $('#oy-perf-keywords-status').hide(); },
+        hideStatus: function(){ $('#oy-perf-status').hide(); },
 
         hideResults: function(){
             $('#oy-perf-view-toggle').hide();
-            $('#oy-perf-kpis, #oy-perf-chart-wrap, #oy-perf-table-wrap, #oy-perf-comparison-wrap, #oy-perf-footer').hide();
+            $('#oy-perf-kpis, #oy-perf-chart-wrap, #oy-perf-table-wrap, #oy-perf-footer').hide();
         },
 
         formatNum: function(n){
@@ -2636,11 +1914,10 @@ JS;
     padding:10px 14px; margin-bottom:14px;
 }
 .oy-perf-toolbar__left  { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
-.oy-perf-toolbar__right { display:flex; gap:8px; }
+.oy-perf-toolbar__right { display:flex; gap:8px; flex-wrap:wrap; }
 .oy-perf-field-group { display:flex; align-items:center; gap:6px; }
 .oy-perf-field-group label { font-weight:600; white-space:nowrap; }
 .oy-perf-select { min-width:150px; }
-.oy-perf-date-input { width:130px; }
 
 /* Metric Pills */
 .oy-perf-metric-selector {
@@ -2689,6 +1966,7 @@ JS;
 .oy-perf-kpi__label { font-size:11px; color:#666; margin-bottom:4px; line-height:1.3; }
 .oy-perf-kpi__value { font-size:24px; font-weight:700; color:#1e1e1e; line-height:1.2; }
 .oy-perf-kpi__meta  { font-size:11px; color:#888; margin-top:4px; }
+.oy-perf-kpi__prev  { font-size:11px; color:#999; margin-top:2px; }
 .oy-perf-kpi__change {
     font-size:13px; font-weight:600; margin-left:6px;
     vertical-align:middle;
@@ -2710,10 +1988,6 @@ JS;
 .oy-perf-badge {
     background:#e8f0fe; color:#1a73e8; padding:2px 10px;
     border-radius:20px; font-size:12px; font-weight:600;
-}
-.oy-perf-chart-subtitle {
-    background:#fce8b2; color:#b06000; padding:2px 10px;
-    border-radius:20px; font-size:12px; font-weight:500;
 }
 .oy-perf-chart-container { position:relative; height:280px; }
 .oy-perf-chart-container canvas { max-height:100%; }
@@ -2739,14 +2013,6 @@ JS;
 }
 .oy-perf-view-btn--active:hover { background:#3367d6; border-color:#3367d6; }
 
-/* Comparison toggle label */
-.oy-perf-toggle-label {
-    display:inline-flex; align-items:center; gap:5px;
-    cursor:pointer; font-size:12px; color:#444; font-weight:500;
-    white-space:nowrap;
-}
-.oy-perf-toggle-label input[type="checkbox"] { cursor:pointer; margin:0; }
-
 /* Table */
 .oy-perf-table-wrap {
     background:#fff; border:1px solid #ddd; border-radius:6px;
@@ -2761,66 +2027,6 @@ JS;
 .oy-perf-table-scroll { overflow-x:auto; max-height:400px; overflow-y:auto; }
 .oy-perf-table th, .oy-perf-table td { padding:6px 10px; white-space:nowrap; }
 .oy-perf-table tfoot th { background:#f6f7f7; font-weight:700; }
-
-/* Comparison */
-.oy-perf-comparison-wrap {
-    background:#fff; border:1px solid #ddd; border-radius:6px;
-    padding:14px; margin-bottom:16px;
-}
-.oy-perf-comparison-wrap h4 { margin:0 0 12px; font-size:14px; font-weight:600; }
-.oy-perf-comparison-grid {
-    display:grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px,1fr));
-    gap:10px;
-}
-.oy-perf-comp-card {
-    background:#f9f9f9; border:1px solid #e0e0e0; border-radius:6px;
-    padding:10px 12px;
-}
-.oy-perf-comp__label { font-size:11px; color:#555; margin-bottom:6px; font-weight:600; }
-.oy-perf-comp__values { display:flex; align-items:center; gap:10px; justify-content:space-between; }
-.oy-perf-comp__current, .oy-perf-comp__prev { text-align:center; }
-.oy-perf-comp__current span, .oy-perf-comp__prev span { font-size:10px; color:#888; display:block; }
-.oy-perf-comp__current strong { font-size:18px; font-weight:700; color:#1e1e1e; }
-.oy-perf-comp__prev strong    { font-size:14px; font-weight:600; color:#666; }
-.oy-perf-comp__arrow { font-size:13px; font-weight:700; }
-.oy-perf-comp__arrow--up   { color:#2e7d32; }
-.oy-perf-comp__arrow--down { color:#c62828; }
-.oy-perf-comp__arrow--flat { color:#999; }
-.oy-perf-comp__period { font-size:10px; color:#999; margin-top:6px; }
-
-/* Keywords */
-.oy-perf-keywords-wrap {
-    background:#fff; border:1px solid #ddd; border-radius:6px;
-    padding:14px; margin-bottom:16px;
-}
-
-/* Month-range selector */
-.oy-perf-select-month { min-width:120px; }
-
-/* Keyword KPI top 3 */
-.oy-kw-kpis {
-    display:grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap:8px; margin-bottom:12px;
-}
-.oy-kw-kpi {
-    background:#f9f9f9; border:1px solid #e0e0e0; border-radius:6px;
-    padding:10px 12px; text-align:center;
-}
-.oy-kw-kpi__rank    { font-size:11px; color:#999; font-weight:700; margin-bottom:4px; }
-.oy-kw-kpi__keyword {
-    font-size:12px; font-weight:600; color:#333;
-    margin-bottom:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-}
-.oy-kw-kpi__value   { font-size:20px; font-weight:700; color:#1e1e1e; }
-.oy-kw-kpi__value span { font-size:11px; color:#888; font-weight:400; }
-
-/* Keyword chart wrapper */
-.oy-kw-chart-wrap {
-    background:#f9f9f9; border:1px solid #e8e8e8; border-radius:6px;
-    padding:10px 12px; margin-bottom:12px;
-}
 
 /* Footer */
 .oy-perf-footer {
@@ -2847,7 +2053,8 @@ JS;
     background:#fce8b2; color:#b06000;
 }
 
-
+/* Month-range selector */
+.oy-perf-select-month { min-width:120px; }
 ';
     }
 }
