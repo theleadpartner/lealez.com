@@ -71,19 +71,40 @@ public function enqueue_scripts( $hook ) {
         return;
     }
 
-    // ── Chart.js 4 desde cdnjs ──
+    // ── Chart.js 4.4.3 — LOCAL (no CDN) ──────────────────────────────────
+    // El CDN externo puede estar bloqueado por el firewall/CSP del servidor.
+    // Usar el archivo bundleado dentro del plugin garantiza que siempre cargue.
     if ( ! wp_script_is( 'chartjs-v4', 'registered' ) ) {
+        if ( defined( 'LEALEZ_ASSETS_URL' ) ) {
+            $chartjs_url = LEALEZ_ASSETS_URL . 'js/vendor/chart.umd.min.js';
+        } else {
+            $plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
+            $chartjs_url = plugins_url( 'assets/js/vendor/chart.umd.min.js', $plugin_root . '/index.php' );
+        }
+
         wp_register_script(
             'chartjs-v4',
-            'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.3/chart.umd.min.js',
+            $chartjs_url,
             array(),
             '4.4.3',
             true
         );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            // Verificar que el archivo existe en disco
+            if ( defined( 'LEALEZ_PLUGIN_PATH' ) ) {
+                $chartjs_disk = LEALEZ_PLUGIN_PATH . 'assets/js/vendor/chart.umd.min.js';
+            } else {
+                $plugin_root  = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
+                $chartjs_disk = $plugin_root . '/assets/js/vendor/chart.umd.min.js';
+            }
+            error_log( '[OyPerf] Chart.js URL local: ' . $chartjs_url );
+            error_log( '[OyPerf] Chart.js existe en disco: ' . ( file_exists( $chartjs_disk ) ? 'SÍ ✅' : 'NO ❌ — falta assets/js/vendor/chart.umd.min.js' ) );
+        }
     }
     wp_enqueue_script( 'chartjs-v4' );
 
-    // ── waitForChart guard ──
+    // ── waitForChart guard (fallback por si otra lib redefine Chart) ──
     $guard_js = 'if(!window.waitForChart){' .
         'window._chartJSQueue=window._chartJSQueue||[];' .
         'window.waitForChart=function(fn){' .
@@ -103,31 +124,17 @@ public function enqueue_scripts( $hook ) {
     '}';
     wp_add_inline_script( 'chartjs-v4', $guard_js, 'before' );
 
-    // ── Resolución de URL del JS externo ──
+    // ── JS del dashboard de rendimiento ──────────────────────────────────
     if ( defined( 'LEALEZ_ASSETS_URL' ) ) {
         $js_url = LEALEZ_ASSETS_URL . 'js/oy-perf-dashboard.js';
     } else {
-        // Sube 4 niveles desde este archivo hasta la raíz del plugin:
-        // metaboxes/ → cpts/ → includes/ → plugin-root/
         $plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
         $js_url      = plugins_url( 'assets/js/oy-perf-dashboard.js', $plugin_root . '/index.php' );
     }
 
-    // ── DEBUG PHP — visible en wp-content/debug.log cuando WP_DEBUG=true ──
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[OyPerf] enqueue_scripts() ejecutado para post #' . $post->ID );
-        error_log( '[OyPerf] LEALEZ_ASSETS_URL definida: ' . ( defined( 'LEALEZ_ASSETS_URL' ) ? 'SÍ = ' . LEALEZ_ASSETS_URL : 'NO' ) );
-        error_log( '[OyPerf] JS URL registrada: ' . $js_url );
-
-        // Verificar si el archivo existe en disco
-        if ( defined( 'LEALEZ_PLUGIN_PATH' ) ) {
-            $js_disk = LEALEZ_PLUGIN_PATH . 'assets/js/oy-perf-dashboard.js';
-        } else {
-            $plugin_root = dirname( dirname( dirname( dirname( __FILE__ ) ) ) );
-            $js_disk     = $plugin_root . '/assets/js/oy-perf-dashboard.js';
-        }
-        error_log( '[OyPerf] Ruta en disco: ' . $js_disk );
-        error_log( '[OyPerf] Archivo existe en disco: ' . ( file_exists( $js_disk ) ? 'SÍ ✅' : 'NO ❌ — ESTA ES LA CAUSA DEL PROBLEMA' ) );
+        error_log( '[OyPerf] enqueue_scripts() — post #' . $post->ID );
+        error_log( '[OyPerf] Dashboard JS URL: ' . $js_url );
     }
 
     wp_enqueue_script(
