@@ -371,18 +371,11 @@ public function add_meta_boxes() {
         'default'
     );
 
-// 5. Business Hours
-    // Registro garantizado con el fallback del CPT. Si class-oy-location-hours-metabox.php
-    // está disponible, su propio add_action('add_meta_boxes') sobreescribe este registro
-    // con el callback completo (botón de sync GMB + nonce AJAX).
-    add_meta_box(
-        'oy_location_hours',
-        __( 'Horarios de Atención', 'lealez' ),
-        array( $this, 'render_hours_meta_box' ),
-        $this->post_type,
-        'normal',
-        'default'
-    );
+// 5. Business Hours → GESTIONADO EXCLUSIVAMENTE por OY_Location_Hours_Metabox
+    // Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
+    // La clase se instancia en el constructor (ver arriba) y registra su propio
+    // add_meta_box('oy_location_hours', ...) vía add_action('add_meta_boxes').
+    // NO registrar aquí para evitar duplicación que bloquea el render del metabox.
 
     // 6. Attributes and Features
     add_meta_box(
