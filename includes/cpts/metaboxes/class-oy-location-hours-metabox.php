@@ -104,6 +104,124 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 		'gimnasio'    => array( 0, 0, 0, 0, 0, 15, 55, 75, 65, 45, 35, 35, 30, 30, 35, 40, 55, 70, 65, 50, 30, 10,  0,  0 ),
 	);
 
+		/**
+	 * Etiquetas legibles de plantillas automáticas.
+	 *
+	 * @var array
+	 */
+	private static $template_labels = array(
+		'comercio'    => 'Comercio / Tienda',
+		'restaurante' => 'Restaurante',
+		'cafe'        => 'Café / Desayunos',
+		'nocturno'    => 'Nocturno / Bar',
+		'continuo'    => 'Horario continuo',
+		'oficina'     => 'Oficina / Servicios',
+		'gimnasio'    => 'Gimnasio / Fitness',
+	);
+
+		/**
+	 * Determina automáticamente la plantilla horaria más coherente
+	 * según el mix de indicadores y el comportamiento semanal.
+	 *
+	 * @param array $day_weights     Pesos por día.
+	 * @param array $group_breakdown Composición por grupos y día.
+	 * @return string
+	 */
+	private function infer_auto_template( array $day_weights, array $group_breakdown ) {
+		$weekend_days = array( 'friday', 'saturday', 'sunday' );
+		$weekday_days = array( 'monday', 'tuesday', 'wednesday', 'thursday' );
+
+		$weekend_score = 0.0;
+		$weekday_score = 0.0;
+
+		foreach ( $weekend_days as $d ) {
+			$weekend_score += isset( $day_weights[ $d ] ) ? (float) $day_weights[ $d ] : 0.0;
+		}
+		foreach ( $weekday_days as $d ) {
+			$weekday_score += isset( $day_weights[ $d ] ) ? (float) $day_weights[ $d ] : 0.0;
+		}
+
+		$totals = array(
+			'high_intent'  => 0.0,
+			'visit_intent' => 0.0,
+			'research'     => 0.0,
+			'impressions'  => 0.0,
+		);
+
+		foreach ( $group_breakdown as $day => $groups ) {
+			if ( ! is_array( $groups ) ) {
+				continue;
+			}
+			foreach ( $totals as $group_key => $unused ) {
+				$totals[ $group_key ] += isset( $groups[ $group_key ] ) ? (float) $groups[ $group_key ] : 0.0;
+			}
+		}
+
+		$dominant_group = 'impressions';
+		$dominant_value = -1;
+		foreach ( $totals as $group_key => $value ) {
+			if ( $value > $dominant_value ) {
+				$dominant_value = $value;
+				$dominant_group = $group_key;
+			}
+		}
+
+		$weekend_ratio = 0.0;
+		$total_week    = $weekend_score + $weekday_score;
+		if ( $total_week > 0 ) {
+			$weekend_ratio = $weekend_score / $total_week;
+		}
+
+		// Reglas automáticas
+		if ( $weekend_ratio >= 0.52 && $totals['high_intent'] >= max( $totals['research'], $totals['impressions'] ) ) {
+			return 'nocturno';
+		}
+
+		if ( $dominant_group === 'high_intent' && $weekend_ratio >= 0.42 ) {
+			return 'restaurante';
+		}
+
+		if ( $dominant_group === 'research' && $weekday_score >= $weekend_score ) {
+			return 'oficina';
+		}
+
+		if ( $dominant_group === 'visit_intent' && $weekday_score >= $weekend_score ) {
+			return 'comercio';
+		}
+
+		if ( $dominant_group === 'impressions' && $weekday_score >= $weekend_score ) {
+			return 'continuo';
+		}
+
+		if ( $dominant_group === 'high_intent' && $weekday_score > $weekend_score ) {
+			return 'gimnasio';
+		}
+
+		return 'comercio';
+	}
+
+		/**
+	 * Construye automáticamente la distribución horaria para toda la semana
+	 * usando la plantilla inferida.
+	 *
+	 * @param string $template_key Plantilla detectada.
+	 * @return array
+	 */
+	private function build_hours_from_template( $template_key ) {
+		$template_key = isset( self::$templates[ $template_key ] ) ? $template_key : 'comercio';
+		$template     = self::$templates[ $template_key ];
+
+		return array(
+			'monday'    => $template,
+			'tuesday'   => $template,
+			'wednesday' => $template,
+			'thursday'  => $template,
+			'friday'    => $template,
+			'saturday'  => $template,
+			'sunday'    => $template,
+		);
+	}
+
 	public function __construct() {
 		add_action( 'add_meta_boxes', array( $this, 'register_meta_box' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
@@ -147,7 +265,7 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 		}
 		wp_enqueue_script( 'chartjs-v4' );
 
-		wp_register_script( 'oy-busyhours', false, array( 'jquery', 'chartjs-v4' ), '2.0.0', true );
+		wp_register_script( 'oy-busyhours', false, array( 'jquery', 'chartjs-v4' ), '2.1.0', true );
 		wp_enqueue_script( 'oy-busyhours' );
 
 		$saved_raw  = get_post_meta( $post->ID, self::META_KEY, true );
@@ -166,14 +284,14 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 			'oy-busyhours',
 			'oyBusyConfig',
 			array(
-				'postId'        => $post->ID,
-				'nonce'         => wp_create_nonce( self::NONCE_ACTION ),
-				'ajaxUrl'       => admin_url( 'admin-ajax.php' ),
-				'savedData'     => $saved_data,
-				'templates'     => self::$templates,
-				'metricGroups'  => self::$metric_groups,
-				'gmbConnected'  => $gmb_connected,
-				'hasLocationId' => ! empty( $location_id ),
+				'postId'         => $post->ID,
+				'nonce'          => wp_create_nonce( self::NONCE_ACTION ),
+				'ajaxUrl'        => admin_url( 'admin-ajax.php' ),
+				'savedData'      => $saved_data,
+				'metricGroups'   => self::$metric_groups,
+				'templateLabels' => self::$template_labels,
+				'gmbConnected'   => $gmb_connected,
+				'hasLocationId'  => ! empty( $location_id ),
 			)
 		);
 
@@ -196,7 +314,10 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 		$saved_data = ( ! empty( $saved_raw ) ) ? json_decode( $saved_raw, true ) : null;
 		$has_data   = ! empty( $saved_data['day_weights'] );
 
-		$busiest_day = get_post_meta( $post->ID, 'gmb_busiest_day_of_week', true );
+		$busiest_day         = get_post_meta( $post->ID, 'gmb_busiest_day_of_week', true );
+		$auto_template       = isset( $saved_data['auto_template'] ) ? (string) $saved_data['auto_template'] : '';
+		$auto_template_label = isset( self::$template_labels[ $auto_template ] ) ? self::$template_labels[ $auto_template ] : '';
+
 		$day_labels  = array(
 			'monday'    => 'Lunes',
 			'tuesday'   => 'Martes',
@@ -241,6 +362,12 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 								<?php endif; ?>
 							</span>
 						<?php endif; ?>
+
+						<?php if ( $auto_template_label ) : ?>
+							<span class="oy-busy-auto-pill">
+								<?php echo esc_html( 'Curva automática: ' . $auto_template_label ); ?>
+							</span>
+						<?php endif; ?>
 					</div>
 					<div class="oy-busy-computed-header__right">
 						<?php if ( $busiest_day && isset( $day_labels[ $busiest_day ] ) ) : ?>
@@ -255,28 +382,18 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 			<div class="oy-busy-toolbar">
 				<div class="oy-busy-toolbar__left">
 					<div class="oy-busy-field-group">
-						<label for="oy-busy-template-sel">
-							<span class="dashicons dashicons-clock" style="font-size:14px;vertical-align:middle;margin-right:2px;"></span>
-							<?php esc_html_e( 'Forma horaria:', 'lealez' ); ?>
-						</label>
-						<select id="oy-busy-template-sel" class="oy-busy-select">
-							<option value=""><?php esc_html_e( '— Tipo de negocio —', 'lealez' ); ?></option>
-							<option value="comercio"><?php esc_html_e( 'Comercio / Tienda', 'lealez' ); ?></option>
-							<option value="restaurante"><?php esc_html_e( 'Restaurante', 'lealez' ); ?></option>
-							<option value="cafe"><?php esc_html_e( 'Café / Desayunos', 'lealez' ); ?></option>
-							<option value="nocturno"><?php esc_html_e( 'Nocturno / Bar', 'lealez' ); ?></option>
-							<option value="continuo"><?php esc_html_e( 'Horario continuo', 'lealez' ); ?></option>
-							<option value="oficina"><?php esc_html_e( 'Oficina / Servicios', 'lealez' ); ?></option>
-							<option value="gimnasio"><?php esc_html_e( 'Gimnasio / Fitness', 'lealez' ); ?></option>
-						</select>
-					</div>
-
-					<div class="oy-busy-field-group">
 						<label><?php esc_html_e( 'Permanencia estimada:', 'lealez' ); ?></label>
 						<input type="number" id="oy-busy-stay-min" min="5" max="480" step="5" value="45" class="small-text" style="width:60px;">
 						<span>–</span>
 						<input type="number" id="oy-busy-stay-max" min="5" max="480" step="5" value="90" class="small-text" style="width:60px;">
 						<span class="description"><?php esc_html_e( 'min', 'lealez' ); ?></span>
+					</div>
+
+					<div class="oy-busy-field-group oy-busy-field-group--auto">
+						<span class="dashicons dashicons-admin-generic" style="font-size:14px;vertical-align:middle;margin-right:2px;"></span>
+						<span class="description">
+							<?php esc_html_e( 'La distribución horaria se genera automáticamente con base en los indicadores del negocio. Ya no requiere ajuste manual.', 'lealez' ); ?>
+						</span>
 					</div>
 				</div>
 
@@ -332,7 +449,7 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 							<?php esc_html_e( 'Sin datos — calcule el índice desde GMB', 'lealez' ); ?>
 						</div>
 						<div class="oy-busy-status-subtitle" id="oy-busy-status-subtitle">
-							<?php esc_html_e( 'Haga clic en "Calcular índice desde GMB" y luego seleccione la forma horaria para este negocio', 'lealez' ); ?>
+							<?php esc_html_e( 'Haga clic en "Calcular índice desde GMB" para generar automáticamente el comportamiento semanal y la curva horaria.', 'lealez' ); ?>
 						</div>
 					</div>
 
@@ -358,31 +475,11 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 				</div>
 			</div>
 
-			<div class="oy-busy-edit-header">
-				<label class="oy-busy-toggle-wrap">
-					<input type="checkbox" id="oy-busy-edit-toggle">
-					<span class="oy-busy-toggle-label">
-						<span class="dashicons dashicons-edit" style="font-size:14px;vertical-align:middle;margin-right:3px;"></span>
-						<?php esc_html_e( 'Ajustar distribución horaria manualmente', 'lealez' ); ?>
-					</span>
-				</label>
-				<span class="description" style="margin-left:10px;">
-					<?php esc_html_e( 'Modifica hora a hora la curva del día seleccionado (el índice del día no cambia, solo la distribución dentro del día)', 'lealez' ); ?>
-				</span>
-			</div>
-
-			<div id="oy-busy-edit-area" style="display:none;">
-				<div class="oy-busy-sliders-grid" id="oy-busy-sliders-grid"></div>
-				<p class="description" style="margin:6px 0 0;">
-					<?php esc_html_e( 'Los cambios se reflejan en el gráfico en tiempo real. Recuerda guardar cuando termines.', 'lealez' ); ?>
-				</p>
-			</div>
-
 			<div class="oy-busy-footer">
 				<strong><?php esc_html_e( '¿Cómo funciona el Índice de Interés?', 'lealez' ); ?></strong>
-				<?php esc_html_e( 'Se obtienen 90 días de datos de la Performance API y se calcula un score ponderado por día de semana, donde las acciones de alta intención (llamadas, reservas, cómo llegar) pesan más que las impresiones pasivas. El día con mayor score queda en 100 y los demás se normalizan proporcionalmente.', 'lealez' ); ?>
+				<?php esc_html_e( 'Se obtienen 90 días de datos de la Performance API y se calcula un score ponderado por día de semana, donde las acciones de alta intención pesan más que las impresiones pasivas. El día con mayor score queda en 100 y los demás se normalizan proporcionalmente.', 'lealez' ); ?>
 				<br>
-				<em><?php esc_html_e( 'La distribución horaria dentro de cada día no está disponible en ninguna API de Google Business Profile. Se estima mediante plantillas por tipo de negocio.', 'lealez' ); ?></em>
+				<em><?php esc_html_e( 'La curva horaria ya no se ajusta manualmente. Ahora se infiere automáticamente con base en la composición de indicadores y el patrón semanal detectado.', 'lealez' ); ?></em>
 			</div>
 		</div>
 		<?php
@@ -446,8 +543,8 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 			);
 		}
 
-		$dow_map         = array( 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday' );
-		$scores_by_date  = array();
+		$dow_map          = array( 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday' );
+		$scores_by_date   = array();
 		$metrics_received = array();
 
 		$outer_list = isset( $result['multiDailyMetricTimeSeries'] )
@@ -598,10 +695,14 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 			}
 		}
 
+		$auto_template = $this->infer_auto_template( $day_weights, $group_breakdown );
+		$hours         = $this->build_hours_from_template( $auto_template );
+
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 			error_log( '[OyBusyHours] Índice de interés por DOW: ' . wp_json_encode( $day_weights, JSON_UNESCAPED_UNICODE ) );
 			error_log( '[OyBusyHours] Métricas con datos: ' . implode( ', ', $metrics_received ) );
 			error_log( '[OyBusyHours] Días procesados en BD: ' . count( $scores_by_date ) );
+			error_log( '[OyBusyHours] Plantilla automática inferida: ' . $auto_template );
 		}
 
 		$period = array(
@@ -611,14 +712,17 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 
 		wp_send_json_success(
 			array(
-				'day_weights'     => $day_weights,
-				'scores_raw'      => $dow_averages,
-				'group_breakdown' => $group_breakdown,
-				'metrics_used'    => count( $metrics_received ),
-				'metrics_list'    => $metrics_received,
-				'days_processed'  => count( $scores_by_date ),
-				'period'          => $period,
-				'computed_at'     => gmdate( 'Y-m-d\TH:i:s\Z' ),
+				'day_weights'         => $day_weights,
+				'scores_raw'          => $dow_averages,
+				'group_breakdown'     => $group_breakdown,
+				'hours'               => $hours,
+				'auto_template'       => $auto_template,
+				'auto_template_label' => isset( self::$template_labels[ $auto_template ] ) ? self::$template_labels[ $auto_template ] : $auto_template,
+				'metrics_used'        => count( $metrics_received ),
+				'metrics_list'        => $metrics_received,
+				'days_processed'      => count( $scores_by_date ),
+				'period'              => $period,
+				'computed_at'         => gmdate( 'Y-m-d\TH:i:s\Z' ),
 			)
 		);
 	}
@@ -688,17 +792,24 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 			$period['end']   = sanitize_text_field( $peak_data['period']['end'] ?? '' );
 		}
 
+		$auto_template = sanitize_text_field( $peak_data['auto_template'] ?? '' );
+		if ( ! isset( self::$templates[ $auto_template ] ) ) {
+			$auto_template = $this->infer_auto_template( $clean_weights, $clean_breakdown );
+		}
+
 		$clean_data = array(
-			'hours'            => $clean_hours,
-			'day_weights'      => $clean_weights,
-			'day_scores_raw'   => array(),
-			'metric_breakdown' => $clean_breakdown,
-			'avg_stay_min'     => max( 5, min( 480, (int) ( $peak_data['avg_stay_min'] ?? 45 ) ) ),
-			'avg_stay_max'     => max( 5, min( 480, (int) ( $peak_data['avg_stay_max'] ?? 90 ) ) ),
-			'last_computed'    => sanitize_text_field( $peak_data['last_computed'] ?? '' ),
-			'period'           => $period,
-			'metrics_used'     => max( 0, (int) ( $peak_data['metrics_used'] ?? 0 ) ),
-			'source'           => 'api',
+			'hours'               => $clean_hours,
+			'day_weights'         => $clean_weights,
+			'day_scores_raw'      => array(),
+			'metric_breakdown'    => $clean_breakdown,
+			'avg_stay_min'        => max( 5, min( 480, (int) ( $peak_data['avg_stay_min'] ?? 45 ) ) ),
+			'avg_stay_max'        => max( 5, min( 480, (int) ( $peak_data['avg_stay_max'] ?? 90 ) ) ),
+			'last_computed'       => sanitize_text_field( $peak_data['last_computed'] ?? '' ),
+			'period'              => $period,
+			'metrics_used'        => max( 0, (int) ( $peak_data['metrics_used'] ?? 0 ) ),
+			'auto_template'       => $auto_template,
+			'auto_template_label' => isset( self::$template_labels[ $auto_template ] ) ? self::$template_labels[ $auto_template ] : '',
+			'source'              => 'api',
 		);
 
 		if ( isset( $peak_data['day_scores_raw'] ) && is_array( $peak_data['day_scores_raw'] ) ) {
@@ -739,8 +850,9 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 
 		wp_send_json_success(
 			array(
-				'message'     => __( 'Horario de mayor interés guardado correctamente.', 'lealez' ),
-				'busiest_day' => $busiest_day,
+				'message'       => __( 'Horario de mayor interés guardado correctamente.', 'lealez' ),
+				'busiest_day'   => $busiest_day,
+				'auto_template' => $auto_template,
 			)
 		);
 	}
@@ -755,7 +867,6 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
         chart: null,
         currentDay: 'monday',
         data: null,
-        editMode: false,
 
         DAYS: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
 
@@ -811,7 +922,7 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
             if (!config.savedData && config.gmbConnected && config.hasLocationId) {
                 setTimeout(function () {
                     OyBusyHours.showStatusMsg(
-                        'No hay datos guardados. Haz clic en "Calcular índice desde GMB" para obtener el índice de interés real de este negocio.',
+                        'No hay datos guardados. Haz clic en "Calcular índice desde GMB" para generar automáticamente el índice y la curva horaria.',
                         'info'
                     );
                 }, 500);
@@ -829,6 +940,8 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
                 last_computed: '',
                 period: {},
                 metrics_used: 0,
+                auto_template: '',
+                auto_template_label: '',
                 source: 'api'
             };
         },
@@ -854,17 +967,6 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
                 self.saveData();
             });
 
-            $('#oy-busy-template-sel').on('change', function () {
-                var tpl = $(this).val();
-                if (tpl) {
-                    self.applyTemplate(tpl);
-                }
-            });
-
-            $('#oy-busy-edit-toggle').on('change', function () {
-                self.toggleEditMode($(this).is(':checked'));
-            });
-
             $('#oy-busy-stay-min, #oy-busy-stay-max').on('input change', function () {
                 self.data.avg_stay_min = parseInt($('#oy-busy-stay-min').val(), 10) || 45;
                 self.data.avg_stay_max = parseInt($('#oy-busy-stay-max').val(), 10) || 90;
@@ -880,10 +982,6 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
             this.renderChart(day);
             this.updateStatusLabel(day);
             this.updateBreakdown(day);
-
-            if (this.editMode) {
-                this.buildSliders(day);
-            }
         },
 
         updateAllDayTabs: function () {
@@ -1006,11 +1104,9 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
         updateStatusLabel: function (day) {
             var w = (this.data.day_weights && typeof this.data.day_weights[day] !== 'undefined')
                 ? this.data.day_weights[day] : 0;
-            var hours = (this.data.hours && this.data.hours[day]) ? this.data.hours[day] : [];
-            var hasHours = hours.some(function (v) { return v > 0; });
             var title, subtitle, dotColor;
 
-            if (w === 0 && !hasHours) {
+            if (w === 0) {
                 title = 'Sin datos — calcule el índice desde GMB';
                 subtitle = 'Haga clic en "Calcular índice desde GMB" para obtener el índice real';
                 dotColor = '#757575';
@@ -1034,6 +1130,10 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
                 title = 'Muy bajo interés';
                 subtitle = 'Poca actividad registrada este día';
                 dotColor = '#757575';
+            }
+
+            if (this.data.auto_template_label) {
+                subtitle += ' · Curva automática: ' + this.data.auto_template_label;
             }
 
             $('#oy-busy-status-title').text(title);
@@ -1093,62 +1193,12 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
             $('#oy-busy-stay-display').text('Entre ' + fmt(minM) + ' y ' + fmt(maxM));
         },
 
-        applyTemplate: function (tplKey) {
-            var tpl = (this.config.templates || {})[tplKey];
-            if (!tpl) { return; }
-            var self = this;
-            this.DAYS.forEach(function (d) {
-                self.data.hours[d] = tpl.slice();
-            });
-            this.renderChart(this.currentDay);
-            this.updateStatusLabel(this.currentDay);
-            if (this.editMode) { this.buildSliders(this.currentDay); }
-            this.showStatusMsg('Plantilla "' + tplKey + '" aplicada a todos los días. Ajusta si lo necesitas y guarda.', 'info');
-        },
-
-        toggleEditMode: function (on) {
-            this.editMode = on;
-            if (on) {
-                $('#oy-busy-edit-area').slideDown(200);
-                this.buildSliders(this.currentDay);
-            } else {
-                $('#oy-busy-edit-area').slideUp(200);
-            }
-        },
-
-        buildSliders: function (day) {
-            var self  = this;
-            var hours = (this.data.hours && this.data.hours[day]) ? this.data.hours[day] : new Array(24).fill(0);
-            var $grid = $('#oy-busy-sliders-grid').empty();
-
-            for (var h = 6; h <= 23; h++) {
-                var val   = hours[h] || 0;
-                var $item = $('<div class="oy-busy-slider-item"></div>');
-                var $lbl  = $('<span class="oy-busy-slider-label">' + this.HOUR_LABELS[h] + '</span>');
-                var $val  = $('<span class="oy-busy-slider-val">' + val + '</span>');
-                var $inp  = $('<input type="range" class="oy-busy-slider-range" min="0" max="100" step="5" />').val(val).attr('data-hour', h);
-
-                $inp.on('input', (function (hour, $vd) {
-                    return function () {
-                        var v = parseInt($(this).val(), 10);
-                        self.data.hours[self.currentDay][hour] = v;
-                        $vd.text(v);
-                        self.renderChart(self.currentDay);
-                        self.updateStatusLabel(self.currentDay);
-                    };
-                }(h, $val)));
-
-                $item.append($lbl).append($inp).append($val);
-                $grid.append($item);
-            }
-        },
-
         computeFromAPI: function () {
             var self = this;
             var $btn = $('#oy-busy-compute-btn');
 
             $btn.prop('disabled', true).html('<span class="dashicons dashicons-update oy-spin" style="vertical-align:middle;margin-top:3px;margin-right:2px;"></span> Calculando…');
-            this.showStatusMsg('Consultando Performance API (90 días, 11 métricas ponderadas)…', 'loading');
+            this.showStatusMsg('Consultando Performance API y generando automáticamente la curva horaria…', 'loading');
 
             $.ajax({
                 url: this.config.ajaxUrl,
@@ -1162,13 +1212,16 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
                 success: function (response) {
                     if (response.success) {
                         var d = response.data;
-                        self.data.day_weights      = d.day_weights;
-                        self.data.day_scores_raw   = d.scores_raw;
-                        self.data.metric_breakdown = d.group_breakdown;
-                        self.data.last_computed    = d.computed_at;
-                        self.data.period           = d.period;
-                        self.data.metrics_used     = d.metrics_used;
-                        self.data.source           = 'api';
+                        self.data.day_weights       = d.day_weights;
+                        self.data.day_scores_raw    = d.scores_raw;
+                        self.data.metric_breakdown  = d.group_breakdown;
+                        self.data.hours             = d.hours || self.buildEmptyHours();
+                        self.data.auto_template     = d.auto_template || '';
+                        self.data.auto_template_label = d.auto_template_label || '';
+                        self.data.last_computed     = d.computed_at;
+                        self.data.period            = d.period;
+                        self.data.metrics_used      = d.metrics_used;
+                        self.data.source            = 'api';
 
                         self.updateAllDayTabs();
                         self.renderChart(self.currentDay);
@@ -1177,7 +1230,7 @@ class OY_Location_GMB_Busyhours_Metabox_Unique {
 
                         var msg = '✅ Índice calculado: ' + d.days_processed + ' días procesados, ' +
                                   d.metrics_used + ' métricas activas (' + d.period.start + ' → ' + d.period.end + '). ' +
-                                  'Selecciona la forma horaria de tu negocio y guarda.';
+                                  'Curva automática aplicada: ' + (d.auto_template_label || d.auto_template || 'N/A') + '.';
                         self.showStatusMsg(msg, 'success');
 
                         $('.oy-busy-computed-header').remove();
@@ -1274,17 +1327,22 @@ JSEOF;
 .oy-busy-source-pill--api { background:#2e7d32; }
 .oy-busy-period-label { font-size:11px; color:#555; }
 .oy-busy-peak-badge { padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#1a73e8; color:#fff; }
+.oy-busy-auto-pill { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:600; background:#5d4037; color:#fff; }
+
 .oy-busy-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; background:#f6f7f7; border:1px solid #ddd; border-radius:6px; padding:10px 14px; margin-bottom:12px; }
 .oy-busy-toolbar__left { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .oy-busy-toolbar__right { display:flex; gap:8px; flex-wrap:wrap; }
 .oy-busy-field-group { display:flex; align-items:center; gap:6px; }
 .oy-busy-field-group label { font-weight:600; font-size:12px; white-space:nowrap; }
+.oy-busy-field-group--auto { max-width:620px; }
 .oy-busy-select { min-width:170px; }
+
 .oy-busy-status { padding:9px 14px; border-radius:4px; margin-bottom:10px; border:1px solid transparent; font-size:12px; line-height:1.5; }
 .oy-busy-status--loading { background:#e8f4fb; border-color:#bee5eb; color:#0c5460; }
 .oy-busy-status--error { background:#fff3cd; border-color:#ffc107; color:#856404; }
 .oy-busy-status--info { background:#d1ecf1; border-color:#bee5eb; color:#0c5460; }
 .oy-busy-status--success { background:#d4edda; border-color:#c3e6cb; color:#155724; }
+
 .oy-busy-dark-panel { background:#2d2d2d; border-radius:8px; padding:0 0 16px; margin-bottom:12px; overflow:hidden; }
 .oy-busy-day-tabs { display:flex; align-items:flex-end; gap:0; background:#252525; padding:8px 8px 0; }
 .oy-busy-day-tab { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:6px 4px 8px; background:transparent; border:none; cursor:pointer; color:#888; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; transition:color .15s; position:relative; }
@@ -1296,6 +1354,7 @@ JSEOF;
 .oy-busy-day-name { font-size:10px; margin-top:2px; }
 .oy-busy-day-index { font-size:10px; color:#aaa; margin-top:1px; font-weight:400; }
 .oy-busy-day-tab--active .oy-busy-day-index { color:#fff; font-weight:700; }
+
 .oy-busy-status-row { display:flex; align-items:flex-start; gap:10px; padding:14px 18px 10px; position:relative; }
 .oy-busy-live-dot { width:12px; height:12px; border-radius:50%; background:#e53935; margin-top:3px; flex-shrink:0; transition:background .3s, box-shadow .3s; }
 .oy-busy-status-title { font-weight:700; font-size:13px; color:#fff; line-height:1.3; }
@@ -1303,8 +1362,10 @@ JSEOF;
 .oy-busy-day-score-badge { margin-left:auto; flex-shrink:0; display:flex; flex-direction:column; align-items:center; background:rgba(255,255,255,.08); border-radius:8px; padding:6px 12px; min-width:54px; }
 .oy-busy-score-num { font-size:22px; font-weight:800; color:#fff; line-height:1; }
 .oy-busy-score-label { font-size:10px; color:#aaa; margin-top:2px; letter-spacing:.04em; }
+
 .oy-busy-chart-container { position:relative; height:160px; width:100%; padding:0 12px; box-sizing:border-box; }
 .oy-busy-chart-container canvas { display:block !important; width:100% !important; height:100% !important; }
+
 .oy-busy-breakdown { padding:10px 18px 6px; border-top:1px solid rgba(255,255,255,.07); margin-top:8px; }
 .oy-busy-breakdown__label { font-size:11px; color:#999; font-weight:600; display:block; margin-bottom:8px; letter-spacing:.03em; }
 .oy-busy-breakdown__bars { display:flex; flex-direction:column; gap:5px; }
@@ -1314,19 +1375,13 @@ JSEOF;
 .oy-busy-bd-track { flex:1; height:6px; background:rgba(255,255,255,.1); border-radius:3px; overflow:hidden; }
 .oy-busy-bd-fill { height:100%; border-radius:3px; transition:width .4s ease; }
 .oy-busy-bd-pct { color:#888; min-width:32px; text-align:right; font-weight:600; }
+
 .oy-busy-stay-row { display:flex; align-items:center; gap:4px; font-size:12px; color:#ccc; border-top:1px solid rgba(255,255,255,.07); padding:10px 18px 0; margin-top:6px; }
 .oy-busy-stay-row strong { color:#fff; }
-.oy-busy-edit-header { display:flex; align-items:center; gap:4px; flex-wrap:wrap; padding:8px 12px; background:#f0f4ff; border:1px solid #c8d8ff; border-radius:6px; margin-bottom:8px; }
-.oy-busy-toggle-wrap { display:flex; align-items:center; gap:6px; cursor:pointer; font-weight:600; font-size:12px; color:#3d4d7a; }
-.oy-busy-toggle-label { display:flex; align-items:center; gap:4px; }
-.oy-busy-sliders-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(72px,1fr)); gap:8px; background:#fff; border:1px solid #ddd; border-radius:6px; padding:12px; margin-bottom:4px; }
-.oy-busy-slider-item { display:flex; flex-direction:column; align-items:center; gap:4px; }
-.oy-busy-slider-label { font-size:10px; font-weight:700; color:#555; text-transform:uppercase; letter-spacing:.03em; }
-.oy-busy-slider-range { -webkit-appearance:slider-vertical; writing-mode:vertical-lr; direction:rtl; height:70px; accent-color:#1a73e8; width:100%; }
-@media (max-width:782px) { .oy-busy-slider-range { writing-mode:horizontal-tb; direction:ltr; -webkit-appearance:auto; height:auto; } }
-.oy-busy-slider-val { font-size:11px; font-weight:700; color:#1a73e8; min-width:26px; text-align:center; }
+
 @keyframes oy-spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
 .oy-spin { display:inline-block; animation:oy-spin .8s linear infinite; }
+
 .oy-busy-footer { font-size:11px; color:#888; padding:8px 2px 4px; border-top:1px solid #eee; margin-top:8px; line-height:1.6; }
 ';
 	}
