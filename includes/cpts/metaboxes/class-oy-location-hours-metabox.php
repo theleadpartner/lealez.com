@@ -50,35 +50,15 @@ class OY_Location_Hours_Metabox {
     // ─────────────────────────────────────────────────────────────────────────
 
     public function __construct() {
-        // Registrar el metabox
-        add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+        // NOTA: el registro del metabox (add_meta_box) lo realiza OY_Location_CPT::add_meta_boxes()
+        // usando $this->hours_metabox como callback, para garantizar que el metabox
+        // aparezca incluso si este archivo se carga fuera del ciclo normal de hooks.
 
         // Guardar campos al publicar/actualizar — prioridad 25 (después del save principal a 20)
         add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 25, 2 );
 
         // Endpoint AJAX exclusivo del botón "Sincronizar Horario desde GMB"
         add_action( 'wp_ajax_oy_sync_location_hours_from_gmb', array( $this, 'ajax_sync_hours' ) );
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Registro del metabox
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Registra el metabox en WordPress.
-     *
-     * El ID 'oy_location_hours' mantiene el mismo que tenía en el CPT principal
-     * para preservar la posición guardada por el usuario en el admin.
-     */
-    public function register_metabox() {
-        add_meta_box(
-            'oy_location_hours',
-            __( 'Horarios de Atención', 'lealez' ),
-            array( $this, 'render_metabox' ),
-            $this->post_type,
-            'normal',
-            'default'
-        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
