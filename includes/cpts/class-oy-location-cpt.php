@@ -147,6 +147,22 @@ public function __construct() {
         require_once $hours_metabox_file;
 
         if ( class_exists( 'OY_Location_Hours_Metabox' ) ) {
+            new OY_Location_Hours_Metabox();
+        }
+    }
+
+    /**
+     * ✅ Metabox externo: Horarios de Atención
+     * Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
+     *
+     * Registra, renderiza y guarda el metabox de forma independiente.
+     * Expone AJAX propio: oy_sync_location_hours_from_gmb
+     */
+    $hours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-hours-metabox.php';
+    if ( file_exists( $hours_metabox_file ) ) {
+        require_once $hours_metabox_file;
+
+        if ( class_exists( 'OY_Location_Hours_Metabox' ) ) {
             $this->hours_metabox = new OY_Location_Hours_Metabox();
         }
     }
