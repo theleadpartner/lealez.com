@@ -159,7 +159,7 @@ public function __construct() {
         }
     }
 
-/**
+    /**
      * ✅ Metabox externo: Publicaciones (localPosts) de Google My Business
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-posts-metabox.php
      *
@@ -175,7 +175,7 @@ public function __construct() {
         }
     }
 
-/**
+    /**
      * ✅ Metabox externo: Reseñas de Google My Business
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-reviews-metabox.php
      *
@@ -191,64 +191,59 @@ public function __construct() {
         }
     }
 
+    /**
+     * ✅ Metabox externo: Panel de Rendimiento — Business Profile Performance API
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-performance-metabox.php
+     *
+     * Dashboard completo de métricas diarias, comparativas, gráficas y keywords de búsqueda.
+     * Expone AJAX propio: oy_gmb_perf_fetch, oy_gmb_perf_keywords
+     */
+    $performance_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-performance-metabox.php';
+    if ( file_exists( $performance_metabox_file ) ) {
+        require_once $performance_metabox_file;
+
+        if ( class_exists( 'OY_Location_GMB_Performance_Metabox' ) ) {
+            new OY_Location_GMB_Performance_Metabox();
+        }
+    }
 
     /**
- * ✅ Metabox externo: Panel de Rendimiento — Business Profile Performance API
- * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-performance-metabox.php
- *
- * Dashboard completo de métricas diarias, comparativas, gráficas y keywords de búsqueda.
- * Expone AJAX propio: oy_gmb_perf_fetch, oy_gmb_perf_keywords
- */
-$performance_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-performance-metabox.php';
-if ( file_exists( $performance_metabox_file ) ) {
-    require_once $performance_metabox_file;
+     * ✅ Metabox externo: Frases Clave de Búsqueda GMB (Keywords)
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-keywords-metabox.php
+     *
+     * Panel dedicado exclusivamente a las palabras clave de búsqueda mensual
+     * con desglose por mes, gráfica independiente y botón de guardado en meta.
+     * AJAX propio: oy_gmb_kw_fetch, oy_gmb_kw_save
+     */
+    $keywords_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-keywords-metabox.php';
+    if ( file_exists( $keywords_metabox_file ) ) {
+        require_once $keywords_metabox_file;
 
-    if ( class_exists( 'OY_Location_GMB_Performance_Metabox' ) ) {
-        new OY_Location_GMB_Performance_Metabox();
+        if ( class_exists( 'OY_Location_GMB_Keywords_Metabox' ) ) {
+            new OY_Location_GMB_Keywords_Metabox();
+        }
     }
-}
 
-/**
- * Metabox: Frases Clave de Búsqueda GMB (Keywords)
- *
- * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-keywords-metabox.php
- *
- * Panel dedicado exclusivamente a las palabras clave de búsqueda mensual
- * con desglose por mes, gráfica independiente y botón de guardado en meta.
- * AJAX propio: oy_gmb_kw_fetch, oy_gmb_kw_save
- */
-$keywords_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-keywords-metabox.php';
-if ( file_exists( $keywords_metabox_file ) ) {
-    require_once $keywords_metabox_file;
+    /**
+     * ✅ Metabox externo: Horario de Mayor Interés
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-busyhours-metabox.php
+     *
+     * Índice de interés por día de semana calculado automáticamente desde
+     * Performance API (11 métricas ponderadas, 90 días). Distribución horaria
+     * por plantilla de tipo de negocio + ajuste manual fino.
+     * AJAX: oy_gmb_busy_compute, oy_gmb_busy_save
+     *
+     * IMPORTANTE: Se usa una clase con nombre único para evitar colisiones con
+     * cargas anteriores o archivos legacy que hayan declarado el nombre antiguo.
+     */
+    $busyhours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-busyhours-metabox.php';
+    if ( file_exists( $busyhours_metabox_file ) ) {
+        require_once $busyhours_metabox_file;
 
-    if ( class_exists( 'OY_Location_GMB_Keywords_Metabox' ) ) {
-        new OY_Location_GMB_Keywords_Metabox();
+        if ( class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) {
+            new OY_Location_GMB_Busyhours_Metabox_Unique();
+        }
     }
-}
-
-/**
- * Metabox: Horario de Mayor Interés
- *
- * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-busyhours-metabox.php
- *
- * Índice de interés por día de semana calculado automáticamente desde
- * Performance API (11 métricas ponderadas, 90 días). Distribución horaria
- * por plantilla de tipo de negocio + ajuste manual fino.
- * AJAX: oy_gmb_busy_compute, oy_gmb_busy_save
- *
- * IMPORTANTE:
- * Se usa una clase con nombre único para evitar colisiones con cargas
- * anteriores o con archivos legacy que hayan declarado el nombre antiguo.
- */
-$busyhours_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-busyhours-metabox.php';
-if ( file_exists( $busyhours_metabox_file ) ) {
-    require_once $busyhours_metabox_file;
-
-    if ( class_exists( 'OY_Location_GMB_Busyhours_Metabox_Unique', false ) ) {
-        new OY_Location_GMB_Busyhours_Metabox_Unique();
-    }
-}
-    
 }
 
 
