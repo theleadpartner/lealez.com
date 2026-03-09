@@ -50,8 +50,9 @@ class OY_Location_Hours_Metabox {
     // ─────────────────────────────────────────────────────────────────────────
 
 public function __construct() {
-        // Registrar el metabox (autocontenido — no depende de que el CPT lo llame)
-        add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+        // Registrar el metabox con prioridad 20 — DESPUÉS del CPT (prioridad 10)
+        // para ser la única y definitiva registración de 'oy_location_hours'.
+        add_action( 'add_meta_boxes', array( $this, 'register_metabox' ), 20 );
 
         // Guardar campos al publicar/actualizar — prioridad 25 (después del save principal a 20)
         add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 25, 2 );
