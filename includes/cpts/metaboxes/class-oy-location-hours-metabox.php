@@ -76,6 +76,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  *  - wp_ajax_oy_gmb_busy_compute  → Computa índice de interés por día desde Performance API
  *  - wp_ajax_oy_gmb_busy_save     → Guarda gmb_peak_hours en post meta
  */
+if ( ! class_exists( 'OY_Location_GMB_BusyHours_Metabox' ) ) :
+
 class OY_Location_GMB_BusyHours_Metabox {
 
 	const NONCE_ACTION = 'oy_gmb_busyhours_nonce';
@@ -1616,3 +1618,5 @@ JSEOF;
 
 }
 // end class OY_Location_GMB_BusyHours_Metabox
+
+endif; // class_exists OY_Location_GMB_BusyHours_Metabox
