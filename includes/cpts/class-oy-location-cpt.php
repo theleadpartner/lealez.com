@@ -1894,10 +1894,6 @@ public function render_gmb_meta_box( $post ) {
     $gmb_location_id           = get_post_meta( $post->ID, 'gmb_location_id', true );
     $gmb_account_id            = get_post_meta( $post->ID, 'gmb_account_id', true );
     $gmb_verified              = get_post_meta( $post->ID, 'gmb_verified', true );
-    $gmb_verification_method   = get_post_meta( $post->ID, 'gmb_verification_method', true );
-    $gmb_auto_sync_enabled     = get_post_meta( $post->ID, 'gmb_auto_sync_enabled', true );
-    $gmb_sync_frequency        = get_post_meta( $post->ID, 'gmb_sync_frequency', true );
-    $gmb_last_sync             = get_post_meta( $post->ID, 'gmb_last_sync', true );
 
     // ✅ Verification API RAW fields
     $gmb_verification_state    = get_post_meta( $post->ID, 'gmb_verification_state', true );
@@ -1906,10 +1902,6 @@ public function render_gmb_meta_box( $post ) {
 
     // ✅ Google RAW fields (Location resource)
     $gmb_location_raw          = get_post_meta( $post->ID, 'gmb_location_raw', true );
-
-    if ( empty( $gmb_sync_frequency ) ) {
-        $gmb_sync_frequency = 'daily';
-    }
 
     $ajax_nonce = wp_create_nonce( $this->ajax_nonce_action );
     ?>
@@ -2074,71 +2066,7 @@ public function render_gmb_meta_box( $post ) {
             </td>
         </tr>
 
-        <?php if ( in_array( $state, array( 'VERIFIED', 'COMPLETED' ), true ) ) : ?>
-        <tr>
-            <th scope="row">
-                <label for="gmb_verification_method"><?php _e( 'Método de Verificación (manual)', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <select name="gmb_verification_method" id="gmb_verification_method" class="regular-text">
-                    <option value=""><?php _e( 'Seleccionar...', 'lealez' ); ?></option>
-                    <option value="email" <?php selected( $gmb_verification_method, 'email' ); ?>><?php _e( 'Email', 'lealez' ); ?></option>
-                    <option value="phone" <?php selected( $gmb_verification_method, 'phone' ); ?>><?php _e( 'Teléfono', 'lealez' ); ?></option>
-                    <option value="postcard" <?php selected( $gmb_verification_method, 'postcard' ); ?>><?php _e( 'Postal', 'lealez' ); ?></option>
-                    <option value="video" <?php selected( $gmb_verification_method, 'video' ); ?>><?php _e( 'Video', 'lealez' ); ?></option>
-                </select>
-                <p class="description">
-                    <?php _e( 'Este campo es manual (opcional). El estado real se guarda en gmb_verification_state desde Verifications API.', 'lealez' ); ?>
-                </p>
-            </td>
-        </tr>
-        <?php endif; ?>
-
-        <tr>
-            <th scope="row">
-                <label><?php _e( 'Sincronización Automática', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <label>
-                    <input type="checkbox"
-                           name="gmb_auto_sync_enabled"
-                           value="1"
-                           <?php checked( $gmb_auto_sync_enabled, '1' ); ?>>
-                    <?php _e( 'Sincronizar automáticamente con Google', 'lealez' ); ?>
-                </label>
-            </td>
-        </tr>
-
-        <tr>
-            <th scope="row">
-                <label for="gmb_sync_frequency"><?php _e( 'Frecuencia de Sincronización', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <select name="gmb_sync_frequency" id="gmb_sync_frequency" class="regular-text">
-                    <option value="hourly" <?php selected( $gmb_sync_frequency, 'hourly' ); ?>><?php _e( 'Cada hora', 'lealez' ); ?></option>
-                    <option value="daily" <?php selected( $gmb_sync_frequency, 'daily' ); ?>><?php _e( 'Diariamente', 'lealez' ); ?></option>
-                    <option value="weekly" <?php selected( $gmb_sync_frequency, 'weekly' ); ?>><?php _e( 'Semanalmente', 'lealez' ); ?></option>
-                </select>
-            </td>
-        </tr>
-
-        <?php if ( $gmb_last_sync ) : ?>
-        <tr>
-            <th scope="row">
-                <label><?php _e( 'Última Sincronización', 'lealez' ); ?></label>
-            </th>
-            <td>
-                <?php echo esc_html( date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $gmb_last_sync ) ); ?>
-            </td>
-        </tr>
-        <?php endif; ?>
     </table>
-
-    <p>
-        <button type="button" class="button button-secondary" id="sync-gmb-data">
-            <?php _e( 'Sincronizar Ahora (solo métricas/externo)', 'lealez' ); ?>
-        </button>
-    </p>
 
     <hr>
 
@@ -3726,9 +3654,6 @@ private function humanize_attribute_id( $attr_id ) {
             'gmb_location_id'                 => 'sanitize_text_field',
             'gmb_account_id'                  => 'sanitize_text_field',
             'gmb_verified'                    => 'absint',
-            'gmb_verification_method'         => 'sanitize_text_field',
-            'gmb_auto_sync_enabled'           => 'absint',
-            'gmb_sync_frequency'              => 'sanitize_text_field',
 
             // ✅ NEW: selector & import flag
             'gmb_location_name'               => 'sanitize_text_field',
@@ -3783,7 +3708,7 @@ private function humanize_attribute_id( $attr_id ) {
                 }
                 
                 // ✅ ojo: checkboxes no vienen si están off
-                if ( in_array( $field_name, array( 'gmb_verified', 'gmb_auto_sync_enabled', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save', 'service_area_only', 'show_address_to_customers' ), true ) ) {
+                if ( in_array( $field_name, array( 'gmb_verified', 'accepts_loyalty', 'loyalty_redemption_enabled', 'loyalty_earning_enabled', 'gmb_import_on_save', 'service_area_only', 'show_address_to_customers' ), true ) ) {
                     delete_post_meta( $post_id, $field_name );
                 } else {
                     // Para el resto, mantenemos comportamiento original
