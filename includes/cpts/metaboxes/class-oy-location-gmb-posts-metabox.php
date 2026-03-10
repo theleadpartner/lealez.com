@@ -386,11 +386,19 @@ class OY_Location_GMB_Posts_Metabox {
      * @param WP_Post $post Post actual
      */
     public function render_meta_box( $post ) {
-        $location_id   = $post->ID;
-        $gmb_loc_name  = (string) get_post_meta( $location_id, 'gmb_location_name', true );
-        $business_id   = (int)    get_post_meta( $location_id, 'parent_business_id', true );
-        $gmb_connected = $business_id ? (bool) get_post_meta( $business_id, '_gmb_connected', true ) : false;
-        $nonce         = wp_create_nonce( self::NONCE_KEY );
+        $location_id    = $post->ID;
+        $gmb_loc_name   = (string) get_post_meta( $location_id, 'gmb_location_name', true );
+        $business_id    = (int)    get_post_meta( $location_id, 'parent_business_id', true );
+        $gmb_connected  = $business_id ? (bool) get_post_meta( $business_id, '_gmb_connected', true ) : false;
+        $nonce          = wp_create_nonce( self::NONCE_KEY );
+
+        // Caché persistente de publicaciones
+        $preloaded_posts   = get_post_meta( $location_id, '_gmb_posts_cache', true );
+        $posts_last_sync   = (int) get_post_meta( $location_id, '_gmb_posts_last_sync', true );
+        if ( ! is_array( $preloaded_posts ) ) {
+            $preloaded_posts = array();
+        }
+        $has_posts_cache = ! empty( $preloaded_posts );
 
         ?>
         <div class="oy-posts-metabox-wrap"
@@ -443,13 +451,28 @@ class OY_Location_GMB_Posts_Metabox {
                     <span class="oy-posts-count-badge" id="oy-posts-count" style="display:none;"></span>
                 </div>
 
-                <!-- Contenedor de publicaciones -->
+                <!-- Contenedor de publicaciones -->\
                 <div id="oy-posts-list-container">
+                    <?php if ( $has_posts_cache ) : ?>
+                    <div class="oy-posts-loading" style="display:none;">
+                        <span class="spinner is-active"></span>
+                        <?php esc_html_e( 'Cargando publicaciones desde Google My Business…', 'lealez' ); ?>
+                    </div>
+                    <?php else : ?>
                     <div class="oy-posts-loading">
                         <span class="spinner is-active"></span>
                         <?php esc_html_e( 'Cargando publicaciones desde Google My Business…', 'lealez' ); ?>
                     </div>
+                    <?php endif; ?>
                 </div>
+                <?php if ( $posts_last_sync ) : ?>
+                <p style="font-size:11px;color:#888;margin:4px 0 0;padding:0 0 8px;">
+                    <?php printf(
+                        esc_html__( 'Última sincronización: %s', 'lealez' ),
+                        esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $posts_last_sync ) )
+                    ); ?>
+                </p>
+                <?php endif; ?>
             </div><!-- /tab list -->
 
             <!-- TAB: Nueva publicación -->
@@ -590,7 +613,7 @@ class OY_Location_GMB_Posts_Metabox {
             <?php endif; // GMB connected ?>
         </div><!-- /.oy-posts-metabox-wrap -->
 
-        <?php $this->render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce ); ?>
+        <?php $this->render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce, $preloaded_posts ); ?>
         <?php
     }
 
@@ -633,10 +656,13 @@ class OY_Location_GMB_Posts_Metabox {
      * @param string $gmb_loc_name
      * @param string $nonce
      */
-    private function render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce ) {
+    private function render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce, $preloaded_posts = array() ) {
         if ( ! $business_id || empty( $gmb_loc_name ) ) {
             return;
         }
+        $preloaded_json = ! empty( $preloaded_posts ) && is_array( $preloaded_posts )
+            ? wp_json_encode( $preloaded_posts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+            : 'null';
         ?>
         <script type="text/javascript">
         (function($){
@@ -648,6 +674,9 @@ class OY_Location_GMB_Posts_Metabox {
             var LOCATION_ID = <?php echo (int) $location_id; ?>;
             var BUSINESS_ID = <?php echo (int) $business_id; ?>;
             var GMB_LOC     = <?php echo wp_json_encode( $gmb_loc_name ); ?>;
+
+            /* Publicaciones precargadas desde post_meta (pueden ser null si no hay caché) */
+            var PRELOADED_POSTS = <?php echo $preloaded_json; ?>;
 
             /* CTA label mapping */
             var CTA_LABELS = {
@@ -1035,7 +1064,19 @@ class OY_Location_GMB_Posts_Metabox {
             });
 
             /* ── Auto-load on page ready ───────────────────────────── */
-            fetchPosts( false );
+            if ( PRELOADED_POSTS && PRELOADED_POSTS.length > 0 ) {
+                // Tenemos caché guardado — renderizar sin petición AJAX
+                allPosts = PRELOADED_POSTS.slice();
+                renderPostsList( allPosts );
+            } else {
+                // Sin caché — traer desde GMB
+                fetchPosts( false );
+            }
+
+            /* ── Escuchar evento de sincronización automatizada ────── */
+            $( document ).on( 'oy:gmb:posts:refreshed', function() {
+                fetchPosts( false );
+            });
 
         })(jQuery);
         </script>
@@ -1082,9 +1123,17 @@ class OY_Location_GMB_Posts_Metabox {
             ) );
         }
 
+        $posts_list = $result['localPosts'] ?? array();
+
+        // Persistir la lista de publicaciones para precarga al reabrir la página
+        if ( ! empty( $posts_list ) && is_array( $posts_list ) ) {
+            update_post_meta( $location_id, '_gmb_posts_cache', $posts_list );
+            update_post_meta( $location_id, '_gmb_posts_last_sync', time() );
+        }
+
         wp_send_json_success( array(
-            'posts' => $result['localPosts'] ?? array(),
-            'total' => $result['total']      ?? 0,
+            'posts' => $posts_list,
+            'total' => $result['total'] ?? 0,
         ) );
     }
 
