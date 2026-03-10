@@ -676,28 +676,45 @@ class OY_Location_GMB_Integration_Metabox {
                     return def.promise();
                 });
 
-                // ── PASO 8: Horario de mayor interés (compute → save) ──────────
+// ── PASO 8: Horario de mayor interés (compute → save) ──────────
                 chain = chain.then(function(){
                     setStep('busyhours', 'running', '<?php echo esc_js( __( 'calculando...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
                     doAjax('oy_gmb_busy_compute', baseData, 'nonce', nonces.busyhours)
                     .then(function(r1){
-                        if (r1 && r1.success) {
+                        if (r1 && r1.success && r1.data) {
                             setStep('busyhours', 'running', '<?php echo esc_js( __( 'guardando...', 'lealez' ) ); ?>');
-                            // Intentar extraer datos computados — campo puede variar
-                            var peakData = (r1.data && (r1.data.peak_hours || r1.data.hours_by_day || r1.data.distribution || r1.data.index))
-                                ? (r1.data.peak_hours || r1.data.hours_by_day || r1.data.distribution || r1.data.index)
-                                : {};
-                            var saveData = $.extend({}, baseData, { peak_hours: JSON.stringify(peakData) });
+                            // Construir el payload exacto que espera ajax_save_peak_hours:
+                            // - hours           ← r1.data.hours
+                            // - day_weights     ← r1.data.day_weights
+                            // - metric_breakdown ← r1.data.group_breakdown  (distinto nombre)
+                            // - auto_template   ← r1.data.auto_template
+                            // - period          ← r1.data.period
+                            // - metrics_used    ← r1.data.metrics_used
+                            // - last_computed   ← r1.data.computed_at       (distinto nombre)
+                            var peakPayload = {
+                                hours:             r1.data.hours             || {},
+                                day_weights:       r1.data.day_weights       || {},
+                                metric_breakdown:  r1.data.group_breakdown   || {},
+                                auto_template:     r1.data.auto_template     || '',
+                                period:            r1.data.period            || {},
+                                metrics_used:      r1.data.metrics_used      || 0,
+                                last_computed:     r1.data.computed_at       || '',
+                                avg_stay_min:      45,
+                                avg_stay_max:      90,
+                            };
+                            // El campo POST debe llamarse 'peak_data' (no 'peak_hours')
+                            var saveData = $.extend({}, baseData, { peak_data: JSON.stringify(peakPayload) });
                             return doAjax('oy_gmb_busy_save', saveData, 'nonce', nonces.busyhours);
                         }
+                        // Si compute falló, propagar el error
                         return $.Deferred().resolve(r1).promise();
                     })
                     .done(function(r){
                         var ok = r && r.success;
                         stepResults.busyhours = ok ? 'ok' : 'error';
                         var msg = ok
-                            ? (r.data && r.data.message ? r.data.message : '<?php echo esc_js( __( 'calculado', 'lealez' ) ); ?>')
+                            ? (r.data && r.data.message ? r.data.message : '<?php echo esc_js( __( 'calculado y guardado', 'lealez' ) ); ?>')
                             : errMsg(r);
                         setStep('busyhours', ok ? 'ok' : 'error', msg);
                         doneCount++; setProgress(doneCount); def.resolve();
