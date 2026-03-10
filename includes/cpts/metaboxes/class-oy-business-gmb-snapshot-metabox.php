@@ -314,11 +314,33 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
             $existing_location = $this->find_existing_location_cpt($business_id, $gmb_name, $gmb_location);
             
             if ($existing_location) {
-                wp_send_json_error(array(
-                    'message' => 'Ya existe una ubicación con estos datos de GMB.',
-                    'location_id' => $existing_location->ID,
-                    'edit_url' => get_edit_post_link($existing_location->ID, 'raw')
-                ));
+                // ✅ UNICIDAD GLOBAL: determinar si el conflicto es de esta empresa o de otra
+                $conflict_business_id = (int) get_post_meta($existing_location->ID, 'parent_business_id', true);
+                $is_foreign_business  = ($conflict_business_id !== 0 && $conflict_business_id !== $business_id);
+
+                if ($is_foreign_business) {
+                    // La ubicación GMB ya está en uso por OTRA empresa de Lealez
+                    $foreign_biz   = get_post($conflict_business_id);
+                    $foreign_title = $foreign_biz ? $foreign_biz->post_title : "ID {$conflict_business_id}";
+                    wp_send_json_error(array(
+                        'message'                => sprintf(
+                            /* translators: %s: nombre de la empresa conflictiva */
+                            '⚠️ Esta ubicación de Google ya está asociada a la empresa «%s» en Lealez. Una ubicación de Google solo puede tener una ficha (oy_location) en todo el sistema.',
+                            $foreign_title
+                        ),
+                        'is_foreign_business'    => true,
+                        'foreign_business_id'    => $conflict_business_id,
+                        'foreign_business_title' => $foreign_title,
+                        'location_id'            => $existing_location->ID,
+                    ));
+                } else {
+                    // La ubicación GMB ya está en esta misma empresa
+                    wp_send_json_error(array(
+                        'message'     => 'Ya existe una ubicación con estos datos de GMB.',
+                        'location_id' => $existing_location->ID,
+                        'edit_url'    => get_edit_post_link($existing_location->ID, 'raw'),
+                    ));
+                }
             }
             
             // Crear el CPT oy_location como borrador
@@ -668,6 +690,18 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
 
                         // ✅ CORRECCIÓN: Usar el nuevo método mejorado de búsqueda
                         $location_cpt = $this->find_existing_location_cpt($business_id, $name, $loc);
+
+                        // ✅ UNICIDAD GLOBAL: detectar si el CPT encontrado pertenece a OTRA empresa
+                        $is_foreign_location    = false;
+                        $foreign_business_title = '';
+                        if ( $location_cpt ) {
+                            $cpt_business_id = (int) get_post_meta( $location_cpt->ID, 'parent_business_id', true );
+                            if ( $cpt_business_id && $cpt_business_id !== $business_id ) {
+                                $is_foreign_location = true;
+                                $fb                  = get_post( $cpt_business_id );
+                                $foreign_business_title = $fb ? $fb->post_title : "ID {$cpt_business_id}";
+                            }
+                        }
                         ?>
                         <tr>
                             <td>
@@ -741,8 +775,8 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                             </td>
 
                             <td style="text-align: center; padding: 8px;">
-                                <?php if ( $location_cpt ) : ?>
-                                    <!-- ✅ Ficha exists -->
+                                <?php if ( $location_cpt && ! $is_foreign_location ) : ?>
+                                    <!-- ✅ Ficha exists — misma empresa -->
                                     <div style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
                                         <div style="display: flex; align-items: center; gap: 6px;">
                                             <span style="display: inline-block; width: 12px; height: 12px; background-color: #46b450; border-radius: 50%;"></span>
@@ -750,6 +784,23 @@ if ( ! class_exists( 'Lealez_OY_Business_GMB_Snapshot_Metabox' ) ) {
                                         </div>
                                         <a href="<?php echo esc_url( get_edit_post_link( $location_cpt->ID ) ); ?>" class="button button-small button-secondary">
                                             <?php esc_html_e( 'Ver', 'lealez' ); ?>
+                                        </a>
+                                    </div>
+                                <?php elseif ( $location_cpt && $is_foreign_location ) : ?>
+                                    <!-- ✅ Ficha exists — OTRA empresa (conflicto cross-business) -->
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                                        <div style="display: flex; align-items: center; gap: 5px;">
+                                            <span style="display: inline-block; width: 12px; height: 12px; background-color: #f56e28; border-radius: 50%; flex-shrink:0;"></span>
+                                            <span style="font-size: 11px; color: #f56e28; font-weight: 600; line-height:1.2;"><?php esc_html_e( '⚠️ Otra empresa', 'lealez' ); ?></span>
+                                        </div>
+                                        <span style="font-size: 10px; color: #777; text-align: center; max-width: 110px; word-break: break-word;" title="<?php echo esc_attr( $foreign_business_title ); ?>">
+                                            <?php echo esc_html( $foreign_business_title ); ?>
+                                        </span>
+                                        <a href="<?php echo esc_url( get_edit_post_link( $location_cpt->ID ) ); ?>"
+                                           class="button button-small button-secondary"
+                                           style="border-color:#f56e28; color:#f56e28;"
+                                           title="<?php esc_attr_e( 'Ver la ficha conflictiva', 'lealez' ); ?>">
+                                            <?php esc_html_e( 'Ver ficha', 'lealez' ); ?>
                                         </a>
                                     </div>
                                 <?php else : ?>
