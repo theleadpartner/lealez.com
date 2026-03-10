@@ -245,6 +245,27 @@ public function __construct() {
             new OY_Location_GMB_Busyhours_Metabox_Unique();
         }
     }
+
+
+/**
+     * ✅ Metabox externo: Control de Sincronización GMB (Integration)
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-integration-metabox.php
+     *
+     * Gestiona sincronización secuencial de todos los metaboxes GMB,
+     * límites de tasa, WP-Cron y log de sincronizaciones.
+     */
+    $gmb_integration_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-integration-metabox.php';
+    if ( file_exists( $gmb_integration_file ) ) {
+        require_once $gmb_integration_file;
+
+        if ( class_exists( 'OY_Location_GMB_Integration_Metabox' ) ) {
+            new OY_Location_GMB_Integration_Metabox();
+        }
+    }
+}
+
+
+
 }
 
 
