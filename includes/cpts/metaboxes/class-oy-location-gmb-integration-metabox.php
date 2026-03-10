@@ -140,6 +140,7 @@ class OY_Location_GMB_Integration_Metabox {
             'performance' => wp_create_nonce( 'oy_gmb_performance_nonce' ),
             'keywords'    => wp_create_nonce( 'oy_gmb_keywords_nonce' ),
             'reviews'     => wp_create_nonce( 'oy_gmb_reviews_nonce' ),
+            'posts'       => wp_create_nonce( 'oy_gmb_posts_nonce' ),
             'busyhours'   => wp_create_nonce( 'oy_gmb_busyhours_nonce' ),
         );
 
@@ -334,6 +335,10 @@ class OY_Location_GMB_Integration_Metabox {
                         <em class="oy-step-icon">⏳</em>
                         <span class="oy-step-label"><?php _e( 'Reseñas de Google', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
                     </li>
+                    <li id="oy-step-posts">
+                        <em class="oy-step-icon">⏳</em>
+                        <span class="oy-step-label"><?php _e( 'Publicaciones GMB', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
+                    </li>
                     <li id="oy-step-menus">
                         <em class="oy-step-icon">⏳</em>
                         <span class="oy-step-label"><?php _e( 'Menú de comida', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
@@ -457,7 +462,7 @@ class OY_Location_GMB_Integration_Metabox {
 
             // ── Definición de los 8 pasos ──────────────────────────────────────
             // Cada paso puede ser 'single' (una llamada) o 'multi' (lógica propia)
-            var TOTAL_STEPS = 8;
+            var TOTAL_STEPS = 9;
 
             // ── Helper: actualizar estado visual de un paso ───────────────────
             function setStep(id, state, msg) {
@@ -525,7 +530,7 @@ class OY_Location_GMB_Integration_Metabox {
                 setProgress(0);
 
                 // Resetear todos los pasos
-                ['import','hours','more','perf','keywords','reviews','menus','busyhours'].forEach(function(id){
+                ['import','hours','more','perf','keywords','reviews','posts','menus','busyhours'].forEach(function(id){
                     setStep(id, 'pending', '');
                 });
 
@@ -652,13 +657,42 @@ class OY_Location_GMB_Integration_Metabox {
                         stepResults.reviews = ok ? 'ok' : 'error';
                         var msg = ok ? '<?php echo esc_js( __( 'cargadas', 'lealez' ) ); ?>' : errMsg(r);
                         setStep('reviews', ok ? 'ok' : 'error', msg);
+                        // Notificar al metabox de reseñas para que re-renderice
+                        if ( ok ) { $(document).trigger('oy:gmb:reviews:refreshed'); }
                         doneCount++; setProgress(doneCount); def.resolve();
                     })
                     .fail(function(){ stepResults.reviews='error'; setStep('reviews','error','<?php echo esc_js( __( 'error de red', 'lealez' ) ); ?>'); doneCount++; setProgress(doneCount); def.resolve(); });
                     return def.promise();
                 });
 
-                // ── PASO 7: Menú de comida ─────────────────────────────────────
+                // ── PASO 7: Publicaciones GMB ──────────────────────────────────
+                chain = chain.then(function(){
+                    setStep('posts', 'running', '<?php echo esc_js( __( 'sincronizando publicaciones...', 'lealez' ) ); ?>');
+                    var def = $.Deferred();
+                    var postsData = $.extend({}, baseData, {
+                        location_id   : postId,
+                        gmb_loc_name  : locationName,
+                        force_refresh : 1,
+                    });
+                    doAjax('oy_gmb_posts_fetch', postsData, 'nonce', nonces.posts)
+                    .done(function(r){
+                        var ok = r && r.success;
+                        stepResults.posts = ok ? 'ok' : 'error';
+                        var msg = ok
+                            ? (r.data && r.data.total !== undefined
+                                ? r.data.total + ' <?php echo esc_js( __( 'publicaciones', 'lealez' ) ); ?>'
+                                : '<?php echo esc_js( __( 'sincronizadas', 'lealez' ) ); ?>')
+                            : errMsg(r);
+                        setStep('posts', ok ? 'ok' : 'error', msg);
+                        // Notificar al metabox de publicaciones para que re-renderice
+                        if ( ok ) { $(document).trigger('oy:gmb:posts:refreshed'); }
+                        doneCount++; setProgress(doneCount); def.resolve();
+                    })
+                    .fail(function(){ stepResults.posts='error'; setStep('posts','error','<?php echo esc_js( __( 'error de red', 'lealez' ) ); ?>'); doneCount++; setProgress(doneCount); def.resolve(); });
+                    return def.promise();
+                });
+
+                // ── PASO 8: Menú de comida ─────────────────────────────────────
                 chain = chain.then(function(){
                     setStep('menus', 'running', '<?php echo esc_js( __( 'sincronizando...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
@@ -676,7 +710,7 @@ class OY_Location_GMB_Integration_Metabox {
                     return def.promise();
                 });
 
-// ── PASO 8: Horario de mayor interés (compute → save) ──────────
+// ── PASO 9: Horario de mayor interés (compute → save) ──────────
                 chain = chain.then(function(){
                     setStep('busyhours', 'running', '<?php echo esc_js( __( 'calculando...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
