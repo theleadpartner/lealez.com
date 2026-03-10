@@ -74,9 +74,13 @@ class OY_Location_GMB_Reviews_Metabox {
             $location_name = 'accounts/' . $account_id . '/locations/' . $location_id;
         }
 
-        $review_url   = (string) get_post_meta( $post_id, 'google_reviews_url', true );
-        $last_sync    = (int) get_post_meta( $post_id, '_gmb_reviews_last_sync', true );
-        $cached_stats = get_post_meta( $post_id, '_gmb_reviews_stats_cache', true );
+        $review_url       = (string) get_post_meta( $post_id, 'google_reviews_url', true );
+        $last_sync        = (int) get_post_meta( $post_id, '_gmb_reviews_last_sync', true );
+        $cached_stats     = get_post_meta( $post_id, '_gmb_reviews_stats_cache', true );
+        $preloaded_reviews = get_post_meta( $post_id, '_gmb_reviews_cache', true );
+        if ( ! is_array( $preloaded_reviews ) ) {
+            $preloaded_reviews = array();
+        }
 
         $avg_rating    = '';
         $total_reviews = '';
@@ -90,7 +94,13 @@ class OY_Location_GMB_Reviews_Metabox {
         $missing_location  = $business_id && $gmb_connected && empty( $location_name );
         $ready             = $business_id && $gmb_connected && ! empty( $location_name );
 
+        $has_preloaded     = ! empty( $preloaded_reviews );
+        $placeholder_style = $has_preloaded ? ' style="display:none;"' : '';
+
         wp_nonce_field( $this->nonce_action, 'oy_gmb_reviews_nonce_field' );
+        if ( $has_preloaded ) :
+            ?><script>window.oyGmbReviewsPreloaded=<?php echo wp_json_encode( $preloaded_reviews, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ); ?>;</script><?php
+        endif;
         ?>
         <div id="oy-gmb-reviews-wrap"
              data-post-id="<?php echo esc_attr( $post_id ); ?>"
@@ -171,7 +181,7 @@ class OY_Location_GMB_Reviews_Metabox {
                 ?>
             </p>
 
-            <div id="oy-reviews-content" <?php echo $ready ? '' : 'style="display:none;"'; ?>>
+            <div id="oy-reviews-content" <?php echo ( $ready || $has_preloaded ) ? '' : 'style="display:none;"'; ?>>
 
                 <div class="oy-reviews-tabs" role="tablist">
                     <button type="button" class="oy-reviews-tab oy-reviews-tab--active" role="tab" data-tab="all" aria-selected="true">
@@ -207,7 +217,7 @@ class OY_Location_GMB_Reviews_Metabox {
                         <span class="dashicons dashicons-smiley" style="font-size:2rem;width:2rem;height:2rem;color:#ccc;"></span>
                         <p><?php esc_html_e( 'No hay resenas en esta categoria.', 'lealez' ); ?></p>
                     </div>
-                    <div class="oy-reviews-placeholder" id="oy-reviews-placeholder">
+                    <div class="oy-reviews-placeholder" id="oy-reviews-placeholder"<?php echo $placeholder_style; ?>>
                         <span class="dashicons dashicons-star-filled" style="font-size:2rem;width:2rem;height:2rem;color:#f9ab00;"></span>
                         <p><?php esc_html_e( 'Haz clic en "Sincronizar desde Google" para cargar las resenas.', 'lealez' ); ?></p>
                     </div>
@@ -397,7 +407,7 @@ class OY_Location_GMB_Reviews_Metabox {
 (function($){
 'use strict';
 var $wrap,postId=0,businessId=0,locationName='',nonce='',isReady=false;
-var allReviews=[],nextPageToken='',currentTab='all',currentSort='updateTime desc',isLoading=false;
+var allReviews=(window.oyGmbReviewsPreloaded&&Array.isArray(window.oyGmbReviewsPreloaded))?window.oyGmbReviewsPreloaded.slice():[],nextPageToken='',currentTab='all',currentSort='updateTime desc',isLoading=false;
 var STAR_MAP={ONE:1,TWO:2,THREE:3,FOUR:4,FIVE:5};
 function starNum(s){return STAR_MAP[s]||0;}
 function renderStarsHtml(n){var h='';for(var i=1;i<=5;i++){h+=i<=n?'<span class="oy-star oy-star--full">\u2605</span>':'<span class="oy-star oy-star--empty">\u2606</span>';}return h;}
@@ -639,6 +649,16 @@ if(navigator.clipboard){navigator.clipboard.writeText(val).then(function(){$('#o
 else{var $tmp=$('<textarea>').val(val).appendTo('body').select();document.execCommand('copy');$tmp.remove();$('#oy-modal-copy-confirm').show().delay(3000).fadeOut();}
 });
 $(document).on('keydown',function(e){if(e.key==='Escape')$('#oy-modal-get-reviews').hide();});
+// ── Renderizar caché precargado desde PHP ─────────────────────────────────
+if(allReviews.length>0){
+    $('#oy-reviews-placeholder').hide();
+    $('#oy-reviews-content').show();
+    renderList();
+}
+// ── Escuchar evento de sincronización automatizada ────────────────────────
+$(document).on('oy:gmb:reviews:refreshed',function(){
+    if(isReady){loadReviews(false,false);}
+});
 });
 })(jQuery);
 </script>
@@ -738,6 +758,13 @@ public function ajax_fetch_reviews() {
         ) );
     }
     update_post_meta( $post_id, '_gmb_reviews_last_sync', time() );
+
+    // Persistir la lista de reseñas para precarga al reabrir la página
+    // Solo en primera página (page_token vacío) para no mezclar páginas
+    if ( empty( $page_token ) && ! empty( $result['reviews'] ) && is_array( $result['reviews'] ) ) {
+        $reviews_to_persist = array_slice( $result['reviews'], 0, 50 );
+        update_post_meta( $post_id, '_gmb_reviews_cache', $reviews_to_persist );
+    }
 
     wp_send_json_success( $result );
 }
