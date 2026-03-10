@@ -83,6 +83,9 @@ public function __construct() {
     // Update parent business aggregated metrics
     add_action( 'updated_post_meta', array( $this, 'sync_metrics_to_parent' ), 10, 4 );
 
+    // ✅ Aviso admin cuando se intenta asignar un gmb_location_name ya en uso
+    add_action( 'admin_notices', array( $this, 'show_duplicate_gmb_notice' ) );
+
     // ✅ AJAX: traer ubicaciones por business y detalles por location_name
     add_action( 'wp_ajax_oy_get_gmb_locations_for_business', array( $this, 'ajax_get_gmb_locations_for_business' ) );
     add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
@@ -2080,8 +2083,9 @@ public function render_gmb_meta_box( $post ) {
 
     <script>
     jQuery(document).ready(function($){
-        var ajaxUrl   = (window.ajaxurl) ? window.ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
-        var nonce     = '<?php echo esc_js( $ajax_nonce ); ?>';
+        var ajaxUrl       = (window.ajaxurl) ? window.ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+        var nonce         = '<?php echo esc_js( $ajax_nonce ); ?>';
+        var currentPostId = <?php echo (int) $post->ID; ?>;
 
         function setHint(msg, type){
             var $h = $('#oy-gmb-location-hint');
@@ -2122,7 +2126,8 @@ public function render_gmb_meta_box( $post ) {
             $.post(ajaxUrl, {
                 action: 'oy_get_gmb_locations_for_business',
                 nonce: nonce,
-                business_id: businessId
+                business_id: businessId,
+                current_post_id: currentPostId
             }).done(function(resp){
                 if(!resp || !resp.success){
                     var msg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo cargar la lista de ubicaciones.', 'lealez' ) ); ?>';
@@ -2140,8 +2145,18 @@ public function render_gmb_meta_box( $post ) {
                     var it = list[i];
                     var addr = (it.address_short) ? it.address_short : '';
                     var ver = (it.verification_state) ? (' ['+it.verification_state+']') : '';
-                    var label = (it.title ? it.title : it.name) + (addr ? ' — '+addr : '') + ver;
-                    html += '<option data-account="'+ (it.account_name || '') +'" value="'+ (it.name || '') +'">' + $('<div>').text(label).html() + '</option>';
+                    var taken = (it.already_taken) ? true : false;
+                    var takenSuffix = taken ? ' ⚠️ <?php echo esc_js( __( 'ya asociada', 'lealez' ) ); ?>' : '';
+                    var label = (it.title ? it.title : it.name) + (addr ? ' — '+addr : '') + ver + takenSuffix;
+                    var takenByTitle    = it.taken_by_location_title || '';
+                    var takenByBusiness = it.taken_by_business_title || '';
+                    var optAttrs = ' data-account="'+(it.account_name||'')+'"'
+                        +' data-taken="'+(taken?'1':'0')+'"'
+                        +' data-taken-by-title="'+$('<div>').text(takenByTitle).html()+'"'
+                        +' data-taken-by-business="'+$('<div>').text(takenByBusiness).html()+'"'
+                        +' value="'+(it.name||'')+'"';
+                    var optStyle = taken ? ' style="color:#b32d2e; background:#fff3f3;"' : '';
+                    html += '<option'+optAttrs+optStyle+'>'+$('<div>').text(label).html()+'</option>';
                 }
 
                 $sel.html(html).prop('disabled', false);
@@ -2876,15 +2891,34 @@ function _normalizePeriod(p) {
             loadLocationsForBusiness(businessId, $('#gmb_location_name').val() || '');
         });
 
-        // On select location: enable import now
+        // On select location: enable import now (unless location is already taken)
         $(document).on('change', '#gmb_location_name', function(){
-            var val = $(this).val();
-            var acc = $(this).find('option:selected').data('account') || '';
+            var val        = $(this).val();
+            var $opt       = $(this).find('option:selected');
+            var acc        = $opt.data('account') || '';
+            var taken      = ($opt.data('taken') === 1 || $opt.data('taken') === '1');
+            var takenTitle = $opt.data('taken-by-title')    || '';
+            var takenBiz   = $opt.data('taken-by-business') || '';
             $('#gmb_location_account_name').val(acc);
 
+            // Remove any pre-existing duplicate warning banner
+            $('#oy-gmb-duplicate-warning').remove();
+
             if(val){
-                $('#oy-gmb-import-location-now').prop('disabled', false);
-                setHint('<?php echo esc_js( __( 'Ubicación seleccionada. Puedes importar ahora o guardar con auto-import.', 'lealez' ) ); ?>', 'info');
+                if(taken){
+                    // ─── Ubicación ya asociada a otro CPT ─────────────────────────────
+                    var warnParts = ['⚠️ <?php echo esc_js( __( 'Esta ubicación ya está asociada a la ficha', 'lealez' ) ); ?> «'+takenTitle+'»'];
+                    if(takenBiz){ warnParts.push('(<?php echo esc_js( __( 'empresa', 'lealez' ) ); ?>: '+takenBiz+')'); }
+                    warnParts.push('<?php echo esc_js( __( 'Solo puede existir una ficha oy_location por ubicación de Google.', 'lealez' ) ); ?>');
+                    $('<div id="oy-gmb-duplicate-warning" style="margin-top:8px; padding:8px 12px; background:#fff3f3; border-left:4px solid #dc3232; color:#b32d2e; font-weight:600; border-radius:2px;">'+warnParts.join(' ')+'</div>')
+                        .insertAfter('#oy-gmb-location-hint');
+                    $('#oy-gmb-import-location-now').prop('disabled', true);
+                    setHint('<?php echo esc_js( __( 'Selecciona otra ubicación disponible (no marcada con ⚠️).', 'lealez' ) ); ?>', 'error');
+                } else {
+                    // ─── Ubicación disponible ─────────────────────────────────────────
+                    $('#oy-gmb-import-location-now').prop('disabled', false);
+                    setHint('<?php echo esc_js( __( 'Ubicación seleccionada. Puedes importar ahora o guardar con auto-import.', 'lealez' ) ); ?>', 'info');
+                }
             }else{
                 $('#oy-gmb-import-location-now').prop('disabled', true);
             }
@@ -3656,7 +3690,8 @@ private function humanize_attribute_id( $attr_id ) {
             'gmb_verified'                    => 'absint',
 
             // ✅ NEW: selector & import flag
-            'gmb_location_name'               => 'sanitize_text_field',
+            // NOTA: gmb_location_name se guarda con validación de unicidad FUERA del loop
+            // (ver sección "GMB Location uniqueness check" más abajo).
             'gmb_location_account_name'       => 'sanitize_text_field',
             'gmb_import_on_save'              => 'absint',
 
@@ -3716,6 +3751,51 @@ private function humanize_attribute_id( $attr_id ) {
                 }
             }
         }
+
+        /**
+         * ✅ GMB Location Name — guardado con validación de unicidad global.
+         *
+         * Una ubicación de GMB (accounts/X/locations/Y) solo puede estar
+         * asociada a UN ÚNICO CPT oy_location en todo el sistema, sin importar
+         * a qué empresa padre pertenezca. Si hay conflicto, el campo NO se
+         * actualiza y se muestra un aviso en la siguiente carga de pantalla.
+         */
+        if ( isset( $_POST['gmb_location_name'] ) ) {
+            $new_gmb_name = sanitize_text_field( wp_unslash( $_POST['gmb_location_name'] ) );
+
+            if ( '' !== $new_gmb_name ) {
+                $conflict = self::find_location_cpt_for_gmb_name( $new_gmb_name, $post_id );
+
+                if ( $conflict ) {
+                    // ─── Conflicto detectado: NO guardar, registrar aviso ──────────────
+                    $conflict_business_id    = (int) get_post_meta( $conflict->ID, 'parent_business_id', true );
+                    $conflict_business_title = '';
+                    if ( $conflict_business_id ) {
+                        $cb                      = get_post( $conflict_business_id );
+                        $conflict_business_title = $cb ? $cb->post_title : "ID {$conflict_business_id}";
+                    }
+                    set_transient(
+                        'oy_location_gmb_duplicate_' . get_current_user_id(),
+                        array(
+                            'gmb_name'                => $new_gmb_name,
+                            'conflict_id'             => $conflict->ID,
+                            'conflict_title'          => $conflict->post_title,
+                            'conflict_business_id'    => $conflict_business_id,
+                            'conflict_business_title' => $conflict_business_title,
+                        ),
+                        60
+                    );
+                    // El valor existente de gmb_location_name se mantiene intacto (no hacemos update_post_meta).
+                } else {
+                    // ─── Sin conflicto: guardar normalmente ───────────────────────────
+                    update_post_meta( $post_id, 'gmb_location_name', $new_gmb_name );
+                }
+            } else {
+                // El usuario limpió el campo — borrar el valor guardado
+                update_post_meta( $post_id, 'gmb_location_name', '' );
+            }
+        }
+        // Si gmb_location_name no viene en POST (ej: campo readonly), simplemente se conserva el valor existente.
 
         // ✅ Save loyalty_programs_accepted (array of IDs)
         if ( isset( $_POST['loyalty_programs_accepted'] ) && is_array( $_POST['loyalty_programs_accepted'] ) ) {
@@ -5591,7 +5671,9 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
             wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
         }
 
-        $business_id = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
+        $business_id     = isset( $_POST['business_id'] )     ? absint( wp_unslash( $_POST['business_id'] ) )     : 0;
+        $current_post_id = isset( $_POST['current_post_id'] ) ? absint( wp_unslash( $_POST['current_post_id'] ) ) : 0;
+
         if ( ! $business_id ) {
             wp_send_json_error( array( 'message' => __( 'business_id inválido.', 'lealez' ) ) );
         }
@@ -5628,12 +5710,40 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
                 $verification_state = (string) $loc['verification']['state'];
             }
 
+            // ✅ UNICIDAD: detectar si esta ubicación GMB ya está asociada a otro CPT oy_location.
+            // Se excluye el post que se está editando actualmente (current_post_id) para que
+            // la ubicación ya asignada a este mismo CPT NO aparezca como "tomada".
+            $already_taken          = false;
+            $taken_by_location_id   = 0;
+            $taken_by_location_title= '';
+            $taken_by_business_id   = 0;
+            $taken_by_business_title= '';
+
+            if ( ! empty( $name ) ) {
+                $conflict = self::find_location_cpt_for_gmb_name( $name, $current_post_id );
+                if ( $conflict ) {
+                    $already_taken           = true;
+                    $taken_by_location_id    = $conflict->ID;
+                    $taken_by_location_title = $conflict->post_title;
+                    $taken_by_business_id    = (int) get_post_meta( $conflict->ID, 'parent_business_id', true );
+                    if ( $taken_by_business_id ) {
+                        $cb                      = get_post( $taken_by_business_id );
+                        $taken_by_business_title = $cb ? $cb->post_title : "ID {$taken_by_business_id}";
+                    }
+                }
+            }
+
             $out[] = array(
-                'name'              => (string) $name,
-                'title'             => (string) $title,
-                'account_name'      => (string) ( $loc['account_name'] ?? '' ),
-                'address_short'     => (string) $addr_short,
-                'verification_state'=> (string) $verification_state,
+                'name'                   => (string) $name,
+                'title'                  => (string) $title,
+                'account_name'           => (string) ( $loc['account_name'] ?? '' ),
+                'address_short'          => (string) $addr_short,
+                'verification_state'     => (string) $verification_state,
+                'already_taken'          => $already_taken,
+                'taken_by_location_id'   => $taken_by_location_id,
+                'taken_by_location_title'=> $taken_by_location_title,
+                'taken_by_business_id'   => $taken_by_business_id,
+                'taken_by_business_title'=> $taken_by_business_title,
             );
         }
 
@@ -6273,6 +6383,107 @@ public function custom_column_content( $column, $post_id ) {
             // Trigger counter update after deletion
             wp_schedule_single_event( time() + 5, 'oy_update_business_location_counter', array( $parent_id ) );
         }
+    }
+
+    /**
+     * ✅ Busca CUALQUIER CPT oy_location (en todas las empresas del sistema) que tenga
+     * el gmb_location_name indicado. Utilizado para aplicar la política de unicidad
+     * que impide que dos fichas de Lealez apunten a la misma ubicación de Google.
+     *
+     * @param string $gmb_location_name  Nombre completo del recurso GMB: accounts/X/locations/Y
+     * @param int    $exclude_post_id    ID del post que se está editando (se excluye de la búsqueda).
+     *                                   Pasar 0 para no excluir ninguno.
+     * @return WP_Post|null              El CPT conflictivo, o null si no existe ninguno.
+     */
+    public static function find_location_cpt_for_gmb_name( string $gmb_location_name, int $exclude_post_id = 0 ): ?WP_Post {
+        if ( '' === trim( $gmb_location_name ) ) {
+            return null;
+        }
+
+        $args = array(
+            'post_type'      => 'oy_location',
+            'post_status'    => array( 'publish', 'draft', 'pending', 'private' ),
+            'posts_per_page' => 1,
+            'no_found_rows'  => true,
+            'meta_query'     => array(
+                array(
+                    'key'     => 'gmb_location_name',
+                    'value'   => $gmb_location_name,
+                    'compare' => '=',
+                ),
+            ),
+        );
+
+        if ( $exclude_post_id > 0 ) {
+            $args['post__not_in'] = array( $exclude_post_id );
+        }
+
+        $query = new WP_Query( $args );
+
+        if ( $query->have_posts() ) {
+            return $query->posts[0];
+        }
+
+        return null;
+    }
+
+    /**
+     * ✅ Muestra un aviso de error en el admin cuando se intentó asignar un
+     * gmb_location_name que ya estaba en uso por otro CPT oy_location.
+     * El aviso se activa mediante un transient de 60 s guardado en save_meta_boxes().
+     */
+    public function show_duplicate_gmb_notice(): void {
+        $screen = get_current_screen();
+        if ( ! $screen || 'oy_location' !== $screen->post_type ) {
+            return;
+        }
+
+        $transient_key = 'oy_location_gmb_duplicate_' . get_current_user_id();
+        $data          = get_transient( $transient_key );
+
+        if ( ! $data || ! is_array( $data ) ) {
+            return;
+        }
+
+        delete_transient( $transient_key );
+
+        // Construir enlace a la ficha conflictiva
+        $conflict_link = '';
+        if ( ! empty( $data['conflict_id'] ) ) {
+            $edit_url = get_edit_post_link( (int) $data['conflict_id'], 'raw' );
+            if ( $edit_url ) {
+                $conflict_link = sprintf(
+                    ' <a href="%s">%s</a>',
+                    esc_url( $edit_url ),
+                    esc_html( $data['conflict_title'] ?? "ID {$data['conflict_id']}" )
+                );
+            } else {
+                $conflict_link = ' «' . esc_html( $data['conflict_title'] ?? "ID {$data['conflict_id']}" ) . '»';
+            }
+        }
+
+        // Info de empresa conflictiva
+        $business_info = '';
+        if ( ! empty( $data['conflict_business_title'] ) ) {
+            $business_info = ' ' . sprintf(
+                /* translators: %s: nombre de la empresa */
+                esc_html__( '(empresa: %s)', 'lealez' ),
+                esc_html( $data['conflict_business_title'] )
+            );
+        }
+
+        printf(
+            '<div class="notice notice-error is-dismissible"><p>'
+            . '<strong>%s</strong> %s%s%s.<br>'
+            . '<span style="font-size:12px;color:#555;">%s <code>%s</code></span>'
+            . '</p></div>',
+            esc_html__( '⚠️ Ubicación de Google duplicada — el campo NO se guardó.', 'lealez' ),
+            esc_html__( 'La ubicación de Google ya está asociada a la ficha:', 'lealez' ),
+            $conflict_link,  // ya escapado arriba
+            $business_info,  // ya escapado arriba
+            esc_html__( 'Solo puede existir un CPT oy_location por ubicación GMB. Campo rechazado:', 'lealez' ),
+            esc_html( $data['gmb_name'] ?? '' )
+        );
     }
 
     /**
