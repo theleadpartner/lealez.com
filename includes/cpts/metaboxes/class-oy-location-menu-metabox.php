@@ -22,9 +22,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 /**
  * Class OY_Location_Menu_Metabox
  */
+if ( ! class_exists( 'OY_Location_Menu_Metabox' ) ) :
+
 class OY_Location_Menu_Metabox {
 
-    /**
+/**
      * Nonce action
      * @var string
      */
@@ -43,10 +45,25 @@ class OY_Location_Menu_Metabox {
     private $post_type = 'oy_location';
 
     /**
+     * Prevents double hook registration when the class is instantiated
+     * more than once in the same request (WP 6.9.1 duplicate-metabox guard).
+     *
+     * @var bool
+     */
+    private static bool $registered = false;
+
+    /**
      * Constructor
      */
     public function __construct() {
-        add_action( 'add_meta_boxes',            array( $this, 'add_meta_box' ) );
+        if ( self::$registered ) {
+            return;
+        }
+        self::$registered = true;
+
+        // Priority 15 keeps this distinct from OY_Location_CPT::add_meta_boxes (priority 10),
+        // avoiding the WP 6.9.1 same-priority duplicate-registration bug.
+        add_action( 'add_meta_boxes',            array( $this, 'add_meta_box' ), 15 );
         add_action( 'save_post_oy_location',     array( $this, 'save_meta_box' ), 15, 2 );
         add_action( 'admin_enqueue_scripts',     array( $this, 'enqueue_assets' ) );
     }
@@ -1105,3 +1122,5 @@ class OY_Location_Menu_Metabox {
         update_post_meta( $post_id, 'location_menu_featured_items', $featured_clean );
     }
 }
+    endif; // class_exists OY_Location_Menu_Metabox
+
