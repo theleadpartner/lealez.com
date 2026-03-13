@@ -2932,10 +2932,12 @@ public static function get_location_services( $business_id, $account_id, $locati
     }
 
     /**
-     * IMPORTANTE:
-     * El endpoint REST válido documentado por Google para servicios en v4 es:
+     * Endpoint REST para servicios en GBP API v4:
      *   GET /accounts/{accountId}/locations/{locationId}/serviceList
-     * NO /services
+     *
+     * REQUISITO: en Google Cloud Console debe estar habilitada la API
+     * "Google My Business API" (la v4 legacy), no solo "Business Profile API".
+     * Sin ese permiso, el endpoint retorna HTML 404 en lugar de JSON.
      */
     $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
                 . '/locations/' . rawurlencode( $location_id_normalized )
@@ -2972,21 +2974,66 @@ public static function get_location_services( $business_id, $account_id, $locati
     if ( is_wp_error( $result ) ) {
         $err_data  = $result->get_error_data();
         $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+        $raw_body  = is_array( $err_data ) ? (string) ( $err_data['raw_body'] ?? '' ) : '';
 
-        /**
-         * HTTP 404 desde /serviceList NO es un error de API real.
-         * Significa que esta ubicación aún no tiene una lista de servicios
-         * configurada en GBP, o que su categoría de negocio no la soporta.
-         * Devolvemos un array con flag interno en lugar de WP_Error,
-         * para que get_location_products() pueda diferenciarlo de errores
-         * reales como 401 (no autorizado), 403 (sin permisos) o 500 (servidor).
-         */
         if ( 404 === $http_code ) {
+            /**
+             * Distinguir entre dos tipos de 404:
+             *
+             * 1. JSON 404 ({"error":{"code":404,"status":"NOT_FOUND"}})
+             *    → El endpoint existe pero el recurso serviceList no existe para
+             *      esta ubicación (nunca se guardaron servicios en GBP).
+             *      Esto es normal y esperado.
+             *
+             * 2. HTML 404 (<!DOCTYPE html>... Error 404 Not Found)
+             *    → El endpoint en sí no está disponible para este proyecto/cuenta.
+             *      Causa más común: la API "Google My Business" no está habilitada
+             *      en Google Cloud Console (solo está "Business Profile API").
+             *      O la cuenta no tiene acceso avanzado a la API v4.
+             */
+            $is_html_response = (
+                stripos( $raw_body, '<!doctype' ) !== false ||
+                stripos( $raw_body, '<html' ) !== false
+            );
+
+            if ( $is_html_response ) {
+                // HTML 404 = endpoint inaccesible, problema de credenciales/habilitación
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log(
+                        $business_id,
+                        'error',
+                        'get_location_services HTML 404 — el endpoint /serviceList no está accesible para esta cuenta. Verifica que "Google My Business API" (v4) esté habilitada en Google Cloud Console.',
+                        array(
+                            'account_id'  => $account_id_normalized,
+                            'location_id' => $location_id_normalized,
+                            'endpoint'    => self::$mybusiness_v4_base . $endpoint,
+                        )
+                    );
+                }
+
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[Lealez GMB] get_location_services HTML 404 — endpoint inaccesible. El proyecto de Google Cloud probablemente no tiene habilitada "Google My Business API". URL: ' . self::$mybusiness_v4_base . $endpoint );
+                }
+
+                return new WP_Error(
+                    'service_list_endpoint_unavailable',
+                    __( 'El endpoint /serviceList no está accesible para este proyecto de Google Cloud.', 'lealez' ),
+                    array(
+                        'code'        => 404,
+                        'html_404'    => true,
+                        'account_id'  => $account_id_normalized,
+                        'location_id' => $location_id_normalized,
+                        'endpoint'    => self::$mybusiness_v4_base . $endpoint,
+                    )
+                );
+            }
+
+            // JSON 404 = recurso no existe todavía (normal para ubicaciones nuevas sin servicios)
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log(
                     $business_id,
                     'info',
-                    'serviceList devolvió 404 — esta ubicación aún no tiene lista de servicios en GBP. Es normal para ubicaciones nuevas o sin servicios configurados.',
+                    'serviceList devolvió JSON 404 — esta ubicación aún no tiene lista de servicios guardada en GBP.',
                     array(
                         'account_id'  => $account_id_normalized,
                         'location_id' => $location_id_normalized,
@@ -2995,14 +3042,14 @@ public static function get_location_services( $business_id, $account_id, $locati
             }
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[Lealez GMB] get_location_services 404 — sin serviceList todavía para esta ubicación (esperado si nunca se configuraron servicios en GBP).' );
+                error_log( '[Lealez GMB] get_location_services JSON 404 — sin serviceList todavía para esta ubicación (esperado si nunca se guardaron servicios en GBP).' );
             }
 
-            // Flag interno para que el llamador distinga "sin datos" de "error real".
+            // Flag interno: recurso vacío, no es error técnico
             return array( '_gmb_no_service_list' => true );
         }
 
-        // Errores reales (401, 403, 500, etc.) — sí son fallos que deben propagarse.
+        // Otros errores reales (401, 403, 500, etc.)
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
@@ -3020,9 +3067,9 @@ public static function get_location_services( $business_id, $account_id, $locati
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( '[Lealez GMB] get_location_services ERROR (HTTP ' . $http_code . '): ' . $result->get_error_message() );
-            if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
+            if ( ! empty( $raw_body ) ) {
                 error_log( '[Lealez GMB] get_location_services HTTP_CODE: ' . $http_code );
-                error_log( '[Lealez GMB] get_location_services RAW_BODY: ' . substr( (string) $err_data['raw_body'], 0, 2000 ) );
+                error_log( '[Lealez GMB] get_location_services RAW_BODY: ' . substr( $raw_body, 0, 2000 ) );
             }
         }
 
