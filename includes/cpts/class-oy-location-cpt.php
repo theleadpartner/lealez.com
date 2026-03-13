@@ -118,6 +118,24 @@ public function __construct() {
     }
 
     /**
+     * ✅ Metabox externo: Catálogo de Productos (negocios no-restaurante)
+     * Archivo: includes/cpts/metaboxes/class-oy-location-products-metabox.php
+     *
+     * Gestión manual de catálogo de productos para negocios que venden
+     * productos físicos o digitales (no restaurantes).
+     * Registra, renderiza y guarda de forma completamente independiente.
+     * Expone AJAX propio: oy_sync_location_products
+     */
+    $products_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-products-metabox.php';
+    if ( file_exists( $products_metabox_file ) ) {
+        require_once $products_metabox_file;
+
+        if ( class_exists( 'OY_Location_Products_Metabox' ) ) {
+            new OY_Location_Products_Metabox();
+        }
+    }
+
+    /**
      * ✅ Metabox externo: Atributos dinámicos sección "Más" de GBP
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-more-metabox.php
      */
