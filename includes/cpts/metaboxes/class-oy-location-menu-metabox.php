@@ -306,9 +306,9 @@ class OY_Location_Menu_Metabox {
                 $fm_err_time = ! empty( $gmb_food_menus_error['timestamp'] ) ? ' — ' . esc_html( $gmb_food_menus_error['timestamp'] ) : '';
                 ?>
                 <div class="oy-gmb-api-error">
-                    <strong>⚠️ <?php _e( 'Food Menus API — No se pudo obtener el menú desde Google', 'lealez' ); ?></strong><?php echo $fm_err_time; ?><br>
+                    <strong>⚠️ <?php _e( 'API de Catálogo — No se pudo obtener el catálogo desde Google', 'lealez' ); ?></strong>
                     <em><?php echo $fm_err_code . ' ' . $fm_err_msg; ?></em><br>
-                    <span style="color:#666;"><?php _e( 'Posibles causas: (1) El negocio no tiene categoría de restaurante en GMB; (2) La "My Business API v4" no está disponible para esta cuenta; (3) Error temporal de red. El menú completo puede editarse manualmente en la pestaña "Menú Completo".', 'lealez' ); ?></span>
+                    <span style="color:#666;"><?php _e( 'Posibles causas: (1) La "My Business API v4" no está disponible para esta cuenta; (2) El tipo de negocio en GMB no tiene catálogo estructurado disponible vía API; (3) Error temporal de red. El catálogo puede gestionarse manualmente en la pestaña "Catálogo / Menú".', 'lealez' ); ?></span>
                 </div>
             <?php endif; ?>
 
@@ -320,7 +320,7 @@ class OY_Location_Menu_Metabox {
                 <div class="oy-gmb-sync-notice">
                     <div class="oy-gmb-sync-notice-icon">🔄</div>
                     <div>
-                        <strong><?php _e( 'Menú sincronizado desde Google My Business', 'lealez' ); ?></strong><br>
+                        <strong><?php _e( 'Catálogo / Menú sincronizado desde Google My Business', 'lealez' ); ?></strong><br>
                         <?php printf(
                             /* translators: 1: date, 2: number of sections */
                             __( 'Última sincronización: %1$s — %2$d sección(es) importada(s). Los cambios hechos aquí se guardan en Lealez y <em>no</em> se sincronizan de vuelta a Google. Para actualizar Google, edita directamente en tu Perfil de Negocio de Google.', 'lealez' ),
@@ -333,9 +333,9 @@ class OY_Location_Menu_Metabox {
 
             <?php /* ── Tabs ── */ ?>
             <div class="oy-menu-tabs">
-                <button type="button" class="oy-menu-tab-btn active" data-tab="complete"><?php _e( 'Menú Completo', 'lealez' ); ?></button>
-                <button type="button" class="oy-menu-tab-btn" data-tab="photos"><?php _e( 'Fotos del Menú', 'lealez' ); ?></button>
-                <button type="button" class="oy-menu-tab-btn" data-tab="featured"><?php _e( 'Platos Destacados', 'lealez' ); ?></button>
+                <button type="button" class="oy-menu-tab-btn active" data-tab="complete"><?php _e( 'Catálogo / Menú', 'lealez' ); ?></button>
+                <button type="button" class="oy-menu-tab-btn" data-tab="photos"><?php _e( 'Fotos del Catálogo', 'lealez' ); ?></button>
+                <button type="button" class="oy-menu-tab-btn" data-tab="featured"><?php _e( 'Destacados', 'lealez' ); ?></button>
             </div>
 
             <?php /* ═══════════════════════════════════════════════════════
@@ -386,7 +386,7 @@ class OY_Location_Menu_Metabox {
                 </div>
 
                 <button type="button" id="oy-add-section" class="button button-primary">
-                    + <?php _e( 'Agregar sección del menú', 'lealez' ); ?>
+                    + <?php _e( 'Agregar sección', 'lealez' ); ?>
                 </button>
 
                 <p class="description" style="margin-top:8px;">
@@ -407,7 +407,7 @@ class OY_Location_Menu_Metabox {
                 <?php if ( ! empty( $gmb_food_photos ) ) : ?>
                     <div style="background:#e8f4fd;border:1px solid #90caf9;border-radius:5px;padding:12px 14px;margin-bottom:18px;">
                         <h4 style="margin:0 0 10px;font-size:13px;">
-                            🔄 <?php _e( 'Fotos de comida sincronizadas desde Google My Business', 'lealez' ); ?>
+                            🔄 <?php _e( 'Fotos sincronizadas desde Google My Business', 'lealez' ); ?>
                             <span class="oy-gmb-badge oy-gmb-badge-green" style="margin-left:6px;"><?php echo count( $gmb_food_photos ); ?> fotos</span>
                         </h4>
                         <p class="description" style="margin:0 0 10px;font-size:12px;">
@@ -496,7 +496,7 @@ class OY_Location_Menu_Metabox {
             <div class="oy-menu-tab-panel" id="oy-menu-tab-featured">
 
                 <p class="description" style="margin-bottom:14px;">
-                    <?php _e( 'Selecciona los platos o productos que quieres destacar en tu perfil. Estos aparecerán en la sección "Platos destacados" de Google Business Profile.', 'lealez' ); ?>
+                    <?php _e( 'Selecciona los productos, platos o servicios que quieres destacar en tu perfil. Estos aparecerán en la sección de destacados de tu Perfil de Negocio de Google.', 'lealez' ); ?>
                 </p>
 
                 <div id="oy-featured-items-list">
@@ -512,7 +512,7 @@ class OY_Location_Menu_Metabox {
                 </div>
 
                 <button type="button" id="oy-add-featured-item" class="button button-primary">
-                    ⭐ <?php _e( 'Agregar plato destacado', 'lealez' ); ?>
+                    ⭐ <?php _e( 'Agregar elemento destacado', 'lealez' ); ?>
                 </button>
             </div>
 
@@ -817,7 +817,7 @@ class OY_Location_Menu_Metabox {
                     $this->render_item_html( $sec_idx, $item_idx, $item_name, $item_price, $item_desc, $item_img, $item_img_url, $item_dietary, $item_gmb_img_url, $item_media_keys );
                 endforeach; ?>
                 <button type="button" class="button button-small oy-add-item-btn">
-                    + <?php _e( 'Agregar un producto del menú', 'lealez' ); ?>
+                    + <?php _e( 'Agregar un producto', 'lealez' ); ?>
                 </button>
             </div>
         </div>
@@ -960,7 +960,7 @@ class OY_Location_Menu_Metabox {
                     <input type="text"
                            name="<?php echo esc_attr( $base ); ?>[name]"
                            value="<?php echo esc_attr( $name ); ?>"
-                           placeholder="<?php esc_attr_e( 'Nombre del plato*', 'lealez' ); ?>"
+                           placeholder="<?php esc_attr_e( 'Nombre del producto / plato*', 'lealez' ); ?>"
                            class="regular-text"
                            style="flex:1;max-width:280px;"
                            maxlength="140">
@@ -971,7 +971,7 @@ class OY_Location_Menu_Metabox {
                            style="max-width:120px;">
                 </div>
                 <textarea name="<?php echo esc_attr( $base ); ?>[description]"
-                          placeholder="<?php esc_attr_e( 'Descripción breve del plato', 'lealez' ); ?>"
+                          placeholder="<?php esc_attr_e( 'Descripción breve del producto', 'lealez' ); ?>"
                           style="width:100%;resize:vertical;min-height:54px;font-size:12px;"
                           maxlength="1000"><?php echo esc_textarea( $desc ); ?></textarea>
             </div>
