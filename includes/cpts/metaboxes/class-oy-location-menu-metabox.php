@@ -68,19 +68,19 @@ class OY_Location_Menu_Metabox {
         add_action( 'admin_enqueue_scripts',     array( $this, 'enqueue_assets' ) );
     }
 
-    /**
-     * Register metabox
-     */
-    public function add_meta_box() {
-        add_meta_box(
-            'oy_location_menu',
-            __( '🍽️ Menú del Negocio', 'lealez' ),
-            array( $this, 'render' ),
-            $this->post_type,
-            'normal',
-            'default'
-        );
-    }
+/**
+ * Register metabox
+ */
+public function add_meta_box() {
+    add_meta_box(
+        'oy_location_menu',
+        __( '🍽️ Menú del Restaurante', 'lealez' ),
+        array( $this, 'render' ),
+        $this->post_type,
+        'normal',
+        'default'
+    );
+}
 
     /**
      * Enqueue scripts and styles (only on oy_location screens)
@@ -380,9 +380,9 @@ class OY_Location_Menu_Metabox {
                    ═══════════════════════════════════════════════════════ */ ?>
             <div class="oy-menu-tab-panel active" id="oy-menu-tab-complete">
 
-                <p class="description" style="margin-bottom:14px;">
-                    <?php _e( 'Las secciones y productos se importan automáticamente desde Google My Business al sincronizar la ubicación. También puedes agregar o editar secciones manualmente.', 'lealez' ); ?>
-                </p>
+            <p class="description" style="margin-bottom:14px;">
+                <?php _e( 'Las secciones y platos se importan automáticamente desde Google My Business al sincronizar la ubicación. Este metabox es exclusivo para restaurantes y negocios con menú de alimentos. Para negocios con catálogo de productos (ropa, electrónicos, etc.), usa el metabox de Catálogo de Productos.', 'lealez' ); ?>
+            </p
 
                 <?php /* ── Botón de sincronización directa desde GMB ── */ ?>
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:4px;">
@@ -555,12 +555,12 @@ class OY_Location_Menu_Metabox {
 
         </div><!-- /#oy-menu-metabox-wrap -->
 
-<?php /* ── Templates HTML (ocultos) para JS — reflejan el catalog_type detectado ── */ ?>
+<?php /* ── Templates HTML (ocultos) para JS ── */ ?>
         <script type="text/html" id="oy-section-template">
-            <?php $this->render_section_html( '__SEC_IDX__', '', array(), false, $catalog_type ); ?>
+            <?php $this->render_section_html( '__SEC_IDX__', '', array(), false ); ?>
         </script>
         <script type="text/html" id="oy-item-template">
-            <?php $this->render_item_html( '__SEC_IDX__', '__ITEM_IDX__', '', '', '', 0, '', array(), '', array(), $catalog_type ); ?>
+            <?php $this->render_item_html( '__SEC_IDX__', '__ITEM_IDX__', '', '', '', 0, '', array(), '', array() ); ?>
         </script>
         <script type="text/html" id="oy-featured-template">
             <?php $this->render_featured_item_html( '__FEAT_IDX__', '', '', '', 0, '' ); ?>
@@ -812,211 +812,157 @@ class OY_Location_Menu_Metabox {
     }
 
 /**
-     * Render HTML for a menu/catalog section.
-     *
-     * @param int|string $sec_idx      Índice de la sección
-     * @param string     $name         Nombre de la sección
-     * @param array      $items        Array de items
-     * @param bool       $from_gmb     Si fue importado desde GMB
-     * @param string     $catalog_type Tipo detectado: food_menu | services | products | none | ''
-     */
-    private function render_section_html( $sec_idx, $name, $items, $from_gmb = false, $catalog_type = '' ) {
-        $item_count = count( $items );
-
-        // Adaptar placeholder del nombre de sección según tipo
-        if ( 'products' === $catalog_type ) {
-            $sec_placeholder = __( 'Nombre de la categoría (ej: Etiquetas, Empaques...)', 'lealez' );
-            $add_item_label  = __( 'Agregar un producto', 'lealez' );
-        } elseif ( 'services' === $catalog_type ) {
-            $sec_placeholder = __( 'Nombre del grupo de servicios (ej: Diseño, Instalación...)', 'lealez' );
-            $add_item_label  = __( 'Agregar un servicio', 'lealez' );
-        } else {
-            $sec_placeholder = __( 'Nombre de la sección (ej: Sopas, Entradas...)', 'lealez' );
-            $add_item_label  = __( 'Agregar un producto', 'lealez' );
-        }
-        ?>
-        <div class="oy-menu-section" data-section-idx="<?php echo esc_attr( $sec_idx ); ?>">
-            <div class="oy-menu-section-header">
-                <span class="oy-section-handle" title="<?php esc_attr_e( 'Arrastrar para reordenar', 'lealez' ); ?>">⠿</span>
-                <input type="text"
-                       class="oy-section-name-input"
-                       name="location_menu_sections[<?php echo esc_attr( $sec_idx ); ?>][name]"
-                       value="<?php echo esc_attr( $name ); ?>"
-                       placeholder="<?php echo esc_attr( $sec_placeholder ); ?>">
-                <?php if ( $from_gmb ) : ?>
-                    <span class="oy-gmb-badge oy-gmb-badge-blue" style="margin-left:4px;">🔄 GMB</span>
-                <?php endif; ?>
-                <input type="hidden" name="location_menu_sections[<?php echo esc_attr( $sec_idx ); ?>][from_gmb]" value="<?php echo $from_gmb ? '1' : '0'; ?>">
-                <span class="oy-menu-section-count">
-                    <?php echo sprintf( _n( '%d producto', '%d productos', $item_count, 'lealez' ), $item_count ); ?>
-                </span>
-                <button type="button" class="oy-section-toggle">▲</button>
-                <button type="button" class="oy-section-remove" title="<?php esc_attr_e( 'Eliminar sección', 'lealez' ); ?>">×</button>
-            </div>
-            <div class="oy-menu-items-wrap">
-                <?php foreach ( $items as $item_idx => $item ) :
-                    $item_name        = sanitize_text_field( $item['name']            ?? '' );
-                    $item_price       = sanitize_text_field( $item['price']           ?? '' );
-                    $item_desc        = sanitize_textarea_field( $item['description'] ?? '' );
-                    $item_img         = (int) ( $item['image_id']        ?? 0 );
-                    $item_img_url     = $item_img ? wp_get_attachment_image_url( $item_img, 'thumbnail' ) : '';
-                    $item_dietary     = is_array( $item['dietary']    ?? null ) ? $item['dietary']    : array();
-                    $item_gmb_img_url = (string) ( $item['gmb_image_url']   ?? '' );
-                    $item_media_keys  = is_array( $item['media_keys'] ?? null ) ? $item['media_keys'] : array();
-                    $item_product_url = (string) ( $item['gmb_product_url'] ?? '' );
-                    $this->render_item_html( $sec_idx, $item_idx, $item_name, $item_price, $item_desc, $item_img, $item_img_url, $item_dietary, $item_gmb_img_url, $item_media_keys, $catalog_type, $item_product_url );
-                endforeach; ?>
-                <button type="button" class="button button-small oy-add-item-btn">
-                    + <?php echo esc_html( $add_item_label ); ?>
-                </button>
-            </div>
+ * Render HTML for a menu section (restaurant only).
+ *
+ * @param int|string $sec_idx  Índice de la sección
+ * @param string     $name     Nombre de la sección
+ * @param array      $items    Array de items
+ * @param bool       $from_gmb Si fue importado desde GMB
+ */
+private function render_section_html( $sec_idx, $name, $items, $from_gmb = false ) {
+    $item_count      = count( $items );
+    $sec_placeholder = __( 'Nombre de la sección (ej: Sopas, Entradas, Postres...)', 'lealez' );
+    $add_item_label  = __( 'Agregar un plato', 'lealez' );
+    ?>
+    <div class="oy-menu-section" data-section-idx="<?php echo esc_attr( $sec_idx ); ?>">
+        <div class="oy-menu-section-header">
+            <span class="oy-section-handle" title="<?php esc_attr_e( 'Arrastrar para reordenar', 'lealez' ); ?>">⠿</span>
+            <input type="text"
+                   class="oy-section-name-input"
+                   name="location_menu_sections[<?php echo esc_attr( $sec_idx ); ?>][name]"
+                   value="<?php echo esc_attr( $name ); ?>"
+                   placeholder="<?php echo esc_attr( $sec_placeholder ); ?>">
+            <?php if ( $from_gmb ) : ?>
+                <span class="oy-gmb-badge oy-gmb-badge-blue" style="margin-left:4px;">🔄 GMB</span>
+            <?php endif; ?>
+            <input type="hidden" name="location_menu_sections[<?php echo esc_attr( $sec_idx ); ?>][from_gmb]" value="<?php echo $from_gmb ? '1' : '0'; ?>">
+            <span class="oy-menu-section-count">
+                <?php echo sprintf( _n( '%d plato', '%d platos', $item_count, 'lealez' ), $item_count ); ?>
+            </span>
+            <button type="button" class="oy-section-toggle">▲</button>
+            <button type="button" class="oy-section-remove" title="<?php esc_attr_e( 'Eliminar sección', 'lealez' ); ?>">×</button>
         </div>
-        <?php
-    }
+        <div class="oy-menu-items-wrap">
+            <?php foreach ( $items as $item_idx => $item ) :
+                $item_name        = sanitize_text_field( $item['name']            ?? '' );
+                $item_price       = sanitize_text_field( $item['price']           ?? '' );
+                $item_desc        = sanitize_textarea_field( $item['description'] ?? '' );
+                $item_img         = (int) ( $item['image_id']        ?? 0 );
+                $item_img_url     = $item_img ? wp_get_attachment_image_url( $item_img, 'thumbnail' ) : '';
+                $item_dietary     = is_array( $item['dietary']       ?? null ) ? $item['dietary']    : array();
+                $item_gmb_img_url = (string) ( $item['gmb_image_url']  ?? '' );
+                $item_media_keys  = is_array( $item['media_keys']    ?? null ) ? $item['media_keys'] : array();
+                $this->render_item_html( $sec_idx, $item_idx, $item_name, $item_price, $item_desc, $item_img, $item_img_url, $item_dietary, $item_gmb_img_url, $item_media_keys );
+            endforeach; ?>
+            <button type="button" class="button button-small oy-add-item-btn">
+                + <?php echo esc_html( $add_item_label ); ?>
+            </button>
+        </div>
+    </div>
+    <?php
+}
 
 /**
-     * Render HTML for a single menu / catalog / service item.
-     *
-     * @param int|string $sec_idx         Índice de la sección
-     * @param int|string $item_idx        Índice del item
-     * @param string     $name            Nombre del item
-     * @param string     $price           Precio
-     * @param string     $desc            Descripción
-     * @param int        $image_id        WP Media Library ID (0 si no tiene)
-     * @param string     $image_url       URL resuelta del WP Media Library
-     * @param array      $dietary         Restricciones alimentarias (solo food_menu)
-     * @param string     $gmb_image_url   URL de foto desde Google My Business
-     * @param array      $media_keys      mediaKeys de GMB
-     * @param string     $catalog_type    Tipo de catálogo: food_menu | services | products | none | ''
-     * @param string     $gmb_product_url URL de la página del producto (solo products)
-     */
-    private function render_item_html( $sec_idx, $item_idx, $name, $price, $desc, $image_id, $image_url, $dietary = array(), $gmb_image_url = '', $media_keys = array(), $catalog_type = '', $gmb_product_url = '' ) {
-        $base = "location_menu_sections[{$sec_idx}][items][{$item_idx}]";
+ * Render HTML for a single menu item (plato / dish).
+ * Exclusivo para restaurantes: muestra restricciones alimentarias, no URL de producto.
+ *
+ * @param int|string $sec_idx       Índice de la sección
+ * @param int|string $item_idx      Índice del item
+ * @param string     $name          Nombre del plato
+ * @param string     $price         Precio
+ * @param string     $desc          Descripción
+ * @param int        $image_id      WP Media Library ID (0 si no tiene)
+ * @param string     $image_url     URL resuelta del WP Media Library
+ * @param array      $dietary       Restricciones alimentarias
+ * @param string     $gmb_image_url URL de foto desde Google My Business
+ * @param array      $media_keys    mediaKeys de GMB (se preservan entre saves)
+ */
+private function render_item_html( $sec_idx, $item_idx, $name, $price, $desc, $image_id, $image_url, $dietary = array(), $gmb_image_url = '', $media_keys = array() ) {
+    $base = "location_menu_sections[{$sec_idx}][items][{$item_idx}]";
 
-        // Prioridad de imagen: 1) WP Media Library  2) gmb_image_url (foto de GMB)
-        $display_url  = $image_url;
-        $is_gmb_photo = false;
-        if ( empty( $display_url ) && ! empty( $gmb_image_url ) ) {
-            $display_url  = $gmb_image_url;
-            $is_gmb_photo = true;
-        }
-        $has_image = ! empty( $display_url );
-
-        // ── Adaptar campos visibles según tipo de catálogo ────────────────────
-        // food_menu → restricciones alimentarias. products → URL del producto.
-        // services / none → solo nombre, precio, descripción. '' (manual) → todos los campos.
-        $show_dietary     = in_array( $catalog_type, array( 'food_menu', '' ), true );
-        $show_product_url = ( 'products' === $catalog_type );
-
-        // Adaptar placeholders según tipo
-        if ( 'products' === $catalog_type ) {
-            $name_placeholder  = __( 'Nombre del producto*', 'lealez' );
-            $price_placeholder = __( 'Precio (ej: 25000)', 'lealez' );
-            $desc_placeholder  = __( 'Descripción del producto (opcional, máx 1000 caracteres)', 'lealez' );
-        } elseif ( 'services' === $catalog_type ) {
-            $name_placeholder  = __( 'Nombre del servicio*', 'lealez' );
-            $price_placeholder = __( 'Precio (ej: 150000)', 'lealez' );
-            $desc_placeholder  = __( 'Descripción del servicio (opcional, máx 1000 caracteres)', 'lealez' );
-        } else {
-            $name_placeholder  = __( 'Nombre del producto*', 'lealez' );
-            $price_placeholder = __( 'Precio (ej: 25000)', 'lealez' );
-            $desc_placeholder  = __( 'Descripción del producto (opcional, máx 1000 caracteres)', 'lealez' );
-        }
-        ?>
-        <div class="oy-menu-item">
-            <div>
-                <div class="oy-menu-item-image" title="<?php esc_attr_e( 'Clic para seleccionar imagen', 'lealez' ); ?>">
-                    <?php if ( $has_image ) : ?>
-                        <img src="<?php echo esc_url( $display_url ); ?>" alt="">
-                        <?php if ( $is_gmb_photo ) : ?>
-                            <span class="oy-gmb-item-photo-badge" title="<?php esc_attr_e( 'Foto sincronizada desde Google My Business', 'lealez' ); ?>" style="position:absolute;top:2px;left:2px;font-size:9px;background:rgba(66,133,244,0.85);color:#fff;padding:1px 4px;border-radius:3px;line-height:1.4;pointer-events:none;">🔄 GMB</span>
-                        <?php endif; ?>
-                    <?php else : ?>
-                        <div class="oy-img-placeholder">🖼️<br><small style="font-size:10px;"><?php _e( 'Imagen', 'lealez' ); ?></small></div>
+    // Prioridad de imagen: 1) WP Media Library  2) gmb_image_url (foto de GMB)
+    $display_url  = $image_url;
+    $is_gmb_photo = false;
+    if ( empty( $display_url ) && ! empty( $gmb_image_url ) ) {
+        $display_url  = $gmb_image_url;
+        $is_gmb_photo = true;
+    }
+    $has_image = ! empty( $display_url );
+    ?>
+    <div class="oy-menu-item">
+        <div>
+            <div class="oy-menu-item-image" title="<?php esc_attr_e( 'Clic para seleccionar imagen', 'lealez' ); ?>">
+                <?php if ( $has_image ) : ?>
+                    <img src="<?php echo esc_url( $display_url ); ?>" alt="">
+                    <?php if ( $is_gmb_photo ) : ?>
+                        <span class="oy-gmb-item-photo-badge" title="<?php esc_attr_e( 'Foto sincronizada desde Google My Business', 'lealez' ); ?>" style="position:absolute;top:2px;left:2px;font-size:9px;background:rgba(66,133,244,0.85);color:#fff;padding:1px 4px;border-radius:3px;line-height:1.4;pointer-events:none;">🔄 GMB</span>
                     <?php endif; ?>
-                </div>
-                <?php /* WP Media Library ID — editable por el usuario */ ?>
-                <input type="hidden"
-                       class="oy-item-image-id"
-                       name="<?php echo esc_attr( $base ); ?>[image_id]"
-                       value="<?php echo esc_attr( $image_id ?: '' ); ?>">
-                <?php /* gmb_image_url — readonly, se preserva para no perder la foto de GMB */ ?>
-                <input type="hidden"
-                       name="<?php echo esc_attr( $base ); ?>[gmb_image_url]"
-                       value="<?php echo esc_attr( $gmb_image_url ); ?>">
-                <?php /* media_keys — readonly, se preservan para futuras re-sincronizaciones */ ?>
-                <input type="hidden"
-                       name="<?php echo esc_attr( $base ); ?>[media_keys]"
-                       value="<?php echo esc_attr( wp_json_encode( $media_keys ) ); ?>">
-                <?php /* gmb_product_url — URL de landing page del producto (solo products) */ ?>
-                <input type="hidden"
-                       name="<?php echo esc_attr( $base ); ?>[gmb_product_url]"
-                       value="<?php echo esc_attr( $gmb_product_url ); ?>">
-            </div>
-            <div class="oy-menu-item-fields">
-                <div class="oy-menu-item-row">
-                    <input type="text"
-                           name="<?php echo esc_attr( $base ); ?>[name]"
-                           value="<?php echo esc_attr( $name ); ?>"
-                           placeholder="<?php echo esc_attr( $name_placeholder ); ?>"
-                           class="regular-text"
-                           style="flex:1;max-width:280px;"
-                           maxlength="140">
-                    <input type="text"
-                           name="<?php echo esc_attr( $base ); ?>[price]"
-                           value="<?php echo esc_attr( $price ); ?>"
-                           placeholder="<?php echo esc_attr( $price_placeholder ); ?>"
-                           style="max-width:140px;">
-                </div>
-                <textarea name="<?php echo esc_attr( $base ); ?>[description]"
-                          placeholder="<?php echo esc_attr( $desc_placeholder ); ?>"
-                          maxlength="1000"><?php echo esc_textarea( $desc ); ?></textarea>
-
-                <?php if ( $show_product_url ) : ?>
-                <?php /* URL del producto — visible solo para catálogos tipo "products" */ ?>
-                <div style="margin-top:6px;display:flex;align-items:center;gap:6px;">
-                    <span style="font-size:11px;color:#888;white-space:nowrap;">🔗 <?php _e( 'URL del producto:', 'lealez' ); ?></span>
-                    <input type="url"
-                           name="<?php echo esc_attr( $base ); ?>[gmb_product_url_editable]"
-                           value="<?php echo esc_attr( $gmb_product_url ); ?>"
-                           placeholder="https://..."
-                           style="flex:1;font-size:12px;"
-                           maxlength="2048">
-                </div>
+                <?php else : ?>
+                    <div class="oy-img-placeholder">🍽️<br><small style="font-size:10px;"><?php _e( 'Imagen', 'lealez' ); ?></small></div>
                 <?php endif; ?>
-
-                <?php if ( $show_dietary ) : ?>
-                <?php /* Restricciones alimentarias — visible solo para food_menu y modo manual */ ?>
-                <div class="oy-dietary-badges">
-                    <span style="font-size:11px;color:#888;align-self:center;"><?php _e( 'Restricciones:', 'lealez' ); ?></span>
-                    <?php
-                    $dietary_options = array(
-                        'vegetarian'  => __( '🥦 Vegetariano', 'lealez' ),
-                        'vegan'       => __( '🌱 Vegano', 'lealez' ),
-                        'gluten_free' => __( '🚫🌾 Sin gluten', 'lealez' ),
-                        'halal'       => __( '🌙 Halal', 'lealez' ),
-                    );
-                    foreach ( $dietary_options as $key => $label ) :
-                        $checked = in_array( $key, $dietary, true );
-                        ?>
-                        <label class="oy-dietary-badge<?php echo $checked ? ' checked' : ''; ?>">
-                            <input type="checkbox"
-                                   name="<?php echo esc_attr( $base ); ?>[dietary][]"
-                                   value="<?php echo esc_attr( $key ); ?>"
-                                   <?php checked( $checked ); ?>>
-                            <?php echo esc_html( $label ); ?>
-                        </label>
-                    <?php endforeach; ?>
-                </div>
-                <?php endif; ?>
-
             </div>
-            <div class="oy-menu-item-actions">
-                <button type="button" class="oy-item-remove" title="<?php esc_attr_e( 'Eliminar producto', 'lealez' ); ?>">×</button>
+            <?php /* WP Media Library ID — editable por el usuario */ ?>
+            <input type="hidden"
+                   class="oy-item-image-id"
+                   name="<?php echo esc_attr( $base ); ?>[image_id]"
+                   value="<?php echo esc_attr( $image_id ?: '' ); ?>">
+            <?php /* gmb_image_url — readonly, se preserva para no perder la foto de GMB */ ?>
+            <input type="hidden"
+                   name="<?php echo esc_attr( $base ); ?>[gmb_image_url]"
+                   value="<?php echo esc_attr( $gmb_image_url ); ?>">
+            <?php /* media_keys — readonly, se preservan para futuras re-sincronizaciones */ ?>
+            <input type="hidden"
+                   name="<?php echo esc_attr( $base ); ?>[media_keys]"
+                   value="<?php echo esc_attr( wp_json_encode( $media_keys ) ); ?>">
+        </div>
+        <div class="oy-menu-item-fields">
+            <div class="oy-menu-item-row">
+                <input type="text"
+                       name="<?php echo esc_attr( $base ); ?>[name]"
+                       value="<?php echo esc_attr( $name ); ?>"
+                       placeholder="<?php esc_attr_e( 'Nombre del plato*', 'lealez' ); ?>"
+                       class="regular-text"
+                       style="flex:1;max-width:280px;"
+                       maxlength="140">
+                <input type="text"
+                       name="<?php echo esc_attr( $base ); ?>[price]"
+                       value="<?php echo esc_attr( $price ); ?>"
+                       placeholder="<?php esc_attr_e( 'Precio', 'lealez' ); ?>"
+                       style="max-width:140px;">
+            </div>
+            <textarea name="<?php echo esc_attr( $base ); ?>[description]"
+                      placeholder="<?php esc_attr_e( 'Descripción del plato (opcional, máx 1000 caracteres)', 'lealez' ); ?>"
+                      maxlength="1000"><?php echo esc_textarea( $desc ); ?></textarea>
+
+            <?php /* Restricciones alimentarias — siempre visibles en metabox de restaurante */ ?>
+            <div class="oy-dietary-badges">
+                <span style="font-size:11px;color:#888;align-self:center;"><?php _e( 'Restricciones:', 'lealez' ); ?></span>
+                <?php
+                $dietary_options = array(
+                    'vegetarian'  => __( '🥦 Vegetariano', 'lealez' ),
+                    'vegan'       => __( '🌱 Vegano', 'lealez' ),
+                    'gluten_free' => __( '🚫🌾 Sin gluten', 'lealez' ),
+                    'halal'       => __( '🌙 Halal', 'lealez' ),
+                );
+                foreach ( $dietary_options as $key => $label ) :
+                    $checked = in_array( $key, $dietary, true );
+                    ?>
+                    <label class="oy-dietary-badge<?php echo $checked ? ' checked' : ''; ?>">
+                        <input type="checkbox"
+                               name="<?php echo esc_attr( $base ); ?>[dietary][]"
+                               value="<?php echo esc_attr( $key ); ?>"
+                               <?php checked( $checked ); ?>>
+                        <?php echo esc_html( $label ); ?>
+                    </label>
+                <?php endforeach; ?>
             </div>
         </div>
-        <?php
-    }
+        <div class="oy-menu-item-actions">
+            <button type="button" class="oy-item-remove" title="<?php esc_attr_e( 'Eliminar plato', 'lealez' ); ?>">×</button>
+        </div>
+    </div>
+    <?php
+}
 
     /**
      * Render HTML for a featured/highlighted dish
@@ -1076,152 +1022,145 @@ class OY_Location_Menu_Metabox {
         <?php
     }
 
-    /**
-     * Save metabox data
-     *
-     * @param int     $post_id
-     * @param WP_Post $post
-     */
-    public function save_meta_box( $post_id, $post ) {
+/**
+ * Save metabox data
+ *
+ * @param int     $post_id
+ * @param WP_Post $post
+ */
+public function save_meta_box( $post_id, $post ) {
 
-        // Verificar nonce
-        if ( ! isset( $_POST[ $this->nonce_name ] ) ||
-             ! wp_verify_nonce( wp_unslash( $_POST[ $this->nonce_name ] ), $this->nonce_action ) ) {
-            return;
-        }
-
-        // Autosave
-        if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
-            return;
-        }
-
-        // Permisos
-        if ( ! current_user_can( 'edit_post', $post_id ) ) {
-            return;
-        }
-
-        // ── location_menu_url (hidden field — valor readonly de GMB) ────
-        if ( isset( $_POST['location_menu_url'] ) ) {
-            update_post_meta( $post_id, 'location_menu_url', esc_url_raw( wp_unslash( $_POST['location_menu_url'] ) ) );
-        }
-
-        // ── PDF del menú ────────────────────────────────────────────────
-        if ( isset( $_POST['location_menu_pdf_id'] ) ) {
-            $pdf_id = absint( $_POST['location_menu_pdf_id'] );
-            if ( $pdf_id > 0 ) {
-                update_post_meta( $post_id, 'location_menu_pdf_id', $pdf_id );
-            } else {
-                delete_post_meta( $post_id, 'location_menu_pdf_id' );
-            }
-        }
-
-        // ── Fotos del menú ──────────────────────────────────────────────
-        $menu_photos = array();
-        if ( isset( $_POST['location_menu_photos'] ) && is_array( $_POST['location_menu_photos'] ) ) {
-            foreach ( $_POST['location_menu_photos'] as $photo_id ) {
-                $photo_id = absint( $photo_id );
-                if ( $photo_id > 0 ) {
-                    $menu_photos[] = $photo_id;
-                }
-            }
-        }
-        update_post_meta( $post_id, 'location_menu_photos', array_unique( $menu_photos ) );
-
-        // ── Secciones del menú ──────────────────────────────────────────
-        $menu_sections_raw = isset( $_POST['location_menu_sections'] ) && is_array( $_POST['location_menu_sections'] )
-            ? wp_unslash( $_POST['location_menu_sections'] )
-            : array();
-
-        $menu_sections_clean = array();
-        foreach ( $menu_sections_raw as $section ) {
-            if ( ! is_array( $section ) ) {
-                continue;
-            }
-            $sec_name = sanitize_text_field( $section['name'] ?? '' );
-            if ( empty( $sec_name ) ) {
-                continue; // Omitir secciones sin nombre
-            }
-            $items_raw   = is_array( $section['items'] ?? null ) ? $section['items'] : array();
-            $items_clean = array();
-            foreach ( $items_raw as $item ) {
-                if ( ! is_array( $item ) ) {
-                    continue;
-                }
-                $item_name = sanitize_text_field( $item['name'] ?? '' );
-                if ( empty( $item_name ) ) {
-                    continue; // Omitir items sin nombre
-                }
-                $dietary_raw   = is_array( $item['dietary'] ?? null ) ? $item['dietary'] : array();
-                $dietary_clean = array_map( 'sanitize_key', $dietary_raw );
-                $valid_dietary = array( 'vegetarian', 'vegan', 'gluten_free', 'halal' );
-                $dietary_clean = array_values( array_intersect( $dietary_clean, $valid_dietary ) );
-
-                // ── Preservar campos GMB (no editables por el usuario, venían de la API) ──
-                // gmb_image_url: URL de la foto del producto en Google. Se guarda como hidden input
-                // en el formulario para que no se pierda al hacer Save en WordPress.
-                $gmb_image_url = esc_url_raw( (string) ( $item['gmb_image_url'] ?? '' ) );
-
-                // media_keys: referencias internas de Google (array). Vienen como JSON en el hidden input.
-                $media_keys_raw = $item['media_keys'] ?? array();
-                if ( is_string( $media_keys_raw ) ) {
-                    $decoded = json_decode( wp_unslash( $media_keys_raw ), true );
-                    $media_keys_raw = is_array( $decoded ) ? $decoded : array();
-                }
-                $media_keys = is_array( $media_keys_raw )
-                    ? array_values( array_map( 'sanitize_text_field', $media_keys_raw ) )
-                    : array();
-
-// URL editable del producto (campo gmb_product_url_editable del form).
-                // Se usa el campo editable si existe; si no, se cae al hidden gmb_product_url.
-                $gmb_product_url_editable = esc_url_raw( (string) ( $item['gmb_product_url_editable'] ?? '' ) );
-                $gmb_product_url_hidden   = esc_url_raw( (string) ( $item['gmb_product_url'] ?? '' ) );
-                $gmb_product_url_final    = '' !== $gmb_product_url_editable ? $gmb_product_url_editable : $gmb_product_url_hidden;
-
-                $items_clean[] = array(
-                    'name'            => $item_name,
-                    'price'           => sanitize_text_field( $item['price'] ?? '' ),
-                    'description'     => sanitize_textarea_field( $item['description'] ?? '' ),
-                    'image_id'        => absint( $item['image_id'] ?? 0 ),
-                    'dietary'         => $dietary_clean,
-                    // Campos GMB — se preservan en el meta para no perderlos entre saves
-                    'gmb_image_url'   => $gmb_image_url,
-                    'media_keys'      => $media_keys,
-                    'gmb_product_url' => $gmb_product_url_final,
-                    'from_gmb'        => ! empty( $item['from_gmb'] ) ? 1 : 0,
-                );
-            }
-            $menu_sections_clean[] = array(
-                'name'     => $sec_name,
-                'items'    => $items_clean,
-                // Preservar flag from_gmb de la sección
-                'from_gmb' => ! empty( $section['from_gmb'] ) ? 1 : 0,
-            );
-        }
-        update_post_meta( $post_id, 'location_menu_sections', $menu_sections_clean );
-
-        // ── Platos destacados ───────────────────────────────────────────
-        $featured_raw = isset( $_POST['location_menu_featured_items'] ) && is_array( $_POST['location_menu_featured_items'] )
-            ? wp_unslash( $_POST['location_menu_featured_items'] )
-            : array();
-
-        $featured_clean = array();
-        foreach ( $featured_raw as $feat ) {
-            if ( ! is_array( $feat ) ) {
-                continue;
-            }
-            $feat_name = sanitize_text_field( $feat['name'] ?? '' );
-            if ( empty( $feat_name ) ) {
-                continue;
-            }
-            $featured_clean[] = array(
-                'name'        => $feat_name,
-                'price'       => sanitize_text_field( $feat['price'] ?? '' ),
-                'description' => sanitize_textarea_field( $feat['description'] ?? '' ),
-                'image_id'    => absint( $feat['image_id'] ?? 0 ),
-            );
-        }
-        update_post_meta( $post_id, 'location_menu_featured_items', $featured_clean );
+    // Verificar nonce
+    if ( ! isset( $_POST[ $this->nonce_name ] ) ||
+         ! wp_verify_nonce( wp_unslash( $_POST[ $this->nonce_name ] ), $this->nonce_action ) ) {
+        return;
     }
+
+    // Autosave
+    if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+        return;
+    }
+
+    // Permisos
+    if ( ! current_user_can( 'edit_post', $post_id ) ) {
+        return;
+    }
+
+    // ── location_menu_url (hidden field — valor readonly de GMB) ────
+    if ( isset( $_POST['location_menu_url'] ) ) {
+        update_post_meta( $post_id, 'location_menu_url', esc_url_raw( wp_unslash( $_POST['location_menu_url'] ) ) );
+    }
+
+    // ── PDF del menú ────────────────────────────────────────────────
+    if ( isset( $_POST['location_menu_pdf_id'] ) ) {
+        $pdf_id = absint( $_POST['location_menu_pdf_id'] );
+        if ( $pdf_id > 0 ) {
+            update_post_meta( $post_id, 'location_menu_pdf_id', $pdf_id );
+        } else {
+            delete_post_meta( $post_id, 'location_menu_pdf_id' );
+        }
+    }
+
+    // ── Fotos del menú ──────────────────────────────────────────────
+    $menu_photos = array();
+    if ( isset( $_POST['location_menu_photos'] ) && is_array( $_POST['location_menu_photos'] ) ) {
+        foreach ( $_POST['location_menu_photos'] as $photo_id ) {
+            $photo_id = absint( $photo_id );
+            if ( $photo_id > 0 ) {
+                $menu_photos[] = $photo_id;
+            }
+        }
+    }
+    update_post_meta( $post_id, 'location_menu_photos', array_unique( $menu_photos ) );
+
+    // ── Secciones del menú ──────────────────────────────────────────
+    $menu_sections_raw = isset( $_POST['location_menu_sections'] ) && is_array( $_POST['location_menu_sections'] )
+        ? wp_unslash( $_POST['location_menu_sections'] )
+        : array();
+
+    $menu_sections_clean = array();
+    foreach ( $menu_sections_raw as $section ) {
+        if ( ! is_array( $section ) ) {
+            continue;
+        }
+        $sec_name = sanitize_text_field( $section['name'] ?? '' );
+        if ( empty( $sec_name ) ) {
+            continue; // Omitir secciones sin nombre
+        }
+        $items_raw   = is_array( $section['items'] ?? null ) ? $section['items'] : array();
+        $items_clean = array();
+        foreach ( $items_raw as $item ) {
+            if ( ! is_array( $item ) ) {
+                continue;
+            }
+            $item_name = sanitize_text_field( $item['name'] ?? '' );
+            if ( empty( $item_name ) ) {
+                continue; // Omitir items sin nombre
+            }
+            $dietary_raw   = is_array( $item['dietary'] ?? null ) ? $item['dietary'] : array();
+            $dietary_clean = array_map( 'sanitize_key', $dietary_raw );
+            $valid_dietary = array( 'vegetarian', 'vegan', 'gluten_free', 'halal' );
+            $dietary_clean = array_values( array_intersect( $dietary_clean, $valid_dietary ) );
+
+            // ── Preservar campos GMB (no editables por el usuario) ──
+            // gmb_image_url: URL de la foto del producto en Google.
+            $gmb_image_url = esc_url_raw( (string) ( $item['gmb_image_url'] ?? '' ) );
+
+            // media_keys: referencias internas de Google (array).
+            $media_keys_raw = $item['media_keys'] ?? array();
+            if ( is_string( $media_keys_raw ) ) {
+                $decoded = json_decode( wp_unslash( $media_keys_raw ), true );
+                $media_keys_raw = is_array( $decoded ) ? $decoded : array();
+            }
+            $media_keys = is_array( $media_keys_raw )
+                ? array_values( array_map( 'sanitize_text_field', $media_keys_raw ) )
+                : array();
+
+            $items_clean[] = array(
+                'name'          => $item_name,
+                'price'         => sanitize_text_field( $item['price'] ?? '' ),
+                'description'   => sanitize_textarea_field( $item['description'] ?? '' ),
+                'image_id'      => absint( $item['image_id'] ?? 0 ),
+                'dietary'       => $dietary_clean,
+                // Campos GMB — se preservan en el meta para no perderlos entre saves
+                'gmb_image_url' => $gmb_image_url,
+                'media_keys'    => $media_keys,
+                'from_gmb'      => ! empty( $item['from_gmb'] ) ? 1 : 0,
+            );
+        }
+        $menu_sections_clean[] = array(
+            'name'     => $sec_name,
+            'items'    => $items_clean,
+            // Preservar flag from_gmb de la sección
+            'from_gmb' => ! empty( $section['from_gmb'] ) ? 1 : 0,
+        );
+    }
+    update_post_meta( $post_id, 'location_menu_sections', $menu_sections_clean );
+
+    // ── Platos destacados ───────────────────────────────────────────
+    $featured_raw = isset( $_POST['location_menu_featured_items'] ) && is_array( $_POST['location_menu_featured_items'] )
+        ? wp_unslash( $_POST['location_menu_featured_items'] )
+        : array();
+
+    $featured_clean = array();
+    foreach ( $featured_raw as $feat ) {
+        if ( ! is_array( $feat ) ) {
+            continue;
+        }
+        $feat_name = sanitize_text_field( $feat['name'] ?? '' );
+        if ( empty( $feat_name ) ) {
+            continue;
+        }
+        $featured_clean[] = array(
+            'name'        => $feat_name,
+            'price'       => sanitize_text_field( $feat['price'] ?? '' ),
+            'description' => sanitize_textarea_field( $feat['description'] ?? '' ),
+            'image_id'    => absint( $feat['image_id'] ?? 0 ),
+        );
+    }
+    update_post_meta( $post_id, 'location_menu_featured_items', $featured_clean );
+}
+    
 }
     endif; // class_exists OY_Location_Menu_Metabox
 
