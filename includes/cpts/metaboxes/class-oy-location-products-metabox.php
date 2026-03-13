@@ -854,15 +854,17 @@ class OY_Location_Products_Metabox {
     // AJAX
     // =========================================================================
 
-    /**
+/**
      * AJAX: Sincronizar catálogo de productos desde Google My Business.
      * Acción: oy_sync_location_products
      *
-     * Esta versión:
-     * - resuelve IDs de forma robusta desde metas o resource names,
-     * - no asume automáticamente que /products está discontinuado,
-     * - soporta respuestas modernas y legacy,
-     * - guarda diagnóstico útil en meta.
+     * Trae los servicios desde /serviceList de GBP y los mapea al formato
+     * interno de Lealez (location_products_sections).
+     *
+     * Distingue entre:
+     *  - 'no_service_list_yet'  → aviso informativo (sin datos en GBP todavía)
+     *  - 'products_api_error'   → error real de API (auth, permisos, servidor)
+     *  - cualquier otro error   → error genérico con código
      */
 public function ajax_sync_products() {
 
@@ -877,7 +879,7 @@ public function ajax_sync_products() {
     }
 
     // ── 2. Parámetros ─────────────────────────────────────────────────────
-    $post_id     = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+    $post_id     = isset( $_POST['post_id'] )     ? absint( wp_unslash( $_POST['post_id'] ) )     : 0;
     $business_id = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
 
     if ( ! $post_id || ! $business_id ) {
@@ -989,29 +991,67 @@ public function ajax_sync_products() {
         }
 
         /**
-         * CORRECCIÓN DE MENSAJE:
-         * Antes se asumía que un 404 podía ser solo un problema de identificación.
-         * Ahora el plugin debe ser honesto: la API oficial actual ya no ofrece un
-         * recurso REST funcional para sincronizar el catálogo de “Productos” como
-         * antes. Para no-restaurantes, la fuente oficial disponible es serviceList.
+         * 'no_service_list_yet' — NO es un error técnico.
+         * La ubicación simplemente no tiene servicios configurados en GBP todavía
+         * (GET /serviceList devolvió 404, que es la respuesta normal y esperada).
+         * Se muestra como aviso informativo, no como error.
+         */
+        if ( 'no_service_list_yet' === $error_code ) {
+            $notice = __(
+                'Google respondió correctamente: esta ubicación aún no tiene servicios configurados en Google Business Profile. Si tienes productos o servicios para sincronizar, configúralos primero en tu perfil de GBP.',
+                'lealez'
+            );
+            update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
+            wp_send_json_error( array(
+                'message'    => $notice,
+                'error_type' => 'no_service_list_yet',
+            ) );
+        }
+
+        /**
+         * 'products_api_error' — error real de API (auth, permisos, servidor).
+         * Se muestra con el HTTP code para facilitar el diagnóstico.
+         */
+        if ( 'products_api_error' === $error_code ) {
+            $notice = sprintf(
+                __( 'Error al consultar Google Business Profile (HTTP %1$d): %2$s', 'lealez' ),
+                $http_code,
+                $error_msg
+            );
+            update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
+            wp_send_json_error( array(
+                'message'    => $notice,
+                'error_type' => 'api_error',
+            ) );
+        }
+
+        /**
+         * 'products_api_unavailable' — código legacy de versiones anteriores.
+         * Se mantiene para compatibilidad con posibles respuestas cacheadas.
          */
         if ( 'products_api_unavailable' === $error_code ) {
             $notice = __(
-                'Google Business Profile ya no expone un endpoint REST funcional para sincronizar el catálogo de “Productos” como antes. Lealez intentó usar la fuente oficial disponible para negocios no-restaurante (serviceList), pero esta ubicación no devolvió datos estructurados utilizables. En esta ubicación el catálogo deberá administrarse manualmente en Lealez.',
+                'Google Business Profile no devolvió datos de servicios utilizables para esta ubicación. El catálogo puede administrarse manualmente en Lealez.',
                 'lealez'
             );
-        } else {
-            $notice = sprintf(
-                __( 'Error al consultar Google (%1$s): %2$s', 'lealez' ),
-                $error_code,
-                $error_msg
-            );
+            update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
+            wp_send_json_error( array(
+                'message'    => $notice,
+                'error_type' => 'products_api_unavailable',
+            ) );
         }
 
+        // Cualquier otro error WP_Error no esperado
+        $notice = sprintf(
+            __( 'Error inesperado al consultar Google (%1$s): %2$s', 'lealez' ),
+            $error_code,
+            $error_msg
+        );
         update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
 
         wp_send_json_error( array(
-            'message' => $notice,
+            'message'    => $notice,
+            'error_type' => 'unknown',
         ) );
     }
 
@@ -1020,7 +1060,7 @@ public function ajax_sync_products() {
 
     if ( empty( $mapped_sections ) ) {
         $notice = __(
-            'Google respondió correctamente, pero no devolvió elementos estructurados utilizables para este catálogo. Si en Google ves “Productos” en la UI pero no aparecen aquí, esa información ya no está siendo expuesta por un endpoint REST equivalente al antiguo /products.',
+            'Google respondió correctamente con datos de serviceList, pero no se encontraron servicios con estructura utilizable. Verifica que los servicios estén completamente configurados en tu perfil de Google Business Profile.',
             'lealez'
         );
 
@@ -1034,7 +1074,8 @@ public function ajax_sync_products() {
         }
 
         wp_send_json_error( array(
-            'message' => $notice,
+            'message'    => $notice,
+            'error_type' => 'empty_result',
         ) );
     }
 
