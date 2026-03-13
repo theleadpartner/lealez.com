@@ -2931,15 +2931,21 @@ public static function get_location_services( $business_id, $account_id, $locati
         );
     }
 
+    /**
+     * IMPORTANTE:
+     * El endpoint REST válido documentado por Google para servicios en v4 es:
+     *   GET /accounts/{accountId}/locations/{locationId}/serviceList
+     * NO /services
+     */
     $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
                 . '/locations/' . rawurlencode( $location_id_normalized )
-                . '/services';
+                . '/serviceList';
 
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log(
             $business_id,
             'info',
-            'Fetching services (GMB API v4).',
+            'Fetching serviceList (GMB API v4).',
             array(
                 'account_id'    => $account_id_normalized,
                 'location_id'   => $location_id_normalized,
@@ -2947,6 +2953,10 @@ public static function get_location_services( $business_id, $account_id, $locati
                 'force_refresh' => $force_refresh ? 'yes' : 'no',
             )
         );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[Lealez GMB] get_location_services — endpoint: ' . self::$mybusiness_v4_base . $endpoint );
     }
 
     $result = self::make_request(
@@ -2969,22 +2979,52 @@ public static function get_location_services( $business_id, $account_id, $locati
                     'account_id'  => $account_id_normalized,
                     'location_id' => $location_id_normalized,
                     'error_code'  => $result->get_error_code(),
-                    'hint'        => 'El endpoint /services aplica para negocios de servicio en GMB. Para restaurantes usa /foodMenus.',
+                    'hint'        => 'El endpoint REST documentado para servicios en Business Profile v4 es /serviceList.',
                 )
             );
         }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez GMB] get_location_services ERROR: ' . $result->get_error_message() );
+            $err_data = $result->get_error_data();
+            if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
+                error_log( '[Lealez GMB] get_location_services HTTP_CODE: ' . ( $err_data['code'] ?? 'N/A' ) );
+                error_log( '[Lealez GMB] get_location_services RAW_BODY: ' . substr( (string) $err_data['raw_body'], 0, 2000 ) );
+            }
+        }
+
         return $result;
     }
 
+    /**
+     * La respuesta de Google para serviceList no viene como "services",
+     * sino con un objeto ServiceList que contiene serviceItems.
+     * Aquí no alteramos el payload crudo; solo lo devolvemos normalizado a array.
+     */
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        $services_count = ! empty( $result['services'] ) && is_array( $result['services'] ) ? count( $result['services'] ) : 0;
+        $items_count = 0;
+
+        if ( ! empty( $result['serviceItems'] ) && is_array( $result['serviceItems'] ) ) {
+            $items_count = count( $result['serviceItems'] );
+        } elseif ( ! empty( $result['sections'] ) && is_array( $result['sections'] ) ) {
+            foreach ( $result['sections'] as $section ) {
+                $items_count += count( $section['serviceItems'] ?? array() );
+                $items_count += count( $section['items'] ?? array() );
+            }
+        }
+
         Lealez_GMB_Logger::log(
             $business_id,
             'success',
-            sprintf( 'services fetched: %d service(s) found.', $services_count ),
+            sprintf(
+                'serviceList fetched: %d service item(s) found. Response keys: %s',
+                $items_count,
+                wp_json_encode( array_keys( $result ) )
+            ),
             array(
-                'account_id'  => $account_id_normalized,
-                'location_id' => $location_id_normalized,
+                'account_id'    => $account_id_normalized,
+                'location_id'   => $location_id_normalized,
+                'response_keys' => array_keys( $result ),
             )
         );
     }
@@ -2992,7 +3032,7 @@ public static function get_location_services( $business_id, $account_id, $locati
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
         $res_keys = is_array( $result ) ? array_keys( $result ) : 'not-array';
         error_log( '[Lealez GMB] get_location_services RESPONSE — HTTP OK — keys: ' . wp_json_encode( $res_keys ) );
-        error_log( '[Lealez GMB] get_location_services RAW (first 1500 chars): ' . substr( wp_json_encode( $result ), 0, 1500 ) );
+        error_log( '[Lealez GMB] get_location_services RAW (first 2000 chars): ' . substr( wp_json_encode( $result ), 0, 2000 ) );
     }
 
     return is_array( $result ) ? $result : array();
@@ -3048,94 +3088,85 @@ public static function get_location_products( $business_id, $account_id, $locati
         );
     }
 
-    $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
-                . '/locations/' . rawurlencode( $location_id_normalized )
-                . '/products';
+    /**
+     * IMPORTANTE:
+     * El antiguo intento contra /products ya no es válido como estrategia principal.
+     * La referencia oficial actual expone FoodMenus y ServiceList, pero no un recurso
+     * REST actual para "accounts.locations.products".
+     *
+     * Estrategia correcta del plugin:
+     * 1) Para restaurantes → usar foodMenus.
+     * 2) Para negocios no-restaurante → usar serviceList si existe.
+     * 3) Si la ubicación solo tiene "Productos" visibles en la UI de GBP pero no
+     *    existe representación oficial accesible por API, devolvemos un WP_Error
+     *    explícito y honesto para que el metabox muestre aviso manual, en lugar de
+     *    seguir golpeando /products y producir 404 engañoso.
+     */
 
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'info',
-            'Fetching products (GMB API v4).',
-            array(
-                'account_id'    => $account_id_normalized,
-                'location_id'   => $location_id_normalized,
-                'endpoint'      => self::$mybusiness_v4_base . $endpoint,
-                'force_refresh' => $force_refresh ? 'yes' : 'no',
-            )
-        );
-    }
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[Lealez GMB] get_location_products — endpoint: ' . self::$mybusiness_v4_base . $endpoint );
-    }
-
-    $result = self::make_request(
+    $service_list = self::get_location_services(
         $business_id,
-        $endpoint,
-        self::$mybusiness_v4_base,
-        'GET',
-        array(),
-        ! $force_refresh,
-        array()
+        $account_id_normalized,
+        $location_id_normalized,
+        $force_refresh
     );
 
-    if ( is_wp_error( $result ) ) {
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'error',
-                'get_location_products failed: ' . $result->get_error_message(),
-                array(
-                    'account_id'  => $account_id_normalized,
-                    'location_id' => $location_id_normalized,
-                    'error_code'  => $result->get_error_code(),
-                    'hint'        => 'El endpoint /products aplica para negocios de retail/producto en GMB. Formato de respuesta: categories[] (nuevo) o productItems[] (viejo).',
-                )
+    if ( is_wp_error( $service_list ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[Lealez GMB] get_location_products fallback serviceList ERROR: ' .
+                $service_list->get_error_message()
             );
         }
 
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[Lealez GMB] get_location_products ERROR: ' . $result->get_error_message() );
-            $err_data = $result->get_error_data();
-            if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
-                error_log( '[Lealez GMB] get_location_products HTTP_CODE: ' . ( $err_data['code'] ?? 'N/A' ) );
-                error_log( '[Lealez GMB] get_location_products RAW_BODY: ' . substr( (string) $err_data['raw_body'], 0, 2000 ) );
-            }
-        }
-
-        return $result;
-    }
-
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        // Detectar clave de respuesta — puede ser 'categories' (formato nuevo) o 'productItems' (formato viejo)
-        $products_count = 0;
-        if ( ! empty( $result['categories'] ) && is_array( $result['categories'] ) ) {
-            foreach ( $result['categories'] as $cat ) {
-                $products_count += count( $cat['items'] ?? array() );
-            }
-        } elseif ( ! empty( $result['productItems'] ) && is_array( $result['productItems'] ) ) {
-            $products_count = count( $result['productItems'] );
-        }
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'success',
-            sprintf( 'products fetched: %d product(s) found. Response keys: %s', $products_count, wp_json_encode( array_keys( $result ) ) ),
+        return new WP_Error(
+            'products_api_unavailable',
+            __( 'Google Business Profile ya no expone un endpoint REST funcional para sincronizar el catálogo de “Productos” como antes. Para ubicaciones no-restaurante, Lealez intentó leer la oferta estructurada mediante serviceList y tampoco encontró datos utilizables.', 'lealez' ),
             array(
-                'account_id'    => $account_id_normalized,
-                'location_id'   => $location_id_normalized,
-                'response_keys' => array_keys( $result ),
+                'code'        => 404,
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+                'source'      => 'serviceList',
+                'previous'    => array(
+                    'error_code' => $service_list->get_error_code(),
+                    'message'    => $service_list->get_error_message(),
+                    'data'       => $service_list->get_error_data(),
+                ),
             )
         );
     }
 
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        $res_keys = is_array( $result ) ? array_keys( $result ) : 'not-array';
-        error_log( '[Lealez GMB] get_location_products RESPONSE — HTTP OK — keys: ' . wp_json_encode( $res_keys ) );
-        error_log( '[Lealez GMB] get_location_products RAW (first 2000 chars): ' . substr( wp_json_encode( $result ), 0, 2000 ) );
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        $service_items_count = 0;
+
+        if ( ! empty( $service_list['serviceItems'] ) && is_array( $service_list['serviceItems'] ) ) {
+            $service_items_count = count( $service_list['serviceItems'] );
+        } elseif ( ! empty( $service_list['sections'] ) && is_array( $service_list['sections'] ) ) {
+            foreach ( $service_list['sections'] as $section ) {
+                $service_items_count += count( $section['serviceItems'] ?? array() );
+                $service_items_count += count( $section['items'] ?? array() );
+            }
+        }
+
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf(
+                'get_location_products fallback OK via serviceList: %d item(s) found.',
+                $service_items_count
+            ),
+            array(
+                'account_id'    => $account_id_normalized,
+                'location_id'   => $location_id_normalized,
+                'response_keys' => is_array( $service_list ) ? array_keys( $service_list ) : array(),
+            )
+        );
     }
 
-    return is_array( $result ) ? $result : array();
+    /**
+     * Devolvemos el payload tal cual para que el metabox lo mapee.
+     * El metabox ya será ajustado para entender serviceList/serviceItems.
+     */
+    return is_array( $service_list ) ? $service_list : array();
 }
 
 
