@@ -582,7 +582,19 @@ class OY_Location_Products_Metabox {
                     $item_sku   = sanitize_text_field( $item['sku']         ?? '' );
                     $item_img   = (int) ( $item['image_id'] ?? 0 );
                     $item_img_url = $item_img ? wp_get_attachment_image_url( $item_img, 'thumbnail' ) : '';
-                    $this->render_item_html( $sec_idx, $item_idx, $item_name, $item_price, $item_desc, $item_img, $item_img_url, $item_url, $item_sku );
+                                        $item_from_gmb = ! empty( $item['from_gmb'] ) ? 1 : 0;
+                    $this->render_item_html(
+                        $sec_idx,
+                        $item_idx,
+                        $item_name,
+                        $item_price,
+                        $item_desc,
+                        $item_img,
+                        $item_img_url,
+                        $item_url,
+                        $item_sku,
+                        $item_from_gmb
+                    );
                 endforeach; ?>
                 <button type="button" class="button button-small oy-add-product-item-btn">
                     + <?php _e( 'Agregar un producto', 'lealez' ); ?>
@@ -595,17 +607,18 @@ class OY_Location_Products_Metabox {
     /**
      * Render HTML para un producto individual.
      *
-     * @param int|string $sec_idx     Índice de la sección
-     * @param int|string $item_idx    Índice del item
-     * @param string     $name        Nombre del producto
-     * @param string     $price       Precio
-     * @param string     $desc        Descripción
-     * @param int        $image_id    WP Media Library ID
-     * @param string     $image_url   URL de la imagen
-     * @param string     $product_url URL del producto (siempre visible)
-     * @param string     $sku         SKU / código del producto
+     * @param int|string $sec_idx
+     * @param int|string $item_idx
+     * @param string     $name
+     * @param string     $price
+     * @param string     $desc
+     * @param int        $image_id
+     * @param string     $image_url
+     * @param string     $product_url
+     * @param string     $sku
+     * @param int        $from_gmb
      */
-    private function render_item_html( $sec_idx, $item_idx, $name, $price, $desc, $image_id, $image_url, $product_url = '', $sku = '' ) {
+    private function render_item_html( $sec_idx, $item_idx, $name, $price, $desc, $image_id, $image_url, $product_url = '', $sku = '', $from_gmb = 0 ) {
         $base      = "location_products_sections[{$sec_idx}][items][{$item_idx}]";
         $has_image = ! empty( $image_url );
         ?>
@@ -623,6 +636,9 @@ class OY_Location_Products_Metabox {
                        class="oy-product-image-id"
                        name="<?php echo esc_attr( $base ); ?>[image_id]"
                        value="<?php echo esc_attr( $image_id ?: '' ); ?>">
+                <input type="hidden"
+                       name="<?php echo esc_attr( $base ); ?>[from_gmb]"
+                       value="<?php echo ! empty( $from_gmb ) ? '1' : '0'; ?>">
             </div>
             <div class="oy-product-item-fields">
                 <div class="oy-product-item-row">
@@ -732,6 +748,108 @@ class OY_Location_Products_Metabox {
         <?php
     }
 
+    /**
+     * Resolver account_id y location_id de Google a partir del post.
+     *
+     * Prioridad:
+     * 1) gmb_account_id / gmb_location_id
+     * 2) gmb_location_account_name
+     * 3) gmb_location_name (accounts/{acc}/locations/{loc} o locations/{loc})
+     *
+     * @param int $post_id
+     * @return array{
+     *   account_id:string,
+     *   location_id:string,
+     *   location_name:string,
+     *   account_name:string
+     * }
+     */
+    private function resolve_google_ids_from_post( $post_id ) {
+        $post_id = absint( $post_id );
+
+        $account_id    = trim( (string) get_post_meta( $post_id, 'gmb_account_id', true ) );
+        $location_id   = trim( (string) get_post_meta( $post_id, 'gmb_location_id', true ) );
+        $location_name = trim( (string) get_post_meta( $post_id, 'gmb_location_name', true ) );
+        $account_name  = trim( (string) get_post_meta( $post_id, 'gmb_location_account_name', true ) );
+
+        if ( '' === $location_id && '' !== $location_name ) {
+            $location_id = $this->extract_location_id_from_resource_name( $location_name );
+        }
+
+        if ( '' === $account_id && '' !== $account_name ) {
+            $account_id = $this->extract_account_id_from_resource_name( $account_name );
+        }
+
+        if ( '' === $account_id && '' !== $location_name ) {
+            $account_id = $this->extract_account_id_from_resource_name( $location_name );
+        }
+
+        return array(
+            'account_id'    => $account_id,
+            'location_id'   => $location_id,
+            'location_name' => $location_name,
+            'account_name'  => $account_name,
+        );
+    }
+
+    /**
+     * Extraer account_id desde un resource name.
+     *
+     * Soporta:
+     * - accounts/123
+     * - accounts/123/locations/456
+     * - 123
+     *
+     * @param string $resource_name
+     * @return string
+     */
+    private function extract_account_id_from_resource_name( $resource_name ) {
+        $resource_name = trim( (string) $resource_name );
+
+        if ( '' === $resource_name ) {
+            return '';
+        }
+
+        if ( preg_match( '/^\d+$/', $resource_name ) ) {
+            return $resource_name;
+        }
+
+        if ( preg_match( '~accounts/([^/]+)~', $resource_name, $matches ) ) {
+            return trim( (string) $matches[1] );
+        }
+
+        return '';
+    }
+
+    /**
+     * Extraer location_id desde un resource name.
+     *
+     * Soporta:
+     * - locations/456
+     * - accounts/123/locations/456
+     * - 456
+     *
+     * @param string $resource_name
+     * @return string
+     */
+    private function extract_location_id_from_resource_name( $resource_name ) {
+        $resource_name = trim( (string) $resource_name );
+
+        if ( '' === $resource_name ) {
+            return '';
+        }
+
+        if ( preg_match( '/^\d+$/', $resource_name ) ) {
+            return $resource_name;
+        }
+
+        if ( preg_match( '~locations/([^/]+)~', $resource_name, $matches ) ) {
+            return trim( (string) $matches[1] );
+        }
+
+        return '';
+    }
+    
     // =========================================================================
     // AJAX
     // =========================================================================
@@ -740,10 +858,11 @@ class OY_Location_Products_Metabox {
      * AJAX: Sincronizar catálogo de productos desde Google My Business.
      * Acción: oy_sync_location_products
      *
-     * Intenta el endpoint /products de la GMB API v4.
-     * Si devuelve 404 (endpoint obsoleto), guarda aviso informativo
-     * y devuelve success con api_available=false para que el usuario
-     * pueda gestionar el catálogo manualmente.
+     * Esta versión:
+     * - resuelve IDs de forma robusta desde metas o resource names,
+     * - no asume automáticamente que /products está discontinuado,
+     * - soporta respuestas modernas y legacy,
+     * - guarda diagnóstico útil en meta.
      */
     public function ajax_sync_products() {
 
@@ -752,149 +871,189 @@ class OY_Location_Products_Metabox {
         if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
             wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
         }
+
         if ( ! current_user_can( 'edit_posts' ) ) {
             wp_send_json_error( array( 'message' => __( 'Sin permisos suficientes.', 'lealez' ) ) );
         }
 
         // ── 2. Parámetros ─────────────────────────────────────────────────────
-        $post_id     = isset( $_POST['post_id'] )     ? absint( wp_unslash( $_POST['post_id'] ) )     : 0;
+        $post_id     = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
         $business_id = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
 
         if ( ! $post_id || ! $business_id ) {
-            wp_send_json_error( array( 'message' => __( 'Parámetros inválidos (post_id o business_id vacíos).', 'lealez' ) ) );
+            wp_send_json_error( array(
+                'message' => __( 'Parámetros inválidos (post_id o business_id vacíos).', 'lealez' ),
+            ) );
         }
 
         $post = get_post( $post_id );
-        if ( ! $post || 'oy_location' !== $post->post_type ) {
-            wp_send_json_error( array( 'message' => __( 'La ubicación indicada no existe.', 'lealez' ) ) );
+        if ( ! $post || $this->post_type !== $post->post_type ) {
+            wp_send_json_error( array(
+                'message' => __( 'La ubicación indicada no existe.', 'lealez' ),
+            ) );
         }
 
         if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
-        }
-
-        // ── 3. Obtener IDs GMB desde post meta ────────────────────────────────
-        $account_id  = (string) get_post_meta( $post_id, 'gmb_account_id',  true );
-        $location_id = (string) get_post_meta( $post_id, 'gmb_location_id', true );
-
-        // Fallback: extraer desde gmb_location_name si los meta separados están vacíos
-        if ( '' === $location_id || '' === $account_id ) {
-            $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-            if ( '' !== $location_name && method_exists( 'Lealez_GMB_API', 'extract_location_id_from_resource_name' ) ) {
-                // Intentamos extracción si Lealez_GMB_API expone el método (estático o de instancia)
-                // Este bloque es defensivo; en producción account_id y location_id suelen estar en meta.
-            }
-        }
-
-        if ( '' === $account_id || '' === $location_id ) {
             wp_send_json_error( array(
-                'message' => __( 'No se encontraron los IDs de la ubicación en Google (gmb_account_id / gmb_location_id). Importa primero la ubicación desde el metabox de Configuración GMB.', 'lealez' ),
+                'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ),
+            ) );
+        }
+
+        if ( ! method_exists( 'Lealez_GMB_API', 'get_location_products' ) ) {
+            wp_send_json_error( array(
+                'message' => __( 'El método get_location_products no está disponible en Lealez_GMB_API.', 'lealez' ),
+            ) );
+        }
+
+        // ── 3. Resolver IDs Google de forma robusta ──────────────────────────
+        $google_ids  = $this->resolve_google_ids_from_post( $post_id );
+        $account_id  = $google_ids['account_id'];
+        $location_id = $google_ids['location_id'];
+
+        if ( '' === $location_id ) {
+            wp_send_json_error( array(
+                'message' => __( 'No se pudo resolver el location_id de Google para esta ubicación. Reimporta la ubicación desde el metabox de Integración GMB.', 'lealez' ),
+            ) );
+        }
+
+        if ( '' === $account_id ) {
+            wp_send_json_error( array(
+                'message' => __( 'No se pudo resolver el account_id de Google para esta ubicación. Reimporta la ubicación desde el metabox de Integración GMB.', 'lealez' ),
             ) );
         }
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY Products] ajax_sync_products START — post_id=' . $post_id . ' account_id=' . $account_id . ' location_id=' . $location_id );
+            error_log(
+                '[OY Products] ajax_sync_products START — post_id=' . $post_id .
+                ' business_id=' . $business_id .
+                ' account_id=' . $account_id .
+                ' location_id=' . $location_id
+            );
         }
 
-        // ── 4. Verificar método disponible ────────────────────────────────────
-        if ( ! method_exists( 'Lealez_GMB_API', 'get_location_products' ) ) {
-            $notice = __( 'El método get_location_products no está disponible en Lealez_GMB_API. Verifica que class-lealez-gmb-api.php esté actualizado.', 'lealez' );
-            update_post_meta( $post_id, 'gmb_products_last_sync', time() );
-            update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
-            wp_send_json_success( array(
-                'message'           => $notice,
-                'api_available'     => false,
-                'sections_imported' => 0,
-                'items_imported'    => 0,
-            ) );
-        }
-
-        // ── 5. Llamar API de productos ────────────────────────────────────────
-        update_post_meta( $post_id, 'gmb_products_last_sync', time() );
-
+        // ── 4. Llamar API ─────────────────────────────────────────────────────
         $result = Lealez_GMB_API::get_location_products(
             $business_id,
             $account_id,
             $location_id,
-            true // force_refresh siempre
+            true
         );
 
-        // ── 6. Manejar error ──────────────────────────────────────────────────
+        update_post_meta( $post_id, 'gmb_products_last_sync', time() );
+
+        // Guardar respuesta de diagnóstico
         if ( is_wp_error( $result ) ) {
-            $code      = $result->get_error_code();
-            $message   = $result->get_error_message();
-            $err_data  = $result->get_error_data();
-            $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+            update_post_meta( $post_id, '_gmb_debug_products_last_response', array(
+                'status'      => 'error',
+                'code'        => $result->get_error_code(),
+                'message'     => $result->get_error_message(),
+                'error_data'  => $result->get_error_data(),
+                'account_id'  => $account_id,
+                'location_id' => $location_id,
+                'timestamp'   => current_time( 'mysql' ),
+            ) );
+        } else {
+            update_post_meta( $post_id, '_gmb_debug_products_last_response', array(
+                'status'      => 'ok',
+                'keys'        => is_array( $result ) ? array_keys( $result ) : array(),
+                'raw_head'    => substr( wp_json_encode( $result ), 0, 2000 ),
+                'account_id'  => $account_id,
+                'location_id' => $location_id,
+                'timestamp'   => current_time( 'mysql' ),
+            ) );
+        }
+
+        // ── 5. Manejo de error ────────────────────────────────────────────────
+        if ( is_wp_error( $result ) ) {
+            $error_code = (string) $result->get_error_code();
+            $error_msg  = (string) $result->get_error_message();
+            $error_data = $result->get_error_data();
+
+            $http_code = 0;
+            if ( is_array( $error_data ) && isset( $error_data['code'] ) ) {
+                $http_code = (int) $error_data['code'];
+            }
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Products] ajax_sync_products — API ERROR (' . $code . ' / HTTP ' . $http_code . '): ' . $message );
-                if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
-                    error_log( '[OY Products] ajax_sync_products — RAW BODY (500 chars): ' . substr( (string) $err_data['raw_body'], 0, 500 ) );
+                error_log(
+                    '[OY Products] ajax_sync_products ERROR — code=' . $error_code .
+                    ' http=' . $http_code .
+                    ' msg=' . $error_msg
+                );
+                if ( is_array( $error_data ) && ! empty( $error_data['raw_body'] ) ) {
+                    error_log(
+                        '[OY Products] ajax_sync_products RAW_BODY: ' .
+                        substr( (string) $error_data['raw_body'], 0, 2000 )
+                    );
                 }
             }
 
-            // 404 = endpoint v4 /products no existe / fue discontinuado por Google
-            $is_404 = (
-                404 === $http_code
-                || false !== strpos( (string) $message, '404' )
-                || false !== strpos( (string) $code, 'not_found' )
-            );
-
-            if ( $is_404 ) {
-                $notice = __( 'El catálogo de productos de Google My Business no está disponible para esta ubicación a través de la API (el endpoint /products de la API v4 ha sido discontinuado por Google). Puedes gestionar tu catálogo de productos manualmente en las secciones de abajo.', 'lealez' );
-            } else {
-                /* translators: 1: código de error, 2: mensaje de error */
+            if ( 404 === $http_code ) {
                 $notice = sprintf(
-                    __( 'Error al consultar Google (%1$s): %2$s — Puedes gestionar el catálogo manualmente.', 'lealez' ),
-                    esc_html( (string) $code ),
-                    esc_html( $message )
+                    __( 'Google respondió 404 al consultar el catálogo con account_id=%1$s y location_id=%2$s. En este caso el problema suele ser de identificación del recurso o disponibilidad de productos para esa cuenta/ubicación, no una “descontinuación” global que debamos asumir automáticamente.', 'lealez' ),
+                    $account_id,
+                    $location_id
+                );
+            } else {
+                $notice = sprintf(
+                    __( 'Error al consultar Google (%1$s): %2$s', 'lealez' ),
+                    $error_code,
+                    $error_msg
                 );
             }
 
             update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
 
-            // Devolvemos success (no error) para que el JS recargue la página
-            // y muestre el aviso informativo en el metabox.
-            wp_send_json_success( array(
-                'message'           => $notice,
-                'api_available'     => false,
-                'sections_imported' => 0,
-                'items_imported'    => 0,
+            wp_send_json_error( array(
+                'message' => $notice,
             ) );
         }
 
-        // ── 7. Procesar resultado exitoso ─────────────────────────────────────
-        $sections_imported = 0;
-        $items_imported    = 0;
-        $mapped_sections   = $this->map_products_to_sections( $result );
+        // ── 6. Mapear respuesta ───────────────────────────────────────────────
+        $mapped_sections = $this->map_products_to_sections( $result );
 
-        if ( ! empty( $mapped_sections ) ) {
-            update_post_meta( $post_id, 'location_products_sections', $mapped_sections );
-            delete_post_meta( $post_id, 'gmb_products_api_notice' );
-            $sections_imported = count( $mapped_sections );
-            foreach ( $mapped_sections as $sec ) {
-                $items_imported += count( $sec['items'] ?? array() );
+        if ( empty( $mapped_sections ) ) {
+            $notice = __( 'Google respondió correctamente, pero el catálogo no trajo productos mapeables para esta ubicación.', 'lealez' );
+            update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log(
+                    '[OY Products] ajax_sync_products EMPTY_AFTER_MAP — keys=' .
+                    wp_json_encode( is_array( $result ) ? array_keys( $result ) : array() )
+                );
             }
-            /* translators: 1: número de categorías, 2: número de productos */
-            $message = sprintf(
-                __( 'Sincronizado correctamente: %1$d categoría(s) con %2$d producto(s).', 'lealez' ),
-                $sections_imported,
-                $items_imported
+
+            wp_send_json_error( array(
+                'message' => $notice,
+            ) );
+        }
+
+        // ── 7. Guardar metabox ────────────────────────────────────────────────
+        update_post_meta( $post_id, 'location_products_sections', $mapped_sections );
+        delete_post_meta( $post_id, 'gmb_products_api_notice' );
+
+        $sections_imported = count( $mapped_sections );
+        $items_imported    = 0;
+
+        foreach ( $mapped_sections as $section ) {
+            $items_imported += count( $section['items'] ?? array() );
+        }
+
+        $message = sprintf(
+            __( 'Sincronizado correctamente: %1$d categoría(s) con %2$d producto(s).', 'lealez' ),
+            $sections_imported,
+            $items_imported
+        );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[OY Products] ajax_sync_products OK — sections=' . $sections_imported .
+                ' items=' . $items_imported
             );
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Products] ajax_sync_products OK: ' . $sections_imported . ' categorías, ' . $items_imported . ' productos.' );
-            }
-        } else {
-            $message = __( 'Google My Business respondió correctamente pero no devolvió productos para esta ubicación. Puedes agregar el catálogo manualmente.', 'lealez' );
-            update_post_meta( $post_id, 'gmb_products_api_notice', $message );
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Products] ajax_sync_products — API OK pero sin productos. Keys: ' . wp_json_encode( is_array( $result ) ? array_keys( $result ) : 'no-array' ) );
-            }
         }
 
         wp_send_json_success( array(
             'message'           => $message,
-            'api_available'     => true,
             'sections_imported' => $sections_imported,
             'items_imported'    => $items_imported,
         ) );
@@ -905,94 +1064,197 @@ class OY_Location_Products_Metabox {
     // =========================================================================
 
     /**
-     * Mapear la respuesta de la API de productos al formato interno
+     * Mapear la respuesta de productos de Google al formato interno
      * location_products_sections.
      *
-     * Soporta dos formatos de respuesta conocidos de GMB API v4:
-     *   - {categories: [{name, items: [{name, price, description, landingPageUrl}]}]}
-     *   - {productItems: [{name, price, description, landingPageUrl}]}
+     * Soporta:
+     * - categories[] (formato retail moderno)
+     * - productItems[] (formato legacy)
+     * - items[] (alias)
+     * - array indexado plano
      *
-     * @param array $result Respuesta de Lealez_GMB_API::get_location_products()
-     * @return array Sections en formato interno {name, items[], from_gmb}
+     * @param array $result
+     * @return array
      */
     private function map_products_to_sections( $result ) {
-        if ( ! is_array( $result ) || empty( $result ) ) {
-            return array();
-        }
-
         $sections = array();
 
-        // ── Formato 1: {categories: [{name, items: [...]}]} ──────────────────
+        if ( ! is_array( $result ) || empty( $result ) ) {
+            return $sections;
+        }
+
+        // Alias alternativo
+        if ( empty( $result['productItems'] ) && ! empty( $result['items'] ) && is_array( $result['items'] ) ) {
+            $result['productItems'] = $result['items'];
+        }
+
+        // Array plano
+        if ( empty( $result['productItems'] ) && isset( $result[0] ) && is_array( $result[0] ) ) {
+            $result['productItems'] = $result;
+        }
+
+        // ── Formato A: categories[] ─────────────────────────────────────────
         if ( ! empty( $result['categories'] ) && is_array( $result['categories'] ) ) {
-            foreach ( $result['categories'] as $cat ) {
-                if ( ! is_array( $cat ) ) continue;
-                $sec_name  = sanitize_text_field( $cat['name'] ?? __( 'Productos', 'lealez' ) );
-                $cat_items = is_array( $cat['items'] ?? null ) ? $cat['items'] : array();
-                $items     = array();
-                foreach ( $cat_items as $item ) {
-                    if ( ! is_array( $item ) ) continue;
-                    $item_name = sanitize_text_field( $item['name'] ?? '' );
-                    if ( empty( $item_name ) ) continue;
-                    $items[] = $this->map_product_item( $item );
+            foreach ( $result['categories'] as $category ) {
+                if ( ! is_array( $category ) ) {
+                    continue;
                 }
-                $sections[] = array(
-                    'name'     => $sec_name,
-                    'items'    => $items,
-                    'from_gmb' => 1,
+
+                $section_name = sanitize_text_field(
+                    (string) ( $category['displayName'] ?? $category['name'] ?? $category['categoryName'] ?? '' )
                 );
+
+                if ( '' === $section_name ) {
+                    $section_name = __( 'Catálogo', 'lealez' );
+                }
+
+                $items_raw = array();
+                if ( ! empty( $category['items'] ) && is_array( $category['items'] ) ) {
+                    $items_raw = $category['items'];
+                } elseif ( ! empty( $category['productItems'] ) && is_array( $category['productItems'] ) ) {
+                    $items_raw = $category['productItems'];
+                } elseif ( ! empty( $category['products'] ) && is_array( $category['products'] ) ) {
+                    $items_raw = $category['products'];
+                }
+
+                $items_clean = array();
+                foreach ( $items_raw as $item ) {
+                    $mapped = $this->map_product_item( $item );
+                    if ( ! empty( $mapped['name'] ) ) {
+                        $items_clean[] = $mapped;
+                    }
+                }
+
+                if ( ! empty( $items_clean ) ) {
+                    $sections[] = array(
+                        'name'     => $section_name,
+                        'items'    => $items_clean,
+                        'from_gmb' => 1,
+                    );
+                }
             }
+
             return $sections;
         }
 
-        // ── Formato 2: {productItems: [{name, ...}]} (sin categorías) ────────
+        // ── Formato B: productItems[] agrupado por categoría ─────────────────
         if ( ! empty( $result['productItems'] ) && is_array( $result['productItems'] ) ) {
-            $items = array();
+            $grouped = array();
+
             foreach ( $result['productItems'] as $item ) {
-                if ( ! is_array( $item ) ) continue;
-                $item_name = sanitize_text_field( $item['name'] ?? '' );
-                if ( empty( $item_name ) ) continue;
-                $items[] = $this->map_product_item( $item );
-            }
-            if ( ! empty( $items ) ) {
-                $sections[] = array(
-                    'name'     => __( 'Productos', 'lealez' ),
-                    'items'    => $items,
-                    'from_gmb' => 1,
+                $mapped = $this->map_product_item( $item );
+
+                if ( empty( $mapped['name'] ) ) {
+                    continue;
+                }
+
+                $category_name = sanitize_text_field(
+                    (string) ( $item['category'] ?? $item['categoryName'] ?? '' )
                 );
+
+                if ( '' === $category_name ) {
+                    $category_name = __( 'Catálogo', 'lealez' );
+                }
+
+                if ( ! isset( $grouped[ $category_name ] ) ) {
+                    $grouped[ $category_name ] = array();
+                }
+
+                $grouped[ $category_name ][] = $mapped;
             }
-            return $sections;
+
+            foreach ( $grouped as $category_name => $items ) {
+                if ( ! empty( $items ) ) {
+                    $sections[] = array(
+                        'name'     => $category_name,
+                        'items'    => $items,
+                        'from_gmb' => 1,
+                    );
+                }
+            }
         }
 
-        return array();
+        return $sections;
     }
 
     /**
-     * Mapear un item de producto GMB al formato interno.
+     * Mapear un producto individual de Google al formato interno del metabox.
      *
-     * @param array $item Item de la API de GMB
-     * @return array Item en formato interno
+     * Soporta campos modernos y legacy:
+     * - productTitle / name
+     * - productDescription / description
+     * - landingPageUri / landingPageUrl / productUrl / callToAction.url
+     * - productCode / sku
+     * - price {units,nanos,currencyCode} o string
+     *
+     * @param array $item
+     * @return array
      */
     private function map_product_item( $item ) {
-        // Precio: puede venir como objeto {units, nanos} o como string
-        $price_data = $item['price'] ?? $item['priceRange'] ?? array();
-        $price_str  = '';
+        if ( ! is_array( $item ) ) {
+            return array(
+                'name'        => '',
+                'price'       => '',
+                'description' => '',
+                'product_url' => '',
+                'sku'         => '',
+                'image_id'    => 0,
+                'from_gmb'    => 1,
+            );
+        }
+
+        $name = sanitize_text_field(
+            (string) ( $item['productTitle'] ?? $item['name'] ?? '' )
+        );
+
+        $description = sanitize_textarea_field(
+            (string) ( $item['productDescription'] ?? $item['description'] ?? '' )
+        );
+
+        $product_url = '';
+        if ( ! empty( $item['callToAction']['url'] ) ) {
+            $product_url = esc_url_raw( (string) $item['callToAction']['url'] );
+        } elseif ( ! empty( $item['landingPageUri'] ) ) {
+            $product_url = esc_url_raw( (string) $item['landingPageUri'] );
+        } elseif ( ! empty( $item['landingPageUrl'] ) ) {
+            $product_url = esc_url_raw( (string) $item['landingPageUrl'] );
+        } elseif ( ! empty( $item['productUrl'] ) ) {
+            $product_url = esc_url_raw( (string) $item['productUrl'] );
+        }
+
+        $sku = sanitize_text_field(
+            (string) ( $item['productCode'] ?? $item['sku'] ?? '' )
+        );
+
+        $price = '';
+        $price_data = $item['price'] ?? $item['priceRange'] ?? '';
+
         if ( is_array( $price_data ) ) {
-            $units = $price_data['units'] ?? $price_data['minUnits'] ?? '';
-            $nanos = (int) ( $price_data['nanos'] ?? 0 );
-            if ( '' !== (string) $units ) {
-                $amount    = (float) $units + $nanos / 1e9;
-                $price_str = number_format( $amount, 2, ',', '.' );
+            $units        = isset( $price_data['units'] ) ? (string) $price_data['units'] : '';
+            $nanos        = isset( $price_data['nanos'] ) ? (int) $price_data['nanos'] : 0;
+            $currencyCode = isset( $price_data['currencyCode'] ) ? sanitize_text_field( (string) $price_data['currencyCode'] ) : '';
+
+            if ( '' !== $units ) {
+                $amount = (float) $units;
+                if ( 0 !== $nanos ) {
+                    $amount += ( $nanos / 1000000000 );
+                }
+
+                $price = number_format( $amount, 2, '.', '' );
+                if ( '' !== $currencyCode ) {
+                    $price .= ' ' . $currencyCode;
+                }
             }
-        } elseif ( is_string( $price_data ) && '' !== $price_data ) {
-            $price_str = sanitize_text_field( $price_data );
+        } elseif ( is_string( $price_data ) && '' !== trim( $price_data ) ) {
+            $price = sanitize_text_field( $price_data );
         }
 
         return array(
-            'name'        => sanitize_text_field( $item['name'] ?? '' ),
-            'price'       => sanitize_text_field( $price_str ),
-            'description' => sanitize_textarea_field( $item['description'] ?? '' ),
-            'product_url' => esc_url_raw( $item['landingPageUrl'] ?? $item['productUrl'] ?? '' ),
-            'sku'         => sanitize_text_field( $item['productCode'] ?? $item['sku'] ?? '' ),
+            'name'        => $name,
+            'price'       => $price,
+            'description' => $description,
+            'product_url' => $product_url,
+            'sku'         => $sku,
             'image_id'    => 0,
             'from_gmb'    => 1,
         );
