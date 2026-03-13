@@ -6236,9 +6236,10 @@ public function ajax_get_gmb_location_details() {
             true // force_refresh siempre
         );
 
-        $sections_imported = 0;
+$sections_imported = 0;
         $items_imported    = 0;
         $menu_error        = '';
+        $catalog_type      = 'none'; // Tipo detectado: food_menu | services | products | none
 
         // Variable compartida con el bloque Media para resolución de fotos por item
         $ajax_mapped_sections_for_resolve = array();
@@ -6276,6 +6277,8 @@ public function ajax_get_gmb_location_details() {
                 }
             }
 
+$catalog_type = 'food_menu';
+            update_post_meta( $post_id, 'gmb_catalog_type', 'food_menu' );
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[OY Location] ajax_sync_food_menus OK: ' . $sections_imported . ' secciones, ' . $items_imported . ' items (fotos de item pendientes de resolución).' );
             }
@@ -6313,6 +6316,8 @@ public function ajax_get_gmb_location_details() {
                     foreach ( $mapped_sections as $sec ) {
                         $items_imported += count( $sec['items'] ?? array() );
                     }
+$catalog_type = 'services';
+                    update_post_meta( $post_id, 'gmb_catalog_type', 'services' );
                     $menu_error = '';
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[OY Location] ajax_sync — services OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' item(s).' );
@@ -6324,11 +6329,10 @@ public function ajax_get_gmb_location_details() {
             }
         }
 
-        // ── 4c. Fallback 2: Products API para negocios de retail/catálogo ────
+// ── 4c. Fallback 2: Products API para negocios de retail/catálogo ────
         // Tercer intento: /products cubre negocios como tiendas, farmacias, etiquetas, etc.
         // que usan la herramienta "Productos" en Google Business Profile (no food, no service).
-        // La respuesta devuelve 'productItems' con cada producto con name, category, price,
-        // description, landingPageUri y mediaKeys (fotos).
+        // La respuesta puede venir con clave 'productItems' o como array plano.
         if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_products' ) ) {
             $products_result = Lealez_GMB_API::get_location_products(
                 $business_id,
@@ -6337,7 +6341,29 @@ public function ajax_get_gmb_location_details() {
                 true // force_refresh siempre
             );
 
-            if ( ! is_wp_error( $products_result ) && ! empty( $products_result['productItems'] ) ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                // Log de la respuesta bruta para diagnóstico — ayuda a detectar claves inesperadas
+                $prod_raw_keys = is_array( $products_result ) ? array_keys( $products_result ) : 'no-array';
+                error_log( '[OY Location] ajax_sync — products raw response keys: ' . wp_json_encode( $prod_raw_keys ) );
+            }
+
+            // Normalizar: la API puede devolver 'productItems', 'items', o array plano
+            $has_products = false;
+            if ( ! is_wp_error( $products_result ) && is_array( $products_result ) ) {
+                if ( ! empty( $products_result['productItems'] ) && is_array( $products_result['productItems'] ) ) {
+                    $has_products = true;
+                } elseif ( ! empty( $products_result['items'] ) && is_array( $products_result['items'] ) ) {
+                    // Alias alternativo que algunas versiones de la API devuelven
+                    $products_result['productItems'] = $products_result['items'];
+                    $has_products = true;
+                } elseif ( isset( $products_result[0] ) && is_array( $products_result[0] ) ) {
+                    // Array plano sin clave contenedora
+                    $products_result['productItems'] = $products_result;
+                    $has_products = true;
+                }
+            }
+
+            if ( $has_products ) {
                 $mapped_sections = $this->map_gmb_products_to_sections( $products_result );
                 if ( ! empty( $mapped_sections ) ) {
                     delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
@@ -6348,20 +6374,25 @@ public function ajax_get_gmb_location_details() {
                     foreach ( $mapped_sections as $sec ) {
                         $items_imported += count( $sec['items'] ?? array() );
                     }
+                    $catalog_type = 'products';
+                    update_post_meta( $post_id, 'gmb_catalog_type', 'products' );
                     $menu_error = '';
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[OY Location] ajax_sync — products OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' producto(s).' );
                     }
                 }
             } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                $prod_err = is_wp_error( $products_result ) ? $products_result->get_error_message() : 'respuesta vacía (sin productItems)';
+                $prod_err = is_wp_error( $products_result )
+                    ? $products_result->get_error_message()
+                    : 'respuesta sin productItems ni items válidos. Keys recibidas: ' . wp_json_encode( is_array( $products_result ) ? array_keys( $products_result ) : 'no-array' );
                 error_log( '[OY Location] ajax_sync — products fallback sin datos: ' . $prod_err );
             }
         }
 
-        // Si los tres endpoints devolvieron vacío, mensaje informativo genérico
+// Si los tres endpoints devolvieron vacío, mensaje informativo genérico
         if ( '' !== $menu_error && 0 === $sections_imported ) {
-            $menu_error = __( 'Google no devolvió catálogo estructurado para este negocio (se intentaron los endpoints foodMenus, services y products). Puedes gestionar el catálogo manualmente en Lealez.', 'lealez' );
+            $menu_error = __( 'Google no devolvió catálogo estructurado para este negocio (se intentaron foodMenus, services y products). Puedes agregar el catálogo manualmente en Lealez.', 'lealez' );
+            update_post_meta( $post_id, 'gmb_catalog_type', 'none' );
         }
 
         // ── 5. Llamar Food Photos (Media API v4) ─────────────────────────────
@@ -6426,18 +6457,19 @@ public function ajax_get_gmb_location_details() {
         }
 
         // ── 6. Respuesta JSON ─────────────────────────────────────────────────
-        if ( '' !== $menu_error && 0 === $sections_imported ) {
-            // No hay menú en GMB (puede ser válido para fotos igual)
+if ( '' !== $menu_error && 0 === $sections_imported ) {
+            // No hay catálogo estructurado en GMB (puede ser válido para fotos igual)
             wp_send_json_success( array(
                 'sections_imported' => $sections_imported,
                 'items_imported'    => $items_imported,
                 'photos_imported'   => $photos_imported,
+                'catalog_type'      => $catalog_type,
                 'menu_warning'      => $menu_error,
                 'message'           => sprintf(
                     /* translators: 1: photos count */
                     _n(
-                        'No hay menú estructurado en Google. %1$d foto importada.',
-                        'No hay menú estructurado en Google. %1$d fotos importadas.',
+                        'Google no tiene catálogo estructurado para este negocio. %1$d foto importada.',
+                        'Google no tiene catálogo estructurado para este negocio. %1$d fotos importadas.',
                         $photos_imported,
                         'lealez'
                     ),
@@ -6450,6 +6482,7 @@ public function ajax_get_gmb_location_details() {
             'sections_imported' => $sections_imported,
             'items_imported'    => $items_imported,
             'photos_imported'   => $photos_imported,
+            'catalog_type'      => $catalog_type,
             'message'           => sprintf(
                 /* translators: 1: sections, 2: items, 3: photos */
                 __( '✅ Sincronizado: %1$d sección(es), %2$d producto(s), %3$d foto(s).', 'lealez' ),
