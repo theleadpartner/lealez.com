@@ -1264,7 +1264,11 @@ window.oy_update_map_preview = function() {
                            value="<?php echo esc_attr( $chat_url ); ?>"
                            class="large-text"
                            placeholder="https://wa.me/573001234567">
-<p class=\"description\"><?php _e( 'Permite que los clientes chateen con tu empresa vía WhatsApp o SMS. 🔄 Se importa automáticamente desde GMB (<code>url_whatsapp</code> / <code>url_text_messaging</code>) — o puedes ingresarlo manualmente.', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Permite que los clientes chateen con tu empresa vía WhatsApp o SMS. 🔄 Se importa automáticamente desde GMB (<code>url_whatsapp</code> / <code>url_text_messaging</code>) — o puedes ingresarlo manualmente.', 'lealez' ); ?></p>
+                </td>
+            </tr>
+        </table>
+
         <hr style="margin:16px 0;">
 
         <h4><?php _e( '📧 Contacto Web', 'lealez' ); ?></h4>
