@@ -857,9 +857,6 @@ class OY_Location_Products_Metabox {
 /**
      * AJAX: Sincronizar catálogo de productos/servicios desde Google My Business.
      * Acción: oy_sync_location_products
-     *
-     * Trae la lista de servicios desde /serviceList de GBP v4 y los mapea
-     * al formato interno de Lealez (location_products_sections).
      */
 public function ajax_sync_products() {
 
@@ -938,7 +935,7 @@ public function ajax_sync_products() {
 
     update_post_meta( $post_id, 'gmb_products_last_sync', time() );
 
-    // Guardar respuesta de diagnóstico en meta (para debugging)
+    // Guardar respuesta de diagnóstico
     if ( is_wp_error( $result ) ) {
         update_post_meta( $post_id, '_gmb_debug_products_last_response', array(
             'status'      => 'error',
@@ -986,21 +983,42 @@ public function ajax_sync_products() {
         }
 
         /**
-         * 'no_service_list_yet' — Google respondió HTTP 404 para /serviceList.
+         * 'service_list_endpoint_unavailable' — Google devolvió HTML 404.
          *
-         * Esto ocurre cuando la lista de servicios aún no fue guardada
-         * formalmente en GBP para esta ubicación. Los servicios que aparecen
-         * en la UI de Google Business Profile como "sugeridos" (basados en la
-         * categoría del negocio) NO son accesibles por la API hasta que el
-         * dueño del negocio los confirma y guarda desde la sección
-         * "Editar servicios" en su perfil de GBP.
+         * Esto NO significa que la ubicación no tenga servicios configurados.
+         * Significa que el endpoint /serviceList no está disponible para el
+         * proyecto de Google Cloud que usa este plugin.
          *
-         * Solución: ir a Google Business Profile → Editar servicios →
-         * confirmar/guardar al menos un servicio → volver a sincronizar.
+         * Causa más probable: en Google Cloud Console solo está habilitada
+         * "Business Profile API" pero NO la legacy "Google My Business API" (v4).
+         * El endpoint /serviceList pertenece a la API v4.
+         *
+         * Pasos para resolver:
+         * 1. Ir a console.cloud.google.com → APIs y servicios → Biblioteca
+         * 2. Buscar "Google My Business API"
+         * 3. Habilitarla si no lo está
+         * 4. Esperar ~5 minutos y volver a sincronizar
+         */
+        if ( 'service_list_endpoint_unavailable' === $error_code ) {
+            $notice = __(
+                'El endpoint de Servicios de Google Business Profile (API v4 /serviceList) no está accesible desde este proyecto de Google Cloud. Esto es independiente de si tienes servicios configurados en GBP. Para habilitarlo: ve a console.cloud.google.com → "APIs y servicios" → "Biblioteca" → busca "Google My Business API" → habilítala. Si ya está habilitada, verifica que la cuenta de servicio tenga los permisos correctos.',
+                'lealez'
+            );
+            update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
+            wp_send_json_error( array(
+                'message'    => $notice,
+                'error_type' => 'endpoint_unavailable',
+            ) );
+        }
+
+        /**
+         * 'no_service_list_yet' — JSON 404: la ubicación no tiene serviceList.
+         * Los servicios están en GBP pero el recurso serviceList aún no fue
+         * creado (requiere guardar al menos un servicio desde GBP).
          */
         if ( 'no_service_list_yet' === $error_code ) {
             $notice = __(
-                'Google respondió que esta ubicación aún no tiene servicios guardados en Google Business Profile (la API devolvió 404 para /serviceList). Los servicios sugeridos por Google según la categoría del negocio no se sincronizan hasta que el propietario los confirma manualmente: ve a tu perfil de Google → "Editar servicios" → guarda al menos un servicio → vuelve a sincronizar.',
+                'Google respondió que esta ubicación aún no tiene servicios guardados en Google Business Profile (JSON 404 para /serviceList). Ve a tu perfil de Google → "Editar servicios" → guarda al menos un servicio → vuelve a sincronizar.',
                 'lealez'
             );
             update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
@@ -1027,8 +1045,7 @@ public function ajax_sync_products() {
         }
 
         /**
-         * 'products_api_unavailable' — código legacy de versiones anteriores.
-         * Se conserva para compatibilidad con posibles respuestas cacheadas.
+         * 'products_api_unavailable' — código legacy. Se mantiene para compatibilidad.
          */
         if ( 'products_api_unavailable' === $error_code ) {
             $notice = __(
