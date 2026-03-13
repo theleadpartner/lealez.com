@@ -5593,6 +5593,123 @@ return $sections_output;
             );
         }
 
+return $sections_output;
+    }
+
+
+    /**
+     * Mapear la respuesta de GMB API v4 /products al formato interno location_menu_sections.
+     *
+     * El endpoint /products cubre negocios de retail, catálogo físico, tiendas y similares
+     * que usan la herramienta "Productos" en Google Business Profile. No aplica para
+     * restaurantes (/foodMenus) ni negocios de servicio puro (/services).
+     *
+     * Estructura esperada de $products_data:
+     * {
+     *   "productItems": [
+     *     {
+     *       "productItemId": "...",
+     *       "name": "Etiquetas Reciclables",
+     *       "category": "Etiquetas",
+     *       "description": "...",
+     *       "price": {"currencyCode": "COP", "units": "25000"},
+     *       "landingPageUri": "https://...",
+     *       "mediaKeys": ["AF1Qip..."]
+     *     }
+     *   ]
+     * }
+     *
+     * Los productos se agrupan por 'category' para crear secciones. Los productos
+     * sin categoría van a una sección "Catálogo".
+     *
+     * @param array $products_data Respuesta de la API GET /products.
+     * @return array Formato location_menu_sections: [['name'=>'...', 'items'=>[...], 'from_gmb'=>1], ...]
+     */
+    private function map_gmb_products_to_sections( $products_data ) {
+        $sections_output = array();
+
+        if ( ! is_array( $products_data ) ) {
+            return $sections_output;
+        }
+
+        $product_items = is_array( $products_data['productItems'] ?? null ) ? $products_data['productItems'] : array();
+
+        if ( empty( $product_items ) ) {
+            return $sections_output;
+        }
+
+        // Agrupar productos por categoría para crear secciones
+        $by_category = array();
+
+        foreach ( $product_items as $product ) {
+            if ( ! is_array( $product ) ) {
+                continue;
+            }
+
+            // Nombre del producto — campo obligatorio
+            $product_name = sanitize_text_field( (string) ( $product['name'] ?? '' ) );
+            if ( '' === $product_name ) {
+                continue;
+            }
+
+            // Categoría — usada como nombre de sección
+            $category = sanitize_text_field( (string) ( $product['category'] ?? '' ) );
+            if ( '' === $category ) {
+                $category = __( 'Catálogo', 'lealez' );
+            }
+
+            // Precio
+            $price_str  = '';
+            $price_data = is_array( $product['price'] ?? null ) ? $product['price'] : array();
+            if ( ! empty( $price_data['units'] ) ) {
+                $price_str = sanitize_text_field( (string) $price_data['units'] );
+                if ( ! empty( $price_data['nanos'] ) ) {
+                    // Convertir nanos a centavos si aplica (Google usa nanos para decimales)
+                    $nanos = (int) $price_data['nanos'];
+                    if ( $nanos > 0 ) {
+                        $price_str .= '.' . str_pad( (string) round( $nanos / 10000000 ), 2, '0', STR_PAD_LEFT );
+                    }
+                }
+                if ( ! empty( $price_data['currencyCode'] ) ) {
+                    $price_str .= ' ' . sanitize_text_field( (string) $price_data['currencyCode'] );
+                }
+            }
+
+            // mediaKeys — referencias a fotos del producto en el Media API
+            $media_keys = array();
+            if ( ! empty( $product['mediaKeys'] ) && is_array( $product['mediaKeys'] ) ) {
+                $media_keys = array_map( 'sanitize_text_field', $product['mediaKeys'] );
+            }
+
+            // URL de landing page del producto
+            $landing_url = esc_url_raw( (string) ( $product['landingPageUri'] ?? '' ) );
+
+            $item = array(
+                'name'          => $product_name,
+                'price'         => $price_str,
+                'description'   => sanitize_textarea_field( (string) ( $product['description'] ?? '' ) ),
+                'image_id'      => 0,
+                'dietary'       => array(),
+                'media_keys'    => $media_keys,
+                'gmb_image_url' => '', // Se resuelve después con resolve_item_photos_from_media
+                'gmb_product_url' => $landing_url, // URL de página del producto en el catálogo GMB
+                'from_gmb'      => 1,
+            );
+
+            if ( ! isset( $by_category[ $category ] ) ) {
+                $by_category[ $category ] = array();
+            }
+            $by_category[ $category ][] = $item;
+        }
+
+        foreach ( $by_category as $cat_label => $items ) {
+            $sections_output[] = array(
+                'name'     => $cat_label,
+                'items'    => $items,
+                'from_gmb' => 1,
+            );
+        }
+
         return $sections_output;
     }
 
@@ -6175,9 +6292,8 @@ public function ajax_get_gmb_location_details() {
             }
         }
 
-        // ── 4b. Fallback: Services API para negocios no-restaurante ──────────
-        // Si foodMenus devolvió error o estuvo vacío, intentamos el endpoint /services
-        // de GMB API v4, que cubre negocios de servicios y productos no-food.
+// ── 4b. Fallback 1: Services API para negocios de servicio ──────────
+        // Si foodMenus devolvió error o estuvo vacío, intentamos /services.
         if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_services' ) ) {
             $services_result = Lealez_GMB_API::get_location_services(
                 $business_id,
@@ -6197,7 +6313,7 @@ public function ajax_get_gmb_location_details() {
                     foreach ( $mapped_sections as $sec ) {
                         $items_imported += count( $sec['items'] ?? array() );
                     }
-                    $menu_error = ''; // Servicios importados con éxito, limpiar error
+                    $menu_error = '';
                     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                         error_log( '[OY Location] ajax_sync — services OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' item(s).' );
                     }
@@ -6208,9 +6324,44 @@ public function ajax_get_gmb_location_details() {
             }
         }
 
-        // Si ambos endpoints (foodMenus + services) devolvieron vacío, mensaje genérico
+        // ── 4c. Fallback 2: Products API para negocios de retail/catálogo ────
+        // Tercer intento: /products cubre negocios como tiendas, farmacias, etiquetas, etc.
+        // que usan la herramienta "Productos" en Google Business Profile (no food, no service).
+        // La respuesta devuelve 'productItems' con cada producto con name, category, price,
+        // description, landingPageUri y mediaKeys (fotos).
+        if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_products' ) ) {
+            $products_result = Lealez_GMB_API::get_location_products(
+                $business_id,
+                $account_id,
+                $location_id,
+                true // force_refresh siempre
+            );
+
+            if ( ! is_wp_error( $products_result ) && ! empty( $products_result['productItems'] ) ) {
+                $mapped_sections = $this->map_gmb_products_to_sections( $products_result );
+                if ( ! empty( $mapped_sections ) ) {
+                    delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                    update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+                    $ajax_mapped_sections_for_resolve = $mapped_sections;
+                    update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
+                    $sections_imported = count( $mapped_sections );
+                    foreach ( $mapped_sections as $sec ) {
+                        $items_imported += count( $sec['items'] ?? array() );
+                    }
+                    $menu_error = '';
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] ajax_sync — products OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' producto(s).' );
+                    }
+                }
+            } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                $prod_err = is_wp_error( $products_result ) ? $products_result->get_error_message() : 'respuesta vacía (sin productItems)';
+                error_log( '[OY Location] ajax_sync — products fallback sin datos: ' . $prod_err );
+            }
+        }
+
+        // Si los tres endpoints devolvieron vacío, mensaje informativo genérico
         if ( '' !== $menu_error && 0 === $sections_imported ) {
-            $menu_error = __( 'Google no devolvió catálogo estructurado para este negocio. Puedes gestionar el catálogo manualmente en Lealez.', 'lealez' );
+            $menu_error = __( 'Google no devolvió catálogo estructurado para este negocio (se intentaron los endpoints foodMenus, services y products). Puedes gestionar el catálogo manualmente en Lealez.', 'lealez' );
         }
 
         // ── 5. Llamar Food Photos (Media API v4) ─────────────────────────────
