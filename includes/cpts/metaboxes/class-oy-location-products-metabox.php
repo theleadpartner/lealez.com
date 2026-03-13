@@ -855,16 +855,11 @@ class OY_Location_Products_Metabox {
     // =========================================================================
 
 /**
-     * AJAX: Sincronizar catálogo de productos desde Google My Business.
+     * AJAX: Sincronizar catálogo de productos/servicios desde Google My Business.
      * Acción: oy_sync_location_products
      *
-     * Trae los servicios desde /serviceList de GBP y los mapea al formato
-     * interno de Lealez (location_products_sections).
-     *
-     * Distingue entre:
-     *  - 'no_service_list_yet'  → aviso informativo (sin datos en GBP todavía)
-     *  - 'products_api_error'   → error real de API (auth, permisos, servidor)
-     *  - cualquier otro error   → error genérico con código
+     * Trae la lista de servicios desde /serviceList de GBP v4 y los mapea
+     * al formato interno de Lealez (location_products_sections).
      */
 public function ajax_sync_products() {
 
@@ -943,7 +938,7 @@ public function ajax_sync_products() {
 
     update_post_meta( $post_id, 'gmb_products_last_sync', time() );
 
-    // Guardar respuesta de diagnóstico
+    // Guardar respuesta de diagnóstico en meta (para debugging)
     if ( is_wp_error( $result ) ) {
         update_post_meta( $post_id, '_gmb_debug_products_last_response', array(
             'status'      => 'error',
@@ -991,14 +986,21 @@ public function ajax_sync_products() {
         }
 
         /**
-         * 'no_service_list_yet' — NO es un error técnico.
-         * La ubicación simplemente no tiene servicios configurados en GBP todavía
-         * (GET /serviceList devolvió 404, que es la respuesta normal y esperada).
-         * Se muestra como aviso informativo, no como error.
+         * 'no_service_list_yet' — Google respondió HTTP 404 para /serviceList.
+         *
+         * Esto ocurre cuando la lista de servicios aún no fue guardada
+         * formalmente en GBP para esta ubicación. Los servicios que aparecen
+         * en la UI de Google Business Profile como "sugeridos" (basados en la
+         * categoría del negocio) NO son accesibles por la API hasta que el
+         * dueño del negocio los confirma y guarda desde la sección
+         * "Editar servicios" en su perfil de GBP.
+         *
+         * Solución: ir a Google Business Profile → Editar servicios →
+         * confirmar/guardar al menos un servicio → volver a sincronizar.
          */
         if ( 'no_service_list_yet' === $error_code ) {
             $notice = __(
-                'Google respondió correctamente: esta ubicación aún no tiene servicios configurados en Google Business Profile. Si tienes productos o servicios para sincronizar, configúralos primero en tu perfil de GBP.',
+                'Google respondió que esta ubicación aún no tiene servicios guardados en Google Business Profile (la API devolvió 404 para /serviceList). Los servicios sugeridos por Google según la categoría del negocio no se sincronizan hasta que el propietario los confirma manualmente: ve a tu perfil de Google → "Editar servicios" → guarda al menos un servicio → vuelve a sincronizar.',
                 'lealez'
             );
             update_post_meta( $post_id, 'gmb_products_api_notice', $notice );
@@ -1010,7 +1012,6 @@ public function ajax_sync_products() {
 
         /**
          * 'products_api_error' — error real de API (auth, permisos, servidor).
-         * Se muestra con el HTTP code para facilitar el diagnóstico.
          */
         if ( 'products_api_error' === $error_code ) {
             $notice = sprintf(
@@ -1027,7 +1028,7 @@ public function ajax_sync_products() {
 
         /**
          * 'products_api_unavailable' — código legacy de versiones anteriores.
-         * Se mantiene para compatibilidad con posibles respuestas cacheadas.
+         * Se conserva para compatibilidad con posibles respuestas cacheadas.
          */
         if ( 'products_api_unavailable' === $error_code ) {
             $notice = __(
@@ -1060,7 +1061,7 @@ public function ajax_sync_products() {
 
     if ( empty( $mapped_sections ) ) {
         $notice = __(
-            'Google respondió correctamente con datos de serviceList, pero no se encontraron servicios con estructura utilizable. Verifica que los servicios estén completamente configurados en tu perfil de Google Business Profile.',
+            'Google respondió correctamente con datos de serviceList, pero no se encontraron servicios con estructura utilizable. Verifica que los servicios tengan nombre y estén completamente configurados en tu perfil de Google Business Profile.',
             'lealez'
         );
 
@@ -1227,29 +1228,51 @@ private function map_products_to_sections( $result ) {
         return $sections;
     }
 
-    /**
+/**
      * ── Formato C: serviceList / serviceItems[] ───────────────────────────
-     * Fuente oficial actual para negocios no-restaurante.
+     * Fuente oficial actual para negocios no-restaurante (v4 API).
+     * Cada item puede ser freeFormServiceItem o structuredServiceItem.
      */
     if ( ! empty( $result['serviceItems'] ) && is_array( $result['serviceItems'] ) ) {
         $grouped = array();
 
         foreach ( $result['serviceItems'] as $item ) {
+            // Saltear items no activos si Google los marca explícitamente
+            if ( isset( $item['isOffered'] ) && false === $item['isOffered'] ) {
+                continue;
+            }
+
             $mapped = $this->map_product_item( $item );
 
             if ( empty( $mapped['name'] ) ) {
                 continue;
             }
 
-            $category_name = sanitize_text_field(
-                (string) (
-                    $item['structuredServiceItem']['serviceType'] ??
-                    $item['serviceType'] ??
-                    $item['category'] ??
-                    $item['categoryName'] ??
-                    ''
-                )
-            );
+            // Extraer nombre de categoría según el tipo de serviceItem
+            $category_name = '';
+
+            if ( isset( $item['freeFormServiceItem'] ) && is_array( $item['freeFormServiceItem'] ) ) {
+                // freeFormServiceItem.category es el nombre de categoría libre
+                if ( ! empty( $item['freeFormServiceItem']['category'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['freeFormServiceItem']['category'] );
+                }
+            } elseif ( isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ) {
+                // structuredServiceItem no tiene categoría libre; usamos el serviceType si existe
+                if ( ! empty( $item['structuredServiceItem']['serviceType'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['structuredServiceItem']['serviceType'] );
+                }
+            }
+
+            // Fallbacks para formatos legacy o alternativos
+            if ( '' === $category_name ) {
+                if ( ! empty( $item['serviceType'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['serviceType'] );
+                } elseif ( ! empty( $item['category'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['category'] );
+                } elseif ( ! empty( $item['categoryName'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['categoryName'] );
+                }
+            }
 
             if ( '' === $category_name ) {
                 $category_name = __( 'Servicios / Catálogo', 'lealez' );
@@ -1262,10 +1285,10 @@ private function map_products_to_sections( $result ) {
             $grouped[ $category_name ][] = $mapped;
         }
 
-        foreach ( $grouped as $category_name => $items ) {
+        foreach ( $grouped as $cat_name => $items ) {
             if ( ! empty( $items ) ) {
                 $sections[] = array(
-                    'name'     => $category_name,
+                    'name'     => $cat_name,
                     'items'    => $items,
                     'from_gmb' => 1,
                 );
@@ -1330,15 +1353,29 @@ private function map_products_to_sections( $result ) {
     return $sections;
 }
 
-    /**
-     * Mapear un producto individual de Google al formato interno del metabox.
+/**
+     * Mapear un ítem individual de Google al formato interno del metabox.
      *
-     * Soporta campos modernos y legacy:
-     * - productTitle / name
-     * - productDescription / description
-     * - landingPageUri / landingPageUrl / productUrl / callToAction.url
-     * - productCode / sku
-     * - price {units,nanos,currencyCode} o string
+     * Soporta los tres formatos reales que devuelve la API de GBP v4:
+     *
+     * 1. freeFormServiceItem (serviceList — negocio no-restaurante):
+     *    item.freeFormServiceItem.label.displayName  → name
+     *    item.freeFormServiceItem.label.description  → description
+     *    item.price {units, nanos, currencyCode}     → price (nivel raíz del item)
+     *
+     * 2. structuredServiceItem (serviceList — tipo de servicio de Google):
+     *    item.structuredServiceItem.serviceTypeId    → sku (identificador de referencia)
+     *    item.structuredServiceItem.description      → description (override personalizado)
+     *    item.price                                  → price (nivel raíz del item)
+     *    NOTA: el displayName del serviceTypeId no está en la respuesta de la API;
+     *    se requeriría un lookup adicional que no hacemos aquí.
+     *
+     * 3. productItem / payload legacy:
+     *    item.productTitle / item.displayName / item.name  → name
+     *    item.productDescription / item.description        → description
+     *    item.price / item.priceRange                      → price
+     *    item.landingPageUri / callToAction.url            → product_url
+     *    item.productCode / item.sku                       → sku
      *
      * @param array $item
      * @return array
@@ -1356,31 +1393,52 @@ private function map_product_item( $item ) {
         );
     }
 
-    /**
-     * Soporta:
-     * - payload legacy de products
-     * - payload de serviceList / serviceItems
-     * - payload con structuredServiceItem
-     */
-    $name = sanitize_text_field(
-        (string) (
-            $item['productTitle'] ??
-            $item['displayName'] ??
-            $item['name'] ??
-            $item['structuredServiceItem']['name'] ??
-            ''
-        )
-    );
+    // Detectar sub-objetos del formato serviceList v4
+    $free_form  = isset( $item['freeFormServiceItem'] )   && is_array( $item['freeFormServiceItem'] )   ? $item['freeFormServiceItem']   : null;
+    $structured = isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ? $item['structuredServiceItem'] : null;
+    $free_label = ( $free_form && isset( $free_form['label'] ) && is_array( $free_form['label'] ) ) ? $free_form['label'] : null;
 
-    $description = sanitize_textarea_field(
-        (string) (
-            $item['productDescription'] ??
-            $item['description'] ??
-            $item['structuredServiceItem']['description'] ??
-            ''
-        )
-    );
+    // ── Nombre ───────────────────────────────────────────────────────────
+    $name = '';
 
+    if ( $free_label && ! empty( $free_label['displayName'] ) ) {
+        // freeFormServiceItem → label.displayName (formato primario v4 serviceList)
+        $name = sanitize_text_field( (string) $free_label['displayName'] );
+    } elseif ( ! empty( $item['productTitle'] ) ) {
+        $name = sanitize_text_field( (string) $item['productTitle'] );
+    } elseif ( ! empty( $item['displayName'] ) ) {
+        $name = sanitize_text_field( (string) $item['displayName'] );
+    } elseif ( ! empty( $item['name'] ) ) {
+        // 'name' en v4 suele ser el resource name (ej: accounts/X/locations/Y/...)
+        // lo ignoramos si contiene 'accounts/' para no confundirlo con el nombre del servicio
+        $raw_name = (string) $item['name'];
+        if ( false === strpos( $raw_name, 'accounts/' ) && false === strpos( $raw_name, 'locations/' ) ) {
+            $name = sanitize_text_field( $raw_name );
+        }
+    }
+
+    // Para structuredServiceItem: el nombre real requiere un lookup del serviceTypeId
+    // que no hacemos aquí; usamos el ID como nombre de referencia.
+    if ( '' === $name && $structured && ! empty( $structured['serviceTypeId'] ) ) {
+        $name = sanitize_text_field( (string) $structured['serviceTypeId'] );
+    }
+
+    // ── Descripción ──────────────────────────────────────────────────────
+    $description = '';
+
+    if ( $free_label && ! empty( $free_label['description'] ) ) {
+        // freeFormServiceItem → label.description
+        $description = sanitize_textarea_field( (string) $free_label['description'] );
+    } elseif ( $structured && ! empty( $structured['description'] ) ) {
+        // structuredServiceItem → description (override personalizado del negocio)
+        $description = sanitize_textarea_field( (string) $structured['description'] );
+    } elseif ( ! empty( $item['productDescription'] ) ) {
+        $description = sanitize_textarea_field( (string) $item['productDescription'] );
+    } elseif ( ! empty( $item['description'] ) ) {
+        $description = sanitize_textarea_field( (string) $item['description'] );
+    }
+
+    // ── URL del producto ─────────────────────────────────────────────────
     $product_url = '';
     if ( ! empty( $item['callToAction']['url'] ) ) {
         $product_url = esc_url_raw( (string) $item['callToAction']['url'] );
@@ -1394,30 +1452,42 @@ private function map_product_item( $item ) {
         $product_url = esc_url_raw( (string) $item['uri'] );
     }
 
-    $sku = sanitize_text_field(
-        (string) (
-            $item['productCode'] ??
-            $item['sku'] ??
-            $item['structuredServiceItem']['serviceId'] ??
-            $item['serviceId'] ??
-            ''
-        )
-    );
+    // ── SKU / Referencia ─────────────────────────────────────────────────
+    $sku = '';
+    if ( ! empty( $item['productCode'] ) ) {
+        $sku = sanitize_text_field( (string) $item['productCode'] );
+    } elseif ( ! empty( $item['sku'] ) ) {
+        $sku = sanitize_text_field( (string) $item['sku'] );
+    } elseif ( $structured && ! empty( $structured['serviceTypeId'] ) ) {
+        // Guardar el serviceTypeId como SKU de referencia
+        $sku = sanitize_text_field( (string) $structured['serviceTypeId'] );
+    } elseif ( ! empty( $item['serviceId'] ) ) {
+        $sku = sanitize_text_field( (string) $item['serviceId'] );
+    }
 
-    $price = '';
-    $price_data = $item['price'] ?? $item['priceRange'] ?? $item['structuredServiceItem']['price'] ?? '';
+    // ── Precio ───────────────────────────────────────────────────────────
+    // En serviceList v4, el precio está en el nivel raíz del serviceItem (item.price),
+    // NO dentro de freeFormServiceItem o structuredServiceItem.
+    $price      = '';
+    $price_data = null;
+
+    if ( isset( $item['price'] ) ) {
+        $price_data = $item['price'];
+    } elseif ( isset( $item['priceRange'] ) ) {
+        $price_data = $item['priceRange'];
+    }
 
     if ( is_array( $price_data ) ) {
-        $units        = isset( $price_data['units'] ) ? (string) $price_data['units'] : '';
-        $nanos        = isset( $price_data['nanos'] ) ? (int) $price_data['nanos'] : 0;
+        $units        = isset( $price_data['units'] )        ? (string) $price_data['units']        : '';
+        $nanos        = isset( $price_data['nanos'] )        ? (int)    $price_data['nanos']        : 0;
         $currencyCode = isset( $price_data['currencyCode'] ) ? sanitize_text_field( (string) $price_data['currencyCode'] ) : '';
 
-        if ( '' !== $units ) {
+        // Solo generar precio si units no está vacío ni es '0'
+        if ( '' !== $units && '0' !== $units ) {
             $amount = (float) $units;
             if ( 0 !== $nanos ) {
                 $amount += ( $nanos / 1000000000 );
             }
-
             $price = number_format( $amount, 2, '.', '' );
             if ( '' !== $currencyCode ) {
                 $price .= ' ' . $currencyCode;
