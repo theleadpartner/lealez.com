@@ -5504,6 +5504,95 @@ private function map_gmb_regular_hours_to_daily_meta( $regular ) {
             }
         }
 
+return $sections_output;
+    }
+
+
+    /**
+     * Mapear la respuesta de GMB API v4 /services al formato interno location_menu_sections.
+     *
+     * El endpoint /services cubre negocios de servicio y producto (no restaurantes).
+     * La respuesta es una lista plana de servicios que se agrupa por categoryId para crear
+     * secciones. Los servicios sin categoryId van a una sección genérica.
+     *
+     * @param array $services_data Respuesta de la API GET /services: {'services': [{displayName, categoryId, description, price, ...}]}
+     * @return array Formato location_menu_sections: [['name'=>'...', 'items'=>[...], 'from_gmb'=>1], ...]
+     */
+    private function map_gmb_services_to_sections( $services_data ) {
+        $sections_output = array();
+
+        if ( ! is_array( $services_data ) ) {
+            return $sections_output;
+        }
+
+        $services = is_array( $services_data['services'] ?? null ) ? $services_data['services'] : array();
+
+        if ( empty( $services ) ) {
+            return $sections_output;
+        }
+
+        // Agrupar servicios por categoryId para crear secciones
+        $by_category = array();
+
+        foreach ( $services as $service ) {
+            if ( ! is_array( $service ) ) {
+                continue;
+            }
+
+            $display_name = sanitize_text_field( (string) ( $service['displayName'] ?? '' ) );
+            if ( '' === $display_name ) {
+                continue; // Servicio sin nombre, omitir
+            }
+
+            // Obtener etiqueta de categoría legible
+            $category_id  = (string) ( $service['categoryId'] ?? '' );
+            if ( '' !== $category_id ) {
+                // Convertir "gcid:hair_salon" → "Hair Salon"
+                $category_label = $category_id;
+                if ( 0 === strpos( $category_label, 'gcid:' ) ) {
+                    $category_label = substr( $category_label, 5 ); // quitar "gcid:"
+                }
+                $category_label = ucwords( str_replace( '_', ' ', $category_label ) );
+                $category_label = sanitize_text_field( $category_label );
+            } else {
+                $category_label = __( 'Catálogo', 'lealez' );
+            }
+
+            // Precio: GMB v4 lo devuelve como {currencyCode, units, nanos}
+            $price_str  = '';
+            $price_data = is_array( $service['price'] ?? null ) ? $service['price'] : array();
+            if ( ! empty( $price_data['units'] ) ) {
+                $price_str = sanitize_text_field( (string) $price_data['units'] );
+                if ( ! empty( $price_data['currencyCode'] ) ) {
+                    $price_str .= ' ' . sanitize_text_field( (string) $price_data['currencyCode'] );
+                }
+            }
+
+            $item = array(
+                'name'          => $display_name,
+                'price'         => $price_str,
+                'description'   => sanitize_textarea_field( (string) ( $service['description'] ?? '' ) ),
+                'image_id'      => 0,
+                'dietary'       => array(),
+                'media_keys'    => array(),
+                'gmb_image_url' => '',
+                'from_gmb'      => 1,
+            );
+
+            if ( ! isset( $by_category[ $category_label ] ) ) {
+                $by_category[ $category_label ] = array();
+            }
+            $by_category[ $category_label ][] = $item;
+        }
+
+        foreach ( $by_category as $cat_label => $items ) {
+            $sections_output[] = array(
+                'name'     => $cat_label,
+                'items'    => $items,
+                'from_gmb' => 1,
+            );
+        }
+
         return $sections_output;
     }
 
@@ -6074,16 +6163,54 @@ public function ajax_get_gmb_location_details() {
                 error_log( '[OY Location] ajax_sync_food_menus OK: ' . $sections_imported . ' secciones, ' . $items_imported . ' items (fotos de item pendientes de resolución).' );
             }
 
-        } else {
-            // ── Respuesta vacía ────────────────────────────────────────────────
+} else {
+            // ── Respuesta vacía de foodMenus (negocio no es de tipo restaurante) ──
             delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
             update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
             update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
-            $menu_error = __( 'El negocio no tiene menú estructurado en Google My Business, o la cuenta no es de tipo restaurante.', 'lealez' );
+            $menu_error = __( 'foodMenus vacío — intentando endpoint de servicios.', 'lealez' );
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( '[OY Location] ajax_sync_food_menus — respuesta vacía. account_id=' . $account_id . ' location_id=' . $location_id );
             }
+        }
+
+        // ── 4b. Fallback: Services API para negocios no-restaurante ──────────
+        // Si foodMenus devolvió error o estuvo vacío, intentamos el endpoint /services
+        // de GMB API v4, que cubre negocios de servicios y productos no-food.
+        if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_services' ) ) {
+            $services_result = Lealez_GMB_API::get_location_services(
+                $business_id,
+                $account_id,
+                $location_id,
+                true // force_refresh siempre
+            );
+
+            if ( ! is_wp_error( $services_result ) && ! empty( $services_result['services'] ) ) {
+                $mapped_sections = $this->map_gmb_services_to_sections( $services_result );
+                if ( ! empty( $mapped_sections ) ) {
+                    delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                    update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+                    $ajax_mapped_sections_for_resolve = $mapped_sections;
+                    update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
+                    $sections_imported = count( $mapped_sections );
+                    foreach ( $mapped_sections as $sec ) {
+                        $items_imported += count( $sec['items'] ?? array() );
+                    }
+                    $menu_error = ''; // Servicios importados con éxito, limpiar error
+                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                        error_log( '[OY Location] ajax_sync — services OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' item(s).' );
+                    }
+                }
+            } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                $svc_err = is_wp_error( $services_result ) ? $services_result->get_error_message() : 'respuesta vacía';
+                error_log( '[OY Location] ajax_sync — services fallback sin datos: ' . $svc_err );
+            }
+        }
+
+        // Si ambos endpoints (foodMenus + services) devolvieron vacío, mensaje genérico
+        if ( '' !== $menu_error && 0 === $sections_imported ) {
+            $menu_error = __( 'Google no devolvió catálogo estructurado para este negocio. Puedes gestionar el catálogo manualmente en Lealez.', 'lealez' );
         }
 
         // ── 5. Llamar Food Photos (Media API v4) ─────────────────────────────
