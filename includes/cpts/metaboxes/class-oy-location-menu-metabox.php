@@ -380,9 +380,9 @@ public function add_meta_box() {
                    ═══════════════════════════════════════════════════════ */ ?>
             <div class="oy-menu-tab-panel active" id="oy-menu-tab-complete">
 
-            <p class="description" style="margin-bottom:14px;">
-                <?php _e( 'Las secciones y platos se importan automáticamente desde Google My Business al sincronizar la ubicación. Este metabox es exclusivo para restaurantes y negocios con menú de alimentos. Para negocios con catálogo de productos (ropa, electrónicos, etc.), usa el metabox de Catálogo de Productos.', 'lealez' ); ?>
-            </p
+                <p class="description" style="margin-bottom:14px;">
+                    <?php _e( 'Las secciones y platos se importan automáticamente desde Google My Business al sincronizar la ubicación. Este metabox es exclusivo para restaurantes y negocios con menú de alimentos. Para negocios con catálogo de productos (ropa, electrónicos, etc.), usa el metabox de Catálogo de Productos.', 'lealez' ); ?>
+                </p>
 
                 <?php /* ── Botón de sincronización directa desde GMB ── */ ?>
                 <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:10px 12px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:4px;">
@@ -557,7 +557,7 @@ public function add_meta_box() {
 
 <?php /* ── Templates HTML (ocultos) para JS ── */ ?>
         <script type="text/html" id="oy-section-template">
-            <?php $this->render_section_html( '__SEC_IDX__', '', array(), false ); ?>
+            <?php $this->render_section_html( '__SEC_IDX__', '', array(), false, $catalog_type ); ?>
         </script>
         <script type="text/html" id="oy-item-template">
             <?php $this->render_item_html( '__SEC_IDX__', '__ITEM_IDX__', '', '', '', 0, '', array(), '', array() ); ?>
@@ -811,18 +811,15 @@ public function add_meta_box() {
         <?php
     }
 
-/**
- * Render HTML for a menu section (restaurant only).
- *
- * @param int|string $sec_idx  Índice de la sección
- * @param string     $name     Nombre de la sección
- * @param array      $items    Array de items
- * @param bool       $from_gmb Si fue importado desde GMB
- */
-private function render_section_html( $sec_idx, $name, $items, $from_gmb = false ) {
+private function render_section_html( $sec_idx, $name, $items, $from_gmb = false, $catalog_type = '' ) {
     $item_count      = count( $items );
     $sec_placeholder = __( 'Nombre de la sección (ej: Sopas, Entradas, Postres...)', 'lealez' );
     $add_item_label  = __( 'Agregar un plato', 'lealez' );
+
+    // Por ahora este metabox sigue siendo exclusivo para restaurante.
+    // Se deja $catalog_type en la firma para mantener consistencia con las llamadas
+    // y evitar errores al renderizar templates o futuras extensiones.
+    unset( $catalog_type );
     ?>
     <div class="oy-menu-section" data-section-idx="<?php echo esc_attr( $sec_idx ); ?>">
         <div class="oy-menu-section-header">
@@ -844,15 +841,27 @@ private function render_section_html( $sec_idx, $name, $items, $from_gmb = false
         </div>
         <div class="oy-menu-items-wrap">
             <?php foreach ( $items as $item_idx => $item ) :
-                $item_name        = sanitize_text_field( $item['name']            ?? '' );
-                $item_price       = sanitize_text_field( $item['price']           ?? '' );
+                $item_name        = sanitize_text_field( $item['name'] ?? '' );
+                $item_price       = sanitize_text_field( $item['price'] ?? '' );
                 $item_desc        = sanitize_textarea_field( $item['description'] ?? '' );
-                $item_img         = (int) ( $item['image_id']        ?? 0 );
+                $item_img         = (int) ( $item['image_id'] ?? 0 );
                 $item_img_url     = $item_img ? wp_get_attachment_image_url( $item_img, 'thumbnail' ) : '';
-                $item_dietary     = is_array( $item['dietary']       ?? null ) ? $item['dietary']    : array();
-                $item_gmb_img_url = (string) ( $item['gmb_image_url']  ?? '' );
-                $item_media_keys  = is_array( $item['media_keys']    ?? null ) ? $item['media_keys'] : array();
-                $this->render_item_html( $sec_idx, $item_idx, $item_name, $item_price, $item_desc, $item_img, $item_img_url, $item_dietary, $item_gmb_img_url, $item_media_keys );
+                $item_dietary     = is_array( $item['dietary'] ?? null ) ? $item['dietary'] : array();
+                $item_gmb_img_url = (string) ( $item['gmb_image_url'] ?? '' );
+                $item_media_keys  = is_array( $item['media_keys'] ?? null ) ? $item['media_keys'] : array();
+
+                $this->render_item_html(
+                    $sec_idx,
+                    $item_idx,
+                    $item_name,
+                    $item_price,
+                    $item_desc,
+                    $item_img,
+                    $item_img_url,
+                    $item_dietary,
+                    $item_gmb_img_url,
+                    $item_media_keys
+                );
             endforeach; ?>
             <button type="button" class="button button-small oy-add-item-btn">
                 + <?php echo esc_html( $add_item_label ); ?>
