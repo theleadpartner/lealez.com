@@ -2881,6 +2881,114 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
         );
     }
 
+return is_array( $result ) ? $result : array();
+}
+
+
+/**
+ * Obtiene los servicios de una ubicación desde Google My Business API v4 (services).
+ *
+ * Aplica para negocios de tipo servicio o producto (no restaurantes). Devuelve una
+ * lista plana de servicios con nombre, descripción y precio, agrupables por categoría.
+ *
+ * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/services
+ *
+ * @param int    $business_id   WP Post ID del oy_business.
+ * @param string $account_id    Account ID numérico, "accounts/{id}", o resource name completo.
+ * @param string $location_id   Location ID numérico, "locations/{id}", o resource name completo.
+ * @param bool   $force_refresh Si true, ignora caché del rate limiter.
+ * @return array|WP_Error  Array con clave 'services' (array) en caso de éxito.
+ */
+public static function get_location_services( $business_id, $account_id, $location_id, $force_refresh = false ) {
+    $business_id = absint( $business_id );
+
+    if ( ! $business_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id for services.', 'lealez' ) );
+    }
+
+    // Normalizar account_id a numérico
+    $account_id_normalized = self::extract_account_id_from_name( (string) $account_id );
+    if ( '' === $account_id_normalized ) {
+        $account_id_normalized = trim( (string) $account_id, '/' );
+    }
+
+    // Normalizar location_id a numérico
+    $location_id_normalized = self::extract_location_id_from_any( (string) $location_id );
+    if ( '' === $location_id_normalized ) {
+        $location_id_normalized = trim( (string) $location_id, '/' );
+    }
+
+    if ( '' === $account_id_normalized || '' === $location_id_normalized ) {
+        return new WP_Error(
+            'missing_params',
+            __( 'Missing/invalid accountId or locationId for services.', 'lealez' ),
+            array(
+                'account_id_raw'         => $account_id,
+                'account_id_normalized'  => $account_id_normalized,
+                'location_id_raw'        => $location_id,
+                'location_id_normalized' => $location_id_normalized,
+            )
+        );
+    }
+
+    $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
+                . '/locations/' . rawurlencode( $location_id_normalized )
+                . '/services';
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Fetching services (GMB API v4).',
+            array(
+                'account_id'    => $account_id_normalized,
+                'location_id'   => $location_id_normalized,
+                'endpoint'      => self::$mybusiness_v4_base . $endpoint,
+                'force_refresh' => $force_refresh ? 'yes' : 'no',
+            )
+        );
+    }
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$mybusiness_v4_base,
+        'GET',
+        array(),
+        ! $force_refresh,
+        array()
+    );
+
+    if ( is_wp_error( $result ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'error',
+                'get_location_services failed: ' . $result->get_error_message(),
+                array(
+                    'account_id'  => $account_id_normalized,
+                    'location_id' => $location_id_normalized,
+                    'error_code'  => $result->get_error_code(),
+                    'hint'        => 'El endpoint /services aplica para negocios de servicio en GMB. Para restaurantes usa /foodMenus.',
+                )
+            );
+        }
+        return $result;
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        $services_count = ! empty( $result['services'] ) && is_array( $result['services'] ) ? count( $result['services'] ) : 0;
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'services fetched: %d service(s) found.', $services_count ),
+            array(
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+            )
+        );
+    }
+
     return is_array( $result ) ? $result : array();
 }
 
