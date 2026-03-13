@@ -117,6 +117,7 @@ class OY_Location_Menu_Metabox {
         $gmb_food_photos       = get_post_meta( $post->ID, 'gmb_menu_photos_raw', true );       // Array de {googleUrl, mediaKey, category}
         $gmb_food_menus_sync   = get_post_meta( $post->ID, 'gmb_food_menus_last_sync', true );  // Timestamp de última sync
         $gmb_food_menus_error  = get_post_meta( $post->ID, 'gmb_food_menus_api_error', true );  // Error si no se pudo obtener
+        $gmb_catalog_sync_notice = (string) get_post_meta( $post->ID, 'gmb_catalog_sync_notice', true );
 
 // ── Datos de conexión GMB (para el botón de sync del menú) ─────────────
         $parent_business_id = (int) get_post_meta( $post->ID, 'parent_business_id', true );
@@ -305,19 +306,48 @@ class OY_Location_Menu_Metabox {
                 <input type="hidden" name="location_menu_url" value="<?php echo esc_attr( $menu_url ); ?>">
             </div>
 
-            <?php
-            // ── Alerta si la Food Menus API falló ──────────────────────────────────
+<?php
+            // ── Bloque de error: solo se muestra para errores reales de API ──────────────
+            // IMPORTANTE: FAILED_PRECONDITION (negocio no es restaurante) NO se muestra como
+            // error al usuario — es comportamiento esperado y completamente normal.
             if ( ! empty( $gmb_food_menus_error ) && is_array( $gmb_food_menus_error ) ) :
-                $fm_err_code = ! empty( $gmb_food_menus_error['code'] )    ? ' [' . esc_html( $gmb_food_menus_error['code'] ) . ']'    : '';
-                $fm_err_msg  = ! empty( $gmb_food_menus_error['message'] ) ? esc_html( $gmb_food_menus_error['message'] )              : __( 'Error desconocido', 'lealez' );
-                $fm_err_time = ! empty( $gmb_food_menus_error['timestamp'] ) ? ' — ' . esc_html( $gmb_food_menus_error['timestamp'] ) : '';
+                $fm_err_code_val = (string) ( $gmb_food_menus_error['code']    ?? '' );
+                $fm_err_msg_val  = (string) ( $gmb_food_menus_error['message'] ?? '' );
+
+                // Detectar si es un FAILED_PRECONDITION (= negocio no-restaurante, no es error)
+                $is_expected_precondition = (
+                    'FAILED_PRECONDITION'  === $fm_err_code_val
+                    || stripos( $fm_err_msg_val, 'FAILED_PRECONDITION' )    !== false
+                    || stripos( $fm_err_msg_val, 'not in an eligible category' ) !== false
+                    || stripos( $fm_err_msg_val, 'food menu' )              !== false
+                );
+
+                if ( ! $is_expected_precondition ) :
+                    $fm_err_time = ! empty( $gmb_food_menus_error['timestamp'] )
+                        ? ' — ' . esc_html( $gmb_food_menus_error['timestamp'] )
+                        : '';
+                    ?>
+                    <div class="oy-gmb-api-error">
+                        <strong>⚠️ <?php _e( 'Error al sincronizar el catálogo desde Google', 'lealez' ); ?></strong>
+                        <em><?php echo esc_html( $fm_err_code_val . ' ' . $fm_err_msg_val . $fm_err_time ); ?></em><br>
+                        <span style="color:#666;"><?php _e( 'Intenta sincronizar nuevamente. Si el error persiste, verifica que el token de Google esté activo en el metabox de Configuración GMB.', 'lealez' ); ?></span>
+                    </div>
+                    <?php
+                endif;
+            endif;
+
+            // ── Aviso informativo cuando el catálogo no está disponible vía API ──────────
+            // Se muestra cuando: (a) no hay secciones importadas, y (b) hay un aviso guardado
+            // (por ejemplo, cuando el negocio no es restaurante y /products también devolvió vacío).
+            if ( ! empty( $gmb_catalog_sync_notice ) && empty( $menu_sections ) ) :
                 ?>
-                <div class="oy-gmb-api-error">
-                    <strong>⚠️ <?php _e( 'API de Catálogo — No se pudo obtener el catálogo desde Google', 'lealez' ); ?></strong>
-                    <em><?php echo $fm_err_code . ' ' . $fm_err_msg; ?></em><br>
-                    <span style="color:#666;"><?php _e( 'Posibles causas: (1) La "My Business API v4" no está disponible para esta cuenta; (2) El tipo de negocio en GMB no tiene catálogo estructurado disponible vía API; (3) Error temporal de red. El catálogo puede gestionarse manualmente en la pestaña "Catálogo / Menú".', 'lealez' ); ?></span>
+                <div class="oy-gmb-sync-notice" style="background:#f0f6ff;border:1px solid #90c5f7;border-radius:5px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:flex-start;gap:10px;font-size:12px;line-height:1.5;">
+                    <div style="font-size:20px;flex-shrink:0;">ℹ️</div>
+                    <div><?php echo esc_html( $gmb_catalog_sync_notice ); ?></div>
                 </div>
-            <?php endif; ?>
+                <?php
+            endif;
+            ?>
 
             <?php
             // ── Aviso de última sincronización exitosa ──────────────────────────────
