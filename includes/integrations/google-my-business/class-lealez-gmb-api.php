@@ -2949,6 +2949,13 @@ public static function get_location_services( $business_id, $account_id, $locati
         );
     }
 
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[Lealez GMB] get_location_services: calling %s',
+            self::$mybusiness_v4_base . $endpoint
+        ) );
+    }
+
     $result = self::make_request(
         $business_id,
         $endpoint,
@@ -2960,6 +2967,29 @@ public static function get_location_services( $business_id, $account_id, $locati
     );
 
     if ( is_wp_error( $result ) ) {
+        $err_data  = $result->get_error_data();
+        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+
+        // 404 = endpoint no disponible para este tipo de negocio — devolver vacío, no es un error real.
+        // Muchos tipos de negocio no tienen el endpoint /services habilitado.
+        if ( 404 === $http_code ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    'get_location_services: HTTP 404 — /services endpoint no disponible para este tipo de negocio (comportamiento normal).',
+                    array(
+                        'account_id'  => $account_id_normalized,
+                        'location_id' => $location_id_normalized,
+                    )
+                );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[Lealez GMB] get_location_services: HTTP 404 — /services no disponible para este tipo de negocio. Comportamiento normal para negocios no-servicios.' );
+            }
+            return array(); // Vacío = sin API de servicios para este negocio, no es fallo
+        }
+
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
@@ -2969,9 +2999,17 @@ public static function get_location_services( $business_id, $account_id, $locati
                     'account_id'  => $account_id_normalized,
                     'location_id' => $location_id_normalized,
                     'error_code'  => $result->get_error_code(),
+                    'http_code'   => $http_code,
                     'hint'        => 'El endpoint /services aplica para negocios de servicio en GMB. Para restaurantes usa /foodMenus.',
                 )
             );
+        }
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] get_location_services ERROR (HTTP %d): %s',
+                $http_code,
+                $result->get_error_message()
+            ) );
         }
         return $result;
     }
@@ -2988,8 +3026,16 @@ public static function get_location_services( $business_id, $account_id, $locati
             )
         );
     }
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        $services_count = is_array( $result['services'] ?? null ) ? count( $result['services'] ) : 0;
+        error_log( sprintf(
+            '[Lealez GMB] get_location_services: %d service(s) devuelto(s). Keys respuesta: %s',
+            $services_count,
+            wp_json_encode( array_keys( $result ) )
+        ) );
+    }
 
-return is_array( $result ) ? $result : array();
+    return is_array( $result ) ? $result : array();
 }
 
 
@@ -2998,6 +3044,12 @@ return is_array( $result ) ? $result : array();
  *
  * Aplica para negocios de tipo retail o producto (ej: tiendas, farmacias, etiquetas).
  * Es la tercera opción en la cadena de fallback, después de /foodMenus y /services.
+ *
+ * NOTA IMPORTANTE: El endpoint /products en la API v4 pública NO está disponible para la
+ * mayoría de tipos de negocio. Los "Productos" visibles en la UI de Google Business Profile
+ * (herramienta de catálogo de productos) NO tienen endpoint de API pública. Si este endpoint
+ * retorna 404 o FAILED_PRECONDITION, se devuelve array vacío (no WP_Error), ya que es
+ * comportamiento esperado y el catálogo debe gestionarse manualmente.
  *
  * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/products
  *
@@ -3060,6 +3112,13 @@ public static function get_location_products( $business_id, $account_id, $locati
         );
     }
 
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[Lealez GMB] get_location_products: calling %s',
+            self::$mybusiness_v4_base . $endpoint
+        ) );
+    }
+
     $result = self::make_request(
         $business_id,
         $endpoint,
@@ -3071,18 +3130,81 @@ public static function get_location_products( $business_id, $account_id, $locati
     );
 
     if ( is_wp_error( $result ) ) {
+        $err_data  = $result->get_error_data();
+        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+        $err_msg   = $result->get_error_message();
+
+        // Obtener el status code de la respuesta de Google si está disponible
+        $err_body   = is_array( $err_data['body'] ?? null ) ? $err_data['body'] : array();
+        $err_status = (string) ( $err_body['error']['status'] ?? '' );
+        if ( '' === $err_status && stripos( $err_msg, 'FAILED_PRECONDITION' ) !== false ) {
+            $err_status = 'FAILED_PRECONDITION';
+        }
+
+        // 404 = endpoint /products no existe/no disponible para este negocio.
+        // CRÍTICO: El catálogo de productos de la UI de GBP NO está expuesto vía API pública.
+        // Devolver array vacío — no es un error, es una limitación de la API.
+        if ( 404 === $http_code ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    'get_location_products: HTTP 404 — endpoint /products no disponible. El catálogo de productos de GBP no tiene API pública para este tipo de negocio.',
+                    array(
+                        'account_id'  => $account_id_normalized,
+                        'location_id' => $location_id_normalized,
+                        'nota'        => 'Los productos visibles en la UI de Google Business Profile no son accesibles via la API de desarrolladores.',
+                    )
+                );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[Lealez GMB] get_location_products: HTTP 404 — El endpoint /products no está disponible. NOTA IMPORTANTE: Los "Productos" que se ven en el panel de Google Business Profile (mybusiness.google.com/products) NO son accesibles via la API pública de GBP. Estos productos deben agregarse manualmente en Lealez.' );
+            }
+            return array(); // Vacío = sin API de productos, no es fallo
+        }
+
+        // FAILED_PRECONDITION = tipo de negocio no elegible para productos API
+        if ( 'FAILED_PRECONDITION' === $err_status ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    'get_location_products: FAILED_PRECONDITION — tipo de negocio no elegible para /products API.',
+                    array(
+                        'account_id'  => $account_id_normalized,
+                        'location_id' => $location_id_normalized,
+                    )
+                );
+            }
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[Lealez GMB] get_location_products: FAILED_PRECONDITION — este tipo de negocio no es elegible para el endpoint /products.' );
+            }
+            return array(); // Vacío = no elegible, no es fallo
+        }
+
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'error',
-                'get_location_products failed: ' . $result->get_error_message(),
+                'get_location_products failed: ' . $err_msg,
                 array(
                     'account_id'  => $account_id_normalized,
                     'location_id' => $location_id_normalized,
                     'error_code'  => $result->get_error_code(),
+                    'http_code'   => $http_code,
+                    'err_status'  => $err_status,
                     'hint'        => 'El endpoint /products aplica para negocios de retail/producto en GMB. Respuesta clave: productItems[].',
                 )
             );
+        }
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] get_location_products ERROR (HTTP %d, status=%s): %s',
+                $http_code, $err_status, $err_msg
+            ) );
+            if ( is_array( $err_data ) ) {
+                error_log( '[Lealez GMB] get_location_products ERROR raw_body (primeros 500 chars): ' . substr( (string) ( $err_data['raw_body'] ?? '' ), 0, 500 ) );
+            }
         }
         return $result;
     }
@@ -3094,10 +3216,24 @@ public static function get_location_products( $business_id, $account_id, $locati
             'success',
             sprintf( 'products fetched: %d product(s) found.', $products_count ),
             array(
-                'account_id'  => $account_id_normalized,
-                'location_id' => $location_id_normalized,
+                'account_id'    => $account_id_normalized,
+                'location_id'   => $location_id_normalized,
+                'response_keys' => array_keys( $result ),
             )
         );
+    }
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        $products_count = is_array( $result['productItems'] ?? null ) ? count( $result['productItems'] ) : 0;
+        error_log( sprintf(
+            '[Lealez GMB] get_location_products: %d productItem(s). Keys respuesta: %s',
+            $products_count,
+            wp_json_encode( array_keys( $result ) )
+        ) );
+        if ( $products_count > 0 ) {
+            error_log( '[Lealez GMB] get_location_products: primer item (preview): ' . substr( wp_json_encode( $result['productItems'][0] ?? array() ), 0, 300 ) );
+        } elseif ( ! empty( $result ) ) {
+            error_log( '[Lealez GMB] get_location_products: sin productItems — respuesta completa (primeros 500 chars): ' . substr( wp_json_encode( $result ), 0, 500 ) );
+        }
     }
 
     return is_array( $result ) ? $result : array();
