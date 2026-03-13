@@ -6180,318 +6180,492 @@ public function ajax_get_gmb_location_details() {
      *
      * @return void  Envía JSON con success|error
      */
-    public function ajax_sync_location_food_menus() {
-        // ── 1. Seguridad ─────────────────────────────────────────────────────
-        $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
-        if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
-            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
-        }
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Sin permisos suficientes.', 'lealez' ) ) );
+public function ajax_sync_location_food_menus() {
+    // ── 1. Seguridad ─────────────────────────────────────────────────────
+    $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    if ( ! wp_verify_nonce( $nonce, $this->ajax_nonce_action ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+    }
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Sin permisos suficientes.', 'lealez' ) ) );
+    }
+
+    // ── 2. Parámetros ─────────────────────────────────────────────────────
+    $post_id     = isset( $_POST['post_id'] )     ? absint( wp_unslash( $_POST['post_id'] ) )     : 0;
+    $business_id = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
+
+    if ( ! $post_id || ! $business_id ) {
+        wp_send_json_error( array( 'message' => __( 'Parámetros inválidos (post_id o business_id vacíos).', 'lealez' ) ) );
+    }
+
+    $post = get_post( $post_id );
+    if ( ! $post || 'oy_location' !== $post->post_type ) {
+        wp_send_json_error( array( 'message' => __( 'La ubicación indicada no existe.', 'lealez' ) ) );
+    }
+
+    // ── 3. Obtener IDs de GMB desde post meta ────────────────────────────
+    $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+    $account_id    = (string) get_post_meta( $post_id, 'gmb_account_id', true );
+    $location_id   = (string) get_post_meta( $post_id, 'gmb_location_id', true );
+
+    if ( '' === $location_id && '' !== $location_name ) {
+        $location_id = $this->extract_location_id_from_resource_name( $location_name );
+    }
+    if ( '' === $account_id && '' !== $location_name ) {
+        $account_id = $this->extract_account_name_from_location_name( $location_name );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[OY Location] ajax_sync_catalog — INICIO. post_id=%d business_id=%d account_id="%s" location_id="%s" location_name="%s"',
+            $post_id, $business_id, $account_id, $location_id, $location_name
+        ) );
+    }
+
+    if ( '' === $account_id || '' === $location_id ) {
+        wp_send_json_error( array(
+            'message' => __( 'No se encontraron los IDs de la ubicación en Google (gmb_account_id / gmb_location_id). Importa primero la ubicación desde el metabox de Configuración GMB.', 'lealez' ),
+        ) );
+    }
+
+    if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+    }
+
+    $sections_imported = 0;
+    $items_imported    = 0;
+    $menu_error        = '';   // Error real de API (auth, 5xx, etc.) — se muestra al usuario
+    $sync_notice       = '';   // Aviso informativo amigable (no es un error)
+    $catalog_type      = 'none';
+    $is_food_eligible  = true; // ¿El endpoint /foodMenus respondió sin FAILED_PRECONDITION?
+
+    // Array para resolución de fotos de items vía Media API
+    $ajax_mapped_sections_for_resolve = array();
+
+    // ── 4. PASO 1: Food Menus API (v4) — restaurantes ─────────────────────
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY Location] ajax_sync_catalog — PASO 1: /foodMenus (restaurantes)...' );
+    }
+
+    $food_menus_result = Lealez_GMB_API::get_location_food_menus(
+        $business_id,
+        $account_id,
+        $location_id,
+        true // force_refresh siempre al hacer sync manual
+    );
+
+    if ( is_wp_error( $food_menus_result ) ) {
+
+        $fm_err_msg  = $food_menus_result->get_error_message();
+        $fm_err_data = $food_menus_result->get_error_data();
+        $fm_http     = is_array( $fm_err_data ) ? (int) ( $fm_err_data['code'] ?? 0 ) : 0;
+
+        // Extraer el status de Google desde el body de la respuesta
+        $fm_body   = is_array( $fm_err_data['body'] ?? null ) ? $fm_err_data['body'] : array();
+        $fm_status = (string) ( $fm_body['error']['status'] ?? '' );
+        // También detectar en el mensaje plano por si el body no viene estructurado
+        if ( '' === $fm_status ) {
+            if ( stripos( $fm_err_msg, 'FAILED_PRECONDITION' ) !== false ) {
+                $fm_status = 'FAILED_PRECONDITION';
+            } elseif ( stripos( $fm_err_msg, 'not in an eligible category' ) !== false ) {
+                $fm_status = 'FAILED_PRECONDITION';
+            } elseif ( stripos( $fm_err_msg, 'food menu' ) !== false ) {
+                $fm_status = 'FAILED_PRECONDITION';
+            }
         }
 
-        // ── 2. Parámetros ─────────────────────────────────────────────────────
-        $post_id     = isset( $_POST['post_id'] )     ? absint( wp_unslash( $_POST['post_id'] ) )     : 0;
-        $business_id = isset( $_POST['business_id'] ) ? absint( wp_unslash( $_POST['business_id'] ) ) : 0;
-
-        if ( ! $post_id || ! $business_id ) {
-            wp_send_json_error( array( 'message' => __( 'Parámetros inválidos (post_id o business_id vacíos).', 'lealez' ) ) );
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY Location] ajax_sync_catalog — /foodMenus result: WP_Error | HTTP=%d | google_status="%s" | msg="%s"',
+                $fm_http, $fm_status, $fm_err_msg
+            ) );
+            if ( ! empty( $fm_err_data['raw_body'] ) ) {
+                error_log( '[OY Location] ajax_sync_catalog — /foodMenus raw_body (primeros 300 chars): ' . substr( (string) $fm_err_data['raw_body'], 0, 300 ) );
+            }
         }
 
-        // Verificar que el post existe y es del tipo correcto
-        $post = get_post( $post_id );
-        if ( ! $post || 'oy_location' !== $post->post_type ) {
-            wp_send_json_error( array( 'message' => __( 'La ubicación indicada no existe.', 'lealez' ) ) );
+        // ── FAILED_PRECONDITION o 404: negocio no es de tipo restaurante.
+        // Esto es COMPLETAMENTE ESPERADO para negocios de productos, servicios, retail, etc.
+        // NO guardamos en gmb_food_menus_api_error — evitamos mostrar error confuso al usuario.
+        if ( 'FAILED_PRECONDITION' === $fm_status || 404 === $fm_http ) {
+            $is_food_eligible = false;
+            delete_post_meta( $post_id, 'gmb_food_menus_api_error' ); // Limpiar error de ejecuciones anteriores
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — /foodMenus: FAILED_PRECONDITION / 404. El negocio no es tipo restaurante — comportamiento esperado. Continuando con fallbacks...' );
+            }
+        } else {
+            // Error real (problemas de auth, 5xx, rate limit, etc.)
+            $menu_error = $fm_err_msg;
+            update_post_meta( $post_id, 'gmb_food_menus_api_error', array(
+                'code'      => $food_menus_result->get_error_code(),
+                'message'   => $menu_error,
+                'http_code' => $fm_http,
+                'timestamp' => current_time( 'mysql' ),
+            ) );
+            delete_post_meta( $post_id, 'gmb_food_menus_raw' );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — /foodMenus ERROR REAL (HTTP ' . $fm_http . '): ' . $menu_error );
+            }
         }
 
-        // ── 3. Obtener IDs de GMB desde post meta ────────────────────────────
-        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-        $account_id    = (string) get_post_meta( $post_id, 'gmb_account_id', true );
-        $location_id   = (string) get_post_meta( $post_id, 'gmb_location_id', true );
+    } elseif ( ! empty( $food_menus_result['menus'] ) ) {
 
-        // Si gmb_location_id no está en meta, intentar extraerlo del resource name
-        if ( '' === $location_id && '' !== $location_name ) {
-            $location_id = $this->extract_location_id_from_resource_name( $location_name );
-        }
-        // Si gmb_account_id no está en meta, intentar extraerlo del resource name
-        if ( '' === $account_id && '' !== $location_name ) {
-            $account_id = $this->extract_account_name_from_location_name( $location_name );
+        // ── Éxito: negocio tipo restaurante con menú configurado ───────────
+        delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+        update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
+        update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+
+        $mapped_sections = $this->map_gmb_food_menus_to_sections( $food_menus_result );
+        if ( ! empty( $mapped_sections ) ) {
+            $ajax_mapped_sections_for_resolve = $mapped_sections;
+            update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
+            $sections_imported = count( $mapped_sections );
+            foreach ( $mapped_sections as $sec ) {
+                $items_imported += count( $sec['items'] ?? array() );
+            }
         }
 
-        if ( '' === $account_id || '' === $location_id ) {
-            wp_send_json_error( array(
-                'message' => __( 'No se encontraron los IDs de la ubicación en Google (gmb_account_id / gmb_location_id). Importa primero la ubicación desde el metabox de Configuración GMB.', 'lealez' ),
+        $catalog_type = 'food_menu';
+        update_post_meta( $post_id, 'gmb_catalog_type', 'food_menu' );
+        delete_post_meta( $post_id, 'gmb_catalog_sync_notice' );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY Location] ajax_sync_catalog — /foodMenus OK: %d secciones, %d items.',
+                $sections_imported, $items_imported
             ) );
         }
 
-        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+    } else {
+        // Respuesta vacía pero sin error: restaurante elegible pero sin menú cargado en GBP
+        delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+        update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
+        update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] ajax_sync_catalog — /foodMenus: respuesta vacía. Negocio elegible para menú pero sin ítems en GBP. Intentando fallbacks...' );
+        }
+    }
+
+    // ── 4b. PASO 2: Services API — negocios de servicio ──────────────────
+    if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_services' ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] ajax_sync_catalog — PASO 2: /services (negocios de servicio)...' );
         }
 
-        // ── 4. Llamar Food Menus API (v4) ─────────────────────────────────────
-        $food_menus_result = Lealez_GMB_API::get_location_food_menus(
+        $services_result = Lealez_GMB_API::get_location_services(
             $business_id,
             $account_id,
             $location_id,
-            true // force_refresh siempre
+            true
         );
 
-$sections_imported = 0;
-        $items_imported    = 0;
-        $menu_error        = '';
-        $catalog_type      = 'none'; // Tipo detectado: food_menu | services | products | none
-
-        // Variable compartida con el bloque Media para resolución de fotos por item
-        $ajax_mapped_sections_for_resolve = array();
-
-        if ( is_wp_error( $food_menus_result ) ) {
-            $menu_error = $food_menus_result->get_error_message();
-            $fm_error_data = array(
-                'code'      => $food_menus_result->get_error_code(),
-                'message'   => $menu_error,
-                'timestamp' => current_time( 'mysql' ),
-            );
-            update_post_meta( $post_id, 'gmb_food_menus_api_error', $fm_error_data );
-            delete_post_meta( $post_id, 'gmb_food_menus_raw' );
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] ajax_sync_food_menus ERROR: ' . $menu_error );
-                error_log( '[OY Location] account_id=' . $account_id . ' location_id=' . $location_id );
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            if ( is_wp_error( $services_result ) ) {
+                error_log( '[OY Location] ajax_sync_catalog — /services: WP_Error: ' . $services_result->get_error_message() );
+            } else {
+                $svc_count = is_array( $services_result['services'] ?? null ) ? count( $services_result['services'] ) : 0;
+                error_log( sprintf(
+                    '[OY Location] ajax_sync_catalog — /services: keys=%s, services_count=%d',
+                    wp_json_encode( is_array( $services_result ) ? array_keys( $services_result ) : 'no-array' ),
+                    $svc_count
+                ) );
             }
+        }
 
-        } elseif ( ! empty( $food_menus_result['menus'] ) ) {
-
-            // ── Éxito: hay menú ────────────────────────────────────────────────
-            delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
-            update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
-            update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
-
-            $mapped_sections = $this->map_gmb_food_menus_to_sections( $food_menus_result );
+        if ( ! is_wp_error( $services_result ) && ! empty( $services_result['services'] ) ) {
+            $mapped_sections = $this->map_gmb_services_to_sections( $services_result );
             if ( ! empty( $mapped_sections ) ) {
-                // Guardar provisionalmente; se enriquece con gmb_image_url tras Media API
+                delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
                 $ajax_mapped_sections_for_resolve = $mapped_sections;
                 update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
                 $sections_imported = count( $mapped_sections );
                 foreach ( $mapped_sections as $sec ) {
                     $items_imported += count( $sec['items'] ?? array() );
                 }
-            }
-
-$catalog_type = 'food_menu';
-            update_post_meta( $post_id, 'gmb_catalog_type', 'food_menu' );
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] ajax_sync_food_menus OK: ' . $sections_imported . ' secciones, ' . $items_imported . ' items (fotos de item pendientes de resolución).' );
-            }
-
-} else {
-            // ── Respuesta vacía de foodMenus (negocio no es de tipo restaurante) ──
-            delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
-            update_post_meta( $post_id, 'gmb_food_menus_raw', $food_menus_result );
-            update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
-            $menu_error = __( 'foodMenus vacío — intentando endpoint de servicios.', 'lealez' );
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY Location] ajax_sync_food_menus — respuesta vacía. account_id=' . $account_id . ' location_id=' . $location_id );
-            }
-        }
-
-// ── 4b. Fallback 1: Services API para negocios de servicio ──────────
-        // Si foodMenus devolvió error o estuvo vacío, intentamos /services.
-        if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_services' ) ) {
-            $services_result = Lealez_GMB_API::get_location_services(
-                $business_id,
-                $account_id,
-                $location_id,
-                true // force_refresh siempre
-            );
-
-            if ( ! is_wp_error( $services_result ) && ! empty( $services_result['services'] ) ) {
-                $mapped_sections = $this->map_gmb_services_to_sections( $services_result );
-                if ( ! empty( $mapped_sections ) ) {
-                    delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
-                    update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
-                    $ajax_mapped_sections_for_resolve = $mapped_sections;
-                    update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
-                    $sections_imported = count( $mapped_sections );
-                    foreach ( $mapped_sections as $sec ) {
-                        $items_imported += count( $sec['items'] ?? array() );
-                    }
-$catalog_type = 'services';
-                    update_post_meta( $post_id, 'gmb_catalog_type', 'services' );
-                    $menu_error = '';
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] ajax_sync — services OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' item(s).' );
-                    }
+                $catalog_type = 'services';
+                update_post_meta( $post_id, 'gmb_catalog_type', 'services' );
+                delete_post_meta( $post_id, 'gmb_catalog_sync_notice' );
+                $menu_error = '';
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( sprintf(
+                        '[OY Location] ajax_sync_catalog — /services OK: %d sección(es), %d item(s).',
+                        $sections_imported, $items_imported
+                    ) );
                 }
-            } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                $svc_err = is_wp_error( $services_result ) ? $services_result->get_error_message() : 'respuesta vacía';
-                error_log( '[OY Location] ajax_sync — services fallback sin datos: ' . $svc_err );
-            }
-        }
-
-// ── 4c. Fallback 2: Products API para negocios de retail/catálogo ────
-        // Tercer intento: /products cubre negocios como tiendas, farmacias, etiquetas, etc.
-        // que usan la herramienta "Productos" en Google Business Profile (no food, no service).
-        // La respuesta puede venir con clave 'productItems' o como array plano.
-        if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_products' ) ) {
-            $products_result = Lealez_GMB_API::get_location_products(
-                $business_id,
-                $account_id,
-                $location_id,
-                true // force_refresh siempre
-            );
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                // Log de la respuesta bruta para diagnóstico — ayuda a detectar claves inesperadas
-                $prod_raw_keys = is_array( $products_result ) ? array_keys( $products_result ) : 'no-array';
-                error_log( '[OY Location] ajax_sync — products raw response keys: ' . wp_json_encode( $prod_raw_keys ) );
-            }
-
-            // Normalizar: la API puede devolver 'productItems', 'items', o array plano
-            $has_products = false;
-            if ( ! is_wp_error( $products_result ) && is_array( $products_result ) ) {
-                if ( ! empty( $products_result['productItems'] ) && is_array( $products_result['productItems'] ) ) {
-                    $has_products = true;
-                } elseif ( ! empty( $products_result['items'] ) && is_array( $products_result['items'] ) ) {
-                    // Alias alternativo que algunas versiones de la API devuelven
-                    $products_result['productItems'] = $products_result['items'];
-                    $has_products = true;
-                } elseif ( isset( $products_result[0] ) && is_array( $products_result[0] ) ) {
-                    // Array plano sin clave contenedora
-                    $products_result['productItems'] = $products_result;
-                    $has_products = true;
+            } else {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] ajax_sync_catalog — /services: services[] no vacío pero map_gmb_services_to_sections devolvió vacío.' );
                 }
             }
+        } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $svc_dbg = is_wp_error( $services_result )
+                ? 'WP_Error: ' . $services_result->get_error_message()
+                : 'respuesta sin services o vacía. Keys: ' . wp_json_encode( is_array( $services_result ) ? array_keys( $services_result ) : 'no-array' );
+            error_log( '[OY Location] ajax_sync_catalog — /services sin datos: ' . $svc_dbg );
+        }
+    }
 
-            if ( $has_products ) {
-                $mapped_sections = $this->map_gmb_products_to_sections( $products_result );
-                if ( ! empty( $mapped_sections ) ) {
-                    delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
-                    update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
-                    $ajax_mapped_sections_for_resolve = $mapped_sections;
-                    update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
-                    $sections_imported = count( $mapped_sections );
-                    foreach ( $mapped_sections as $sec ) {
-                        $items_imported += count( $sec['items'] ?? array() );
-                    }
-                    $catalog_type = 'products';
-                    update_post_meta( $post_id, 'gmb_catalog_type', 'products' );
-                    $menu_error = '';
-                    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                        error_log( '[OY Location] ajax_sync — products OK: ' . $sections_imported . ' sección(es), ' . $items_imported . ' producto(s).' );
-                    }
-                }
-            } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                $prod_err = is_wp_error( $products_result )
-                    ? $products_result->get_error_message()
-                    : 'respuesta sin productItems ni items válidos. Keys recibidas: ' . wp_json_encode( is_array( $products_result ) ? array_keys( $products_result ) : 'no-array' );
-                error_log( '[OY Location] ajax_sync — products fallback sin datos: ' . $prod_err );
-            }
+    // ── 4c. PASO 3: Products API — negocios de retail/catálogo ────────────
+    // NOTA: Este endpoint (/products) no está documentado oficialmente en la API pública de GBP.
+    // Los productos visibles en el Panel de Productos de GBP no son accesibles via API developer.
+    // Se intenta de todas formas como último recurso, manejando 404 como vacío.
+    if ( 0 === $sections_imported && method_exists( 'Lealez_GMB_API', 'get_location_products' ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] ajax_sync_catalog — PASO 3: /products (retail/catálogo). NOTA: este endpoint puede no estar disponible para todos los negocios.' );
         }
 
-// Si los tres endpoints devolvieron vacío, mensaje informativo genérico
-        if ( '' !== $menu_error && 0 === $sections_imported ) {
-            $menu_error = __( 'Google no devolvió catálogo estructurado para este negocio (se intentaron foodMenus, services y products). Puedes agregar el catálogo manualmente en Lealez.', 'lealez' );
-            update_post_meta( $post_id, 'gmb_catalog_type', 'none' );
-        }
-
-        // ── 5. Llamar Food Photos (Media API v4) ─────────────────────────────
-        $photos_imported = 0;
-        $media_result    = Lealez_GMB_API::get_location_media_items(
+        $products_result = Lealez_GMB_API::get_location_products(
             $business_id,
             $account_id,
             $location_id,
-            true // force_refresh
+            true
         );
 
-        if ( ! is_wp_error( $media_result ) && is_array( $media_result ) ) {
-            $media_items = $media_result['mediaItems'] ?? ( isset( $media_result[0] ) ? $media_result : array() );
-            if ( ! is_array( $media_items ) ) {
-                $media_items = array();
-            }
-
-            $food_photo_cats = array( 'FOOD_AND_DRINK', 'MENU' );
-            $gmb_food_photos = array();
-
-            foreach ( $media_items as $mitem ) {
-                if ( ! is_array( $mitem ) ) {
-                    continue;
-                }
-                $category = (string) ( $mitem['locationAssociation']['category'] ?? $mitem['category'] ?? '' );
-                if ( ! in_array( strtoupper( $category ), $food_photo_cats, true ) ) {
-                    continue;
-                }
-                $google_url = (string) ( $mitem['googleUrl'] ?? $mitem['thumbnailUrl'] ?? '' );
-                if ( '' === $google_url ) {
-                    continue;
-                }
-                $gmb_food_photos[] = array(
-                    'googleUrl'    => $google_url,
-                    'thumbnailUrl' => (string) ( $mitem['thumbnailUrl'] ?? $google_url ),
-                    'mediaKey'     => (string) ( $mitem['mediaKey'] ?? '' ),
-                    'createTime'   => (string) ( $mitem['createTime'] ?? '' ),
-                    'category'     => $category,
-                );
-            }
-
-            if ( ! empty( $gmb_food_photos ) ) {
-                update_post_meta( $post_id, 'gmb_menu_photos_raw', $gmb_food_photos );
-                $photos_imported = count( $gmb_food_photos );
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            if ( is_wp_error( $products_result ) ) {
+                error_log( '[OY Location] ajax_sync_catalog — /products: WP_Error: ' . $products_result->get_error_message() );
             } else {
-                delete_post_meta( $post_id, 'gmb_menu_photos_raw' );
-            }
-
-            // ── Resolver fotos de productos del menú por mediaKey ─────────────────
-            // Cruzar los media_keys de cada ítem del foodMenu con las URLs reales del Media API.
-            // El resultado se guarda como gmb_image_url en cada ítem de location_menu_sections.
-            if ( ! empty( $ajax_mapped_sections_for_resolve ) && ! empty( $media_items ) ) {
-                $enriched_sections = $this->resolve_item_photos_from_media(
-                    $ajax_mapped_sections_for_resolve,
-                    $media_items
-                );
-                update_post_meta( $post_id, 'location_menu_sections', $enriched_sections );
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[OY Location] Item photos resolved from Media API (ajax_sync).' );
+                $prod_raw_keys = is_array( $products_result ) ? array_keys( $products_result ) : 'no-array';
+                error_log( '[OY Location] ajax_sync_catalog — /products: raw response keys: ' . wp_json_encode( $prod_raw_keys ) );
+                if ( ! empty( $products_result ) ) {
+                    error_log( '[OY Location] ajax_sync_catalog — /products: raw response (primeros 500 chars): ' . substr( wp_json_encode( $products_result ), 0, 500 ) );
                 }
             }
         }
 
-        // ── 6. Respuesta JSON ─────────────────────────────────────────────────
-if ( '' !== $menu_error && 0 === $sections_imported ) {
-            // No hay catálogo estructurado en GMB (puede ser válido para fotos igual)
-            wp_send_json_success( array(
-                'sections_imported' => $sections_imported,
-                'items_imported'    => $items_imported,
-                'photos_imported'   => $photos_imported,
-                'catalog_type'      => $catalog_type,
-                'menu_warning'      => $menu_error,
-                'message'           => sprintf(
-                    /* translators: 1: photos count */
-                    _n(
-                        'Google no tiene catálogo estructurado para este negocio. %1$d foto importada.',
-                        'Google no tiene catálogo estructurado para este negocio. %1$d fotos importadas.',
-                        $photos_imported,
-                        'lealez'
-                    ),
-                    $photos_imported
-                ),
+        // Normalizar: la API puede devolver 'productItems', 'items', o array plano
+        $has_products = false;
+        if ( ! is_wp_error( $products_result ) && is_array( $products_result ) ) {
+            if ( ! empty( $products_result['productItems'] ) && is_array( $products_result['productItems'] ) ) {
+                $has_products = true;
+            } elseif ( ! empty( $products_result['items'] ) && is_array( $products_result['items'] ) ) {
+                // Alias alternativo que algunas versiones de la API devuelven
+                $products_result['productItems'] = $products_result['items'];
+                $has_products = true;
+            } elseif ( isset( $products_result[0] ) && is_array( $products_result[0] ) ) {
+                // Array plano sin clave contenedora
+                $products_result['productItems'] = $products_result;
+                $has_products = true;
+            }
+        }
+
+        if ( $has_products ) {
+            $mapped_sections = $this->map_gmb_products_to_sections( $products_result );
+            if ( ! empty( $mapped_sections ) ) {
+                delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+                update_post_meta( $post_id, 'gmb_food_menus_last_sync', time() );
+                $ajax_mapped_sections_for_resolve = $mapped_sections;
+                update_post_meta( $post_id, 'location_menu_sections', $mapped_sections );
+                $sections_imported = count( $mapped_sections );
+                foreach ( $mapped_sections as $sec ) {
+                    $items_imported += count( $sec['items'] ?? array() );
+                }
+                $catalog_type = 'products';
+                update_post_meta( $post_id, 'gmb_catalog_type', 'products' );
+                delete_post_meta( $post_id, 'gmb_catalog_sync_notice' );
+                $menu_error = '';
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( sprintf(
+                        '[OY Location] ajax_sync_catalog — /products OK: %d sección(es), %d producto(s).',
+                        $sections_imported, $items_imported
+                    ) );
+                }
+            } else {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY Location] ajax_sync_catalog — /products: productItems no vacío pero map_gmb_products_to_sections devolvió vacío.' );
+                }
+            }
+        } elseif ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $prod_dbg = is_wp_error( $products_result )
+                ? 'WP_Error: ' . $products_result->get_error_message()
+                : 'sin productItems/items válidos. Keys: ' . wp_json_encode( is_array( $products_result ) ? array_keys( $products_result ) : 'no-array' );
+            error_log( '[OY Location] ajax_sync_catalog — /products sin datos: ' . $prod_dbg );
+        }
+    }
+
+    // ── 4d. Resultado final de los tres endpoints ─────────────────────────
+    if ( 0 === $sections_imported ) {
+        if ( ! $is_food_eligible ) {
+            // FAILED_PRECONDITION: negocio no es restaurante — los tres endpoints devolvieron vacío
+            // o no aplicaron. Los "Productos" del panel GBP no son accesibles vía API pública.
+            // NO es un error — guardamos aviso informativo amigable.
+            delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+            $sync_notice = __( 'El catálogo de productos de Google Business Profile no está disponible vía API para este tipo de negocio. Nota: Los productos que ves en el panel de GBP (google.com/business) no tienen endpoint de API pública. Puedes agregar el catálogo manualmente usando las secciones de abajo.', 'lealez' );
+            update_post_meta( $post_id, 'gmb_catalog_sync_notice', $sync_notice );
+            update_post_meta( $post_id, 'gmb_catalog_type', 'none' );
+            $menu_error = '';
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — TODOS LOS FALLBACKS AGOTADOS (negocio no-restaurante). foodMenus→FAILED_PRECONDITION, services→vacío, products→404/vacío. DIAGNÓSTICO: Los "Productos" visibles en google.com/business NO son accesibles vía la API pública de GBP. Deben agregarse manualmente.' );
+            }
+        } elseif ( '' !== $menu_error ) {
+            // Error real de API (no FAILED_PRECONDITION)
+            delete_post_meta( $post_id, 'gmb_catalog_sync_notice' );
+            update_post_meta( $post_id, 'gmb_catalog_type', 'none' );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — error real de API tras todos los fallbacks: ' . $menu_error );
+            }
+        } else {
+            // Sin error pero tampoco hay datos (negocio sin catálogo en GBP)
+            delete_post_meta( $post_id, 'gmb_food_menus_api_error' );
+            $sync_notice = __( 'Google no tiene catálogo estructurado configurado para este negocio. Puedes agregar el catálogo manualmente usando las secciones de abajo.', 'lealez' );
+            update_post_meta( $post_id, 'gmb_catalog_sync_notice', $sync_notice );
+            update_post_meta( $post_id, 'gmb_catalog_type', 'none' );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — sin error real pero sin datos de catálogo desde ningún endpoint.' );
+            }
+        }
+    } else {
+        // Importación exitosa — limpiar avisos de sincronizaciones anteriores fallidas
+        delete_post_meta( $post_id, 'gmb_catalog_sync_notice' );
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY Location] ajax_sync_catalog — FINALIZADO OK. catalog_type=%s, sections=%d, items=%d',
+                $catalog_type, $sections_imported, $items_imported
             ) );
         }
+    }
 
+    // ── 5. Food Photos (Media API v4) ──────────────────────────────────────
+    $photos_imported = 0;
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY Location] ajax_sync_catalog — PASO 4: Fotos (Media API v4)...' );
+    }
+
+    $media_result = Lealez_GMB_API::get_location_media_items(
+        $business_id,
+        $account_id,
+        $location_id,
+        true
+    );
+
+    if ( ! is_wp_error( $media_result ) && is_array( $media_result ) ) {
+        $media_items = $media_result['mediaItems'] ?? ( isset( $media_result[0] ) ? $media_result : array() );
+        if ( ! is_array( $media_items ) ) {
+            $media_items = array();
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf( '[OY Location] ajax_sync_catalog — Media API: %d mediaItem(s) recibidos.', count( $media_items ) ) );
+        }
+
+        $food_photo_cats = array( 'FOOD_AND_DRINK', 'MENU' );
+        $gmb_food_photos = array();
+
+        foreach ( $media_items as $mitem ) {
+            if ( ! is_array( $mitem ) ) {
+                continue;
+            }
+            $category = (string) ( $mitem['locationAssociation']['category'] ?? $mitem['category'] ?? '' );
+            if ( ! in_array( strtoupper( $category ), $food_photo_cats, true ) ) {
+                continue;
+            }
+            $google_url = (string) ( $mitem['googleUrl'] ?? $mitem['thumbnailUrl'] ?? '' );
+            if ( '' === $google_url ) {
+                continue;
+            }
+            $gmb_food_photos[] = array(
+                'googleUrl'    => $google_url,
+                'thumbnailUrl' => (string) ( $mitem['thumbnailUrl'] ?? $google_url ),
+                'mediaKey'     => (string) ( $mitem['mediaKey'] ?? '' ),
+                'createTime'   => (string) ( $mitem['createTime'] ?? '' ),
+                'category'     => $category,
+            );
+        }
+
+        if ( ! empty( $gmb_food_photos ) ) {
+            update_post_meta( $post_id, 'gmb_menu_photos_raw', $gmb_food_photos );
+            $photos_imported = count( $gmb_food_photos );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf( '[OY Location] ajax_sync_catalog — %d foto(s) FOOD_AND_DRINK/MENU importadas.', $photos_imported ) );
+            }
+        } else {
+            delete_post_meta( $post_id, 'gmb_menu_photos_raw' );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — No se encontraron fotos de categoría FOOD_AND_DRINK o MENU.' );
+            }
+        }
+
+        // Resolver fotos de productos del menú cruzando mediaKeys con la Media API
+        if ( ! empty( $ajax_mapped_sections_for_resolve ) && ! empty( $media_items ) ) {
+            $enriched_sections = $this->resolve_item_photos_from_media(
+                $ajax_mapped_sections_for_resolve,
+                $media_items
+            );
+            update_post_meta( $post_id, 'location_menu_sections', $enriched_sections );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY Location] ajax_sync_catalog — Item photos resueltas desde Media API.' );
+            }
+        }
+    } elseif ( is_wp_error( $media_result ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Location] ajax_sync_catalog — Media API error: ' . $media_result->get_error_message() );
+        }
+    }
+
+    // ── 6. Respuesta JSON ─────────────────────────────────────────────────
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[OY Location] ajax_sync_catalog — RESPUESTA FINAL: sections=%d, items=%d, photos=%d, catalog_type=%s, menu_error="%s"',
+            $sections_imported, $items_imported, $photos_imported,
+            $catalog_type, $menu_error ?: 'ninguno'
+        ) );
+    }
+
+    // Error real de API: hay mensaje de error y cero secciones importadas
+    if ( '' !== $menu_error && 0 === $sections_imported ) {
         wp_send_json_success( array(
             'sections_imported' => $sections_imported,
             'items_imported'    => $items_imported,
             'photos_imported'   => $photos_imported,
             'catalog_type'      => $catalog_type,
+            'menu_warning'      => $menu_error,
             'message'           => sprintf(
-                /* translators: 1: sections, 2: items, 3: photos */
-                __( '✅ Sincronizado: %1$d sección(es), %2$d producto(s), %3$d foto(s).', 'lealez' ),
-                $sections_imported,
-                $items_imported,
+                _n(
+                    'Error de API al obtener catálogo. %1$d foto importada. Revisa el log para más detalles.',
+                    'Error de API al obtener catálogo. %1$d fotos importadas. Revisa el log para más detalles.',
+                    $photos_imported,
+                    'lealez'
+                ),
                 $photos_imported
             ),
         ) );
     }
+
+    // Sin catálogo estructurado (FAILED_PRECONDITION o negocio sin catálogo) pero sin error real
+    if ( 0 === $sections_imported ) {
+        $notice_msg = '' !== $sync_notice ? $sync_notice : __( 'Sincronización completada. Puedes agregar el catálogo manualmente.', 'lealez' );
+        if ( $photos_imported > 0 ) {
+            $notice_msg .= ' ' . sprintf(
+                _n( '%d foto importada.', '%d fotos importadas.', $photos_imported, 'lealez' ),
+                $photos_imported
+            );
+        }
+        wp_send_json_success( array(
+            'sections_imported' => $sections_imported,
+            'items_imported'    => $items_imported,
+            'photos_imported'   => $photos_imported,
+            'catalog_type'      => $catalog_type,
+            'message'           => $notice_msg,
+        ) );
+    }
+
+    // Importación exitosa
+    wp_send_json_success( array(
+        'sections_imported' => $sections_imported,
+        'items_imported'    => $items_imported,
+        'photos_imported'   => $photos_imported,
+        'catalog_type'      => $catalog_type,
+        'message'           => sprintf(
+            __( '✅ Sincronizado: %1$d sección(es), %2$d producto(s), %3$d foto(s).', 'lealez' ),
+            $sections_imported,
+            $items_imported,
+            $photos_imported
+        ),
+    ) );
+}
+    
     public function set_custom_columns( $columns ) {
         $new_columns = array();
 
