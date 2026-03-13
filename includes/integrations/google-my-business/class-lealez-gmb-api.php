@@ -2970,25 +2970,58 @@ public static function get_location_services( $business_id, $account_id, $locati
     );
 
     if ( is_wp_error( $result ) ) {
+        $err_data  = $result->get_error_data();
+        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+
+        /**
+         * HTTP 404 desde /serviceList NO es un error de API real.
+         * Significa que esta ubicación aún no tiene una lista de servicios
+         * configurada en GBP, o que su categoría de negocio no la soporta.
+         * Devolvemos un array con flag interno en lugar de WP_Error,
+         * para que get_location_products() pueda diferenciarlo de errores
+         * reales como 401 (no autorizado), 403 (sin permisos) o 500 (servidor).
+         */
+        if ( 404 === $http_code ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'info',
+                    'serviceList devolvió 404 — esta ubicación aún no tiene lista de servicios en GBP. Es normal para ubicaciones nuevas o sin servicios configurados.',
+                    array(
+                        'account_id'  => $account_id_normalized,
+                        'location_id' => $location_id_normalized,
+                    )
+                );
+            }
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[Lealez GMB] get_location_services 404 — sin serviceList todavía para esta ubicación (esperado si nunca se configuraron servicios en GBP).' );
+            }
+
+            // Flag interno para que el llamador distinga "sin datos" de "error real".
+            return array( '_gmb_no_service_list' => true );
+        }
+
+        // Errores reales (401, 403, 500, etc.) — sí son fallos que deben propagarse.
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'error',
-                'get_location_services failed: ' . $result->get_error_message(),
+                'get_location_services failed (HTTP ' . $http_code . '): ' . $result->get_error_message(),
                 array(
                     'account_id'  => $account_id_normalized,
                     'location_id' => $location_id_normalized,
                     'error_code'  => $result->get_error_code(),
+                    'http_code'   => $http_code,
                     'hint'        => 'El endpoint REST documentado para servicios en Business Profile v4 es /serviceList.',
                 )
             );
         }
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[Lealez GMB] get_location_services ERROR: ' . $result->get_error_message() );
-            $err_data = $result->get_error_data();
+            error_log( '[Lealez GMB] get_location_services ERROR (HTTP ' . $http_code . '): ' . $result->get_error_message() );
             if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
-                error_log( '[Lealez GMB] get_location_services HTTP_CODE: ' . ( $err_data['code'] ?? 'N/A' ) );
+                error_log( '[Lealez GMB] get_location_services HTTP_CODE: ' . $http_code );
                 error_log( '[Lealez GMB] get_location_services RAW_BODY: ' . substr( (string) $err_data['raw_body'], 0, 2000 ) );
             }
         }
@@ -3042,19 +3075,19 @@ public static function get_location_services( $business_id, $account_id, $locati
 /**
  * Obtiene el catálogo de productos de una ubicación desde Google My Business API v4.
  *
- * Aplica para negocios de tipo retail o producto (ej: tiendas, farmacias, etiquetas).
- * Es la tercera opción en la cadena de fallback, después de /foodMenus y /services.
+ * Para negocios NO restaurante, usa /serviceList como fuente oficial.
+ * El antiguo endpoint /products fue eliminado por Google sin reemplazo en v1.
  *
- * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/products
- *
- * La respuesta contiene el campo 'productItems' con los productos, agrupables por 'category'.
- * Campos por producto: name, category, description, price {currencyCode, units}, landingPageUri, mediaKeys.
+ * Códigos de error que puede devolver:
+ *  - 'no_service_list_yet'   : 404 de serviceList — sin datos aún, no es error técnico.
+ *  - 'products_api_error'    : error real de API (401, 403, 500, etc.).
+ *  - 'missing_params'        : parámetros incompletos.
  *
  * @param int    $business_id   WP Post ID del oy_business.
  * @param string $account_id    Account ID numérico, "accounts/{id}", o resource name completo.
  * @param string $location_id   Location ID numérico, "locations/{id}", o resource name completo.
  * @param bool   $force_refresh Si true, ignora caché del rate limiter.
- * @return array|WP_Error  Array con clave 'productItems' (array) en caso de éxito.
+ * @return array|WP_Error  Array con serviceItems en caso de éxito.
  */
 public static function get_location_products( $business_id, $account_id, $location_id, $force_refresh = false ) {
     $business_id = absint( $business_id );
@@ -3089,20 +3122,10 @@ public static function get_location_products( $business_id, $account_id, $locati
     }
 
     /**
-     * IMPORTANTE:
-     * El antiguo intento contra /products ya no es válido como estrategia principal.
-     * La referencia oficial actual expone FoodMenus y ServiceList, pero no un recurso
-     * REST actual para "accounts.locations.products".
-     *
-     * Estrategia correcta del plugin:
-     * 1) Para restaurantes → usar foodMenus.
-     * 2) Para negocios no-restaurante → usar serviceList si existe.
-     * 3) Si la ubicación solo tiene "Productos" visibles en la UI de GBP pero no
-     *    existe representación oficial accesible por API, devolvemos un WP_Error
-     *    explícito y honesto para que el metabox muestre aviso manual, en lugar de
-     *    seguir golpeando /products y producir 404 engañoso.
+     * El endpoint /products fue eliminado por Google sin reemplazo público en v1.
+     * Para negocios no-restaurante, la única fuente oficial accesible es /serviceList.
+     * Para restaurantes existe /foodMenus (gestionado por el metabox de Menú).
      */
-
     $service_list = self::get_location_services(
         $business_id,
         $account_id_normalized,
@@ -3110,19 +3133,28 @@ public static function get_location_products( $business_id, $account_id, $locati
         $force_refresh
     );
 
+    // Error real de API (401, 403, 500, etc.) — no un 404 de "sin datos"
     if ( is_wp_error( $service_list ) ) {
+        $err_data  = $service_list->get_error_data();
+        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log(
-                '[Lealez GMB] get_location_products fallback serviceList ERROR: ' .
-                $service_list->get_error_message()
+                '[Lealez GMB] get_location_products — error real de API desde serviceList: HTTP ' .
+                $http_code . ' — ' . $service_list->get_error_message()
             );
         }
 
         return new WP_Error(
-            'products_api_unavailable',
-            __( 'Google Business Profile ya no expone un endpoint REST funcional para sincronizar el catálogo de “Productos” como antes. Para ubicaciones no-restaurante, Lealez intentó leer la oferta estructurada mediante serviceList y tampoco encontró datos utilizables.', 'lealez' ),
+            'products_api_error',
+            sprintf(
+                /* translators: 1: HTTP code, 2: error message */
+                __( 'Error al consultar Google Business Profile (HTTP %1$d): %2$s', 'lealez' ),
+                $http_code,
+                $service_list->get_error_message()
+            ),
             array(
-                'code'        => 404,
+                'code'        => $http_code,
                 'account_id'  => $account_id_normalized,
                 'location_id' => $location_id_normalized,
                 'source'      => 'serviceList',
@@ -3134,6 +3166,43 @@ public static function get_location_products( $business_id, $account_id, $locati
             )
         );
     }
+
+    /**
+     * get_location_services() devolvió array con flag _gmb_no_service_list.
+     * Significa que Google respondió 404 — la ubicación aún no tiene
+     * una lista de servicios configurada en GBP.
+     * NO es un error técnico — es ausencia de datos.
+     */
+    if ( ! empty( $service_list['_gmb_no_service_list'] ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'get_location_products: la ubicación aún no tiene serviceList en GBP (404). El catálogo se gestiona manualmente en Lealez.',
+                array(
+                    'account_id'  => $account_id_normalized,
+                    'location_id' => $location_id_normalized,
+                )
+            );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez GMB] get_location_products — no_service_list_yet: la ubicación no tiene serviceList configurado en GBP.' );
+        }
+
+        return new WP_Error(
+            'no_service_list_yet',
+            __( 'Esta ubicación aún no tiene servicios configurados en Google Business Profile. Si tienes servicios o productos para mostrar, agrégalos en Lealez y sincroniza.', 'lealez' ),
+            array(
+                'code'        => 404,
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+            )
+        );
+    }
+
+    // Éxito — limpiar flag interno si existiera por alguna razón
+    unset( $service_list['_gmb_no_service_list'] );
 
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         $service_items_count = 0;
@@ -3151,7 +3220,7 @@ public static function get_location_products( $business_id, $account_id, $locati
             $business_id,
             'success',
             sprintf(
-                'get_location_products fallback OK via serviceList: %d item(s) found.',
+                'get_location_products OK via serviceList: %d item(s) encontrado(s).',
                 $service_items_count
             ),
             array(
@@ -3164,7 +3233,7 @@ public static function get_location_products( $business_id, $account_id, $locati
 
     /**
      * Devolvemos el payload tal cual para que el metabox lo mapee.
-     * El metabox ya será ajustado para entender serviceList/serviceItems.
+     * El metabox entiende serviceList/serviceItems.
      */
     return is_array( $service_list ) ? $service_list : array();
 }
