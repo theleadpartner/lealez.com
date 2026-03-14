@@ -2907,22 +2907,13 @@ public static function get_location_services( $business_id, $account_id, $locati
         return new WP_Error( 'missing_params', __( 'Missing business_id for services.', 'lealez' ) );
     }
 
-    /**
-     * Business Information API v1 usa el resource name de la ubicación en formato:
-     *   locations/{locationId}
-     *
-     * Si recibimos el ID numérico lo construimos. Si recibimos el resource name completo
-     * accounts/X/locations/Y, extraemos solo la parte locations/Y.
-     */
     $location_id_str        = trim( (string) $location_id );
     $location_resource_name = '';
 
     if ( '' !== $location_id_str ) {
         if ( preg_match( '~(locations/[^/\s]+)~', $location_id_str, $matches ) ) {
-            // Contiene "locations/..." — extraer esa parte
             $location_resource_name = $matches[1];
         } elseif ( preg_match( '/^\d+$/', $location_id_str ) ) {
-            // ID numérico puro
             $location_resource_name = 'locations/' . $location_id_str;
         } else {
             $location_resource_name = ltrim( $location_id_str, '/' );
@@ -2937,25 +2928,30 @@ public static function get_location_services( $business_id, $account_id, $locati
         );
     }
 
-    // Endpoint: GET /v1/{locationName}?readMask=serviceItems
+    /**
+     * readMask incluye 'categories' además de 'serviceItems' para poder resolver
+     * los serviceTypeId de structuredServiceItem a sus displayName reales.
+     * El objeto categories contiene primaryCategory.serviceTypes[] con:
+     *   { serviceTypeId: "job_type_id:e_commerce", displayName: "Comercio electrónico" }
+     */
     $endpoint   = '/' . $location_resource_name;
-    $query_args = array( 'readMask' => 'serviceItems' );
+    $query_args = array( 'readMask' => 'serviceItems,categories' );
 
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log(
             $business_id,
             'info',
-            'Fetching serviceItems via Business Information API v1 (locations.get readMask=serviceItems).',
+            'Fetching serviceItems + categories via Business Information API v1.',
             array(
                 'location_resource_name' => $location_resource_name,
-                'endpoint'               => self::$business_api_base . $endpoint . '?readMask=serviceItems',
+                'endpoint'               => self::$business_api_base . $endpoint . '?readMask=serviceItems,categories',
                 'force_refresh'          => $force_refresh ? 'yes' : 'no',
             )
         );
     }
 
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[Lealez GMB] get_location_services — endpoint: ' . self::$business_api_base . $endpoint . '?readMask=serviceItems' );
+        error_log( '[Lealez GMB] get_location_services — endpoint: ' . self::$business_api_base . $endpoint . '?readMask=serviceItems,categories' );
     }
 
     $result = self::make_request(
@@ -2996,11 +2992,6 @@ public static function get_location_services( $business_id, $account_id, $locati
         return $result;
     }
 
-    /**
-     * La respuesta de Business Information API v1 es el objeto Location completo.
-     * Si la ubicación no tiene serviceItems, el campo simplemente estará ausente
-     * (no retorna 404 — retorna el objeto Location sin ese campo).
-     */
     $items_count = isset( $result['serviceItems'] ) && is_array( $result['serviceItems'] )
         ? count( $result['serviceItems'] )
         : 0;
@@ -3010,7 +3001,7 @@ public static function get_location_services( $business_id, $account_id, $locati
             $business_id,
             'success',
             sprintf(
-                'serviceItems fetched via Business Information API v1: %d item(s) found. Response keys: %s',
+                'serviceItems + categories fetched via Business Information API v1: %d item(s) found. Response keys: %s',
                 $items_count,
                 wp_json_encode( array_keys( $result ) )
             ),
