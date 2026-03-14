@@ -117,21 +117,21 @@ public function __construct() {
         }
     }
 
-    /**
-     * ✅ Metabox externo: Catálogo de Productos (negocios no-restaurante)
-     * Archivo: includes/cpts/metaboxes/class-oy-location-products-metabox.php
+/**
+     * ✅ Metabox externo: Catálogo de Servicios (negocios no-restaurante)
+     * Archivo: includes/cpts/metaboxes/class-oy-location-services-metabox.php
      *
-     * Gestión manual de catálogo de productos para negocios que venden
-     * productos físicos o digitales (no restaurantes).
+     * Sincronización bidireccional con la sección "Servicios" de Google Business Profile
+     * para negocios no restaurante. Usa Business Information API v1 (readMask=serviceItems).
      * Registra, renderiza y guarda de forma completamente independiente.
      * Expone AJAX propio: oy_sync_location_products
      */
-    $products_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-products-metabox.php';
-    if ( file_exists( $products_metabox_file ) ) {
-        require_once $products_metabox_file;
+    $services_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-services-metabox.php';
+    if ( file_exists( $services_metabox_file ) ) {
+        require_once $services_metabox_file;
 
-        if ( class_exists( 'OY_Location_Products_Metabox' ) ) {
-            new OY_Location_Products_Metabox();
+        if ( class_exists( 'OY_Location_Services_Metabox' ) ) {
+            new OY_Location_Services_Metabox();
         }
     }
 
