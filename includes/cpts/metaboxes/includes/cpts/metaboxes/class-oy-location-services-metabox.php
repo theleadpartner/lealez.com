@@ -20,7 +20,7 @@
  *   - gmb_products_last_sync        : timestamp de última sync
  *   - gmb_products_api_notice       : aviso informativo de última sync
  *
- * Archivo: includes/cpts/metaboxes/class-oy-location-products-metabox.php
+ * Archivo: includes/cpts/metaboxes/class-oy-location-services-metabox.php
  *
  * @package Lealez
  * @subpackage CPTs/Metaboxes
@@ -31,9 +31,9 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-if ( ! class_exists( 'OY_Location_Products_Metabox' ) ) :
+if ( ! class_exists( 'OY_Location_Services_Metabox' ) ) :
 
-class OY_Location_Products_Metabox {
+class OY_Location_Services_Metabox {
 
     /**
      * Nonce action para save_post
@@ -1661,6 +1661,6 @@ public function save_meta_box( $post_id, $post ) {
         update_post_meta( $post_id, 'location_products_featured', $featured_clean );
     }
 
-} // class OY_Location_Products_Metabox
+} // class OY_Location_Services_Metabox
 
-endif; // class_exists OY_Location_Products_Metabox
+endif; // class_exists OY_Location_Services_Metabox
