@@ -91,10 +91,10 @@ class OY_Location_Products_Metabox {
     /**
      * Registrar metabox
      */
-    public function add_meta_box() {
+public function add_meta_box() {
         add_meta_box(
             'oy_location_products',
-            __( '📦 Catálogo de Productos', 'lealez' ),
+            __( '🛎️ Catálogo de Servicios', 'lealez' ),
             array( $this, 'render' ),
             $this->post_type,
             'normal',
@@ -233,7 +233,7 @@ class OY_Location_Products_Metabox {
         <div id="oy-products-metabox-wrap">
 
             <?php /* ── Aviso de última sincronización / estado de la API ── */ ?>
-            <?php if ( ! empty( $gmb_products_api_notice ) ) : ?>
+<?php if ( ! empty( $gmb_products_api_notice ) ) : ?>
                 <div class="oy-products-notice is-info">
                     <div class="oy-products-notice-icon">ℹ️</div>
                     <div><?php echo esc_html( $gmb_products_api_notice ); ?></div>
@@ -242,7 +242,7 @@ class OY_Location_Products_Metabox {
                 <div class="oy-products-notice is-ok">
                     <div class="oy-products-notice-icon">✅</div>
                     <div>
-                        <strong><?php _e( 'Catálogo sincronizado desde Google My Business', 'lealez' ); ?></strong><br>
+                        <strong><?php _e( 'Servicios sincronizados desde Google My Business', 'lealez' ); ?></strong><br>
                         <?php printf(
                             /* translators: %s: fecha */
                             __( 'Última sincronización: %s — Los cambios guardados aquí se almacenan en Lealez.', 'lealez' ),
@@ -255,7 +255,7 @@ class OY_Location_Products_Metabox {
             <?php /* ── Tabs ── */ ?>
             <div class="oy-products-tabs">
                 <button type="button" class="oy-products-tab-btn active" data-tab="catalog">
-                    <?php _e( 'Catálogo', 'lealez' ); ?>
+                    <?php _e( 'Servicios', 'lealez' ); ?>
                 </button>
                 <button type="button" class="oy-products-tab-btn" data-tab="featured">
                     <?php _e( 'Destacados', 'lealez' ); ?>
@@ -263,12 +263,12 @@ class OY_Location_Products_Metabox {
             </div>
 
             <?php /* ══════════════════════════════════════════════════════
-                   TAB 1: CATÁLOGO (Categorías + Productos)
+                   TAB 1: SERVICIOS (Categorías + Servicios)
                    ══════════════════════════════════════════════════════ */ ?>
             <div class="oy-products-tab-panel active" id="oy-products-tab-catalog">
 
                 <p class="description" style="margin-bottom:14px;">
-                    <?php _e( 'Organiza tu catálogo por categorías (ej: Ropa de hombre, Accesorios, Electrónicos). Este metabox es para negocios que venden productos físicos o digitales. Para restaurantes, usa el metabox <strong>Menú del Restaurante</strong>.', 'lealez' ); ?>
+                    <?php _e( 'Organiza los servicios por categorías (ej: Marketing digital, Diseño web, Consultoría). Este metabox sincroniza con la sección "Servicios" de tu perfil de Google Business Profile. Para restaurantes, usa el metabox <strong>Menú del Restaurante</strong>.', 'lealez' ); ?>
                 </p>
 
                 <?php /* ── Botón de sincronización GMB ── */ ?>
@@ -293,7 +293,7 @@ class OY_Location_Products_Metabox {
                                 esc_html( date_i18n( 'd/m/Y H:i', $gmb_products_last_sync ) )
                             ); ?>
                         <?php else : ?>
-                            <em><?php _e( 'Sin sincronizar aún — haz clic para intentar traer el catálogo desde Google', 'lealez' ); ?></em>
+                            <em><?php _e( 'Sin sincronizar aún — haz clic para importar los servicios desde Google', 'lealez' ); ?></em>
                         <?php endif; ?>
                     </span>
                 </div>
@@ -312,17 +312,17 @@ class OY_Location_Products_Metabox {
                 </button>
 
                 <p class="description" style="margin-top:8px;">
-                    <?php _e( 'Cada categoría debe tener al menos un producto. Puedes reordenar las categorías arrastrándolas.', 'lealez' ); ?>
+                    <?php _e( 'Cada categoría debe tener al menos un servicio. Puedes reordenar las categorías arrastrándolas.', 'lealez' ); ?>
                 </p>
             </div>
 
             <?php /* ══════════════════════════════════════════════════════
-                   TAB 2: PRODUCTOS DESTACADOS
+                   TAB 2: SERVICIOS DESTACADOS
                    ══════════════════════════════════════════════════════ */ ?>
             <div class="oy-products-tab-panel" id="oy-products-tab-featured">
 
                 <p class="description" style="margin-bottom:14px;">
-                    <?php _e( 'Selecciona los productos que quieres destacar en tu perfil de Google Business. Aparecerán en la sección de "Productos destacados".', 'lealez' ); ?>
+                    <?php _e( 'Selecciona los servicios que quieres destacar en tu perfil de Google Business. Aparecerán en la sección de "Servicios destacados".', 'lealez' ); ?>
                 </p>
 
                 <div id="oy-products-featured-list">
@@ -338,7 +338,7 @@ class OY_Location_Products_Metabox {
                 </div>
 
                 <button type="button" id="oy-add-products-featured" class="button button-primary">
-                    ⭐ <?php _e( 'Agregar producto destacado', 'lealez' ); ?>
+                    ⭐ <?php _e( 'Agregar servicio destacado', 'lealez' ); ?>
                 </button>
             </div>
 
@@ -445,12 +445,12 @@ class OY_Location_Products_Metabox {
                 }
             });
 
-            // ── Imagen de producto destacado ────────────────────────────
+// ── Imagen de producto destacado ────────────────────────────
             $(document).on('click', '.oy-product-featured-image', function(){
                 var $thumb   = $(this);
                 var $idInput = $thumb.siblings('input.oy-product-featured-image-id');
                 var frame    = wp.media({
-                    title:    '<?php echo esc_js( __( 'Seleccionar imagen del producto destacado', 'lealez' ) ); ?>',
+                    title:    '<?php echo esc_js( __( 'Seleccionar imagen del servicio destacado', 'lealez' ) ); ?>',
                     button:   { text: '<?php echo esc_js( __( 'Usar imagen', 'lealez' ) ); ?>' },
                     multiple: false,
                     library:  { type: 'image' }
@@ -582,7 +582,7 @@ private function render_section_html( $sec_idx, $name, $items, $from_gmb = false
                        name="location_products_sections[<?php echo esc_attr( $sec_idx ); ?>][from_gmb]"
                        value="<?php echo $from_gmb ? '1' : '0'; ?>">
                 <span class="oy-products-section-count">
-                    <?php echo sprintf( _n( '%d producto', '%d productos', $item_count, 'lealez' ), $item_count ); ?>
+                    <?php echo sprintf( _n( '%d servicio', '%d servicios', $item_count, 'lealez' ), $item_count ); ?>
                 </span>
                 <button type="button" class="oy-products-section-toggle">▲</button>
                 <button type="button" class="oy-products-section-remove" title="<?php esc_attr_e( 'Eliminar categoría', 'lealez' ); ?>">×</button>
@@ -707,7 +707,7 @@ private function render_section_html( $sec_idx, $name, $items, $from_gmb = false
      * @param int        $image_id   WP Media ID
      * @param string     $image_url  URL de la imagen
      */
-    private function render_featured_item_html( $feat_idx, $name, $price, $desc, $product_url, $image_id, $image_url ) {
+private function render_featured_item_html( $feat_idx, $name, $price, $desc, $product_url, $image_id, $image_url ) {
         $base      = "location_products_featured[{$feat_idx}]";
         $has_image = ! empty( $image_url );
         ?>
@@ -731,7 +731,7 @@ private function render_section_html( $sec_idx, $name, $items, $from_gmb = false
                     <input type="text"
                            name="<?php echo esc_attr( $base ); ?>[name]"
                            value="<?php echo esc_attr( $name ); ?>"
-                           placeholder="<?php esc_attr_e( 'Nombre del producto*', 'lealez' ); ?>"
+                           placeholder="<?php esc_attr_e( 'Nombre del servicio*', 'lealez' ); ?>"
                            class="regular-text"
                            style="flex:1;max-width:280px;"
                            maxlength="140">
@@ -742,13 +742,13 @@ private function render_section_html( $sec_idx, $name, $items, $from_gmb = false
                            style="max-width:120px;">
                 </div>
                 <textarea name="<?php echo esc_attr( $base ); ?>[description]"
-                          placeholder="<?php esc_attr_e( 'Descripción breve del producto', 'lealez' ); ?>"
+                          placeholder="<?php esc_attr_e( 'Descripción breve del servicio', 'lealez' ); ?>"
                           style="width:100%;resize:vertical;min-height:54px;font-size:12px;"
                           maxlength="1000"><?php echo esc_textarea( $desc ); ?></textarea>
                 <input type="url"
                        name="<?php echo esc_attr( $base ); ?>[product_url]"
                        value="<?php echo esc_attr( $product_url ); ?>"
-                       placeholder="<?php esc_attr_e( 'URL del producto (opcional)', 'lealez' ); ?>"
+                       placeholder="<?php esc_attr_e( 'URL del servicio (opcional)', 'lealez' ); ?>"
                        style="width:100%;"
                        maxlength="2048">
             </div>
@@ -756,7 +756,7 @@ private function render_section_html( $sec_idx, $name, $items, $from_gmb = false
                 <button type="button"
                         class="oy-product-featured-remove"
                         style="color:#dc3232;cursor:pointer;background:none;border:none;font-size:18px;font-weight:bold;"
-                        title="<?php esc_attr_e( 'Eliminar producto destacado', 'lealez' ); ?>">×</button>
+                        title="<?php esc_attr_e( 'Eliminar servicio destacado', 'lealez' ); ?>">×</button>
             </div>
         </div>
         <?php
