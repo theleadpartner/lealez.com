@@ -2884,6 +2884,153 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
 return is_array( $result ) ? $result : array();
 }
 
+    /**
+ * Obtiene los serviceItems de una ubicación desde Business Information API v1.
+ *
+ * Endpoint correcto según documentación oficial de Google:
+ *   GET https://mybusinessbusinessinformation.googleapis.com/v1/locations/{locationId}?readMask=serviceItems
+ *
+ * Documentación:
+ *   https://developers.google.com/my-business/content/services
+ *   https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/get
+ *
+ * @param int    $business_id   WP Post ID del oy_business.
+ * @param string $account_id    Account ID — no se usa en v1 pero se mantiene para compatibilidad de firma.
+ * @param string $location_id   Location ID numérico, "locations/{id}", o resource name completo accounts/X/locations/Y.
+ * @param bool   $force_refresh Si true, ignora caché del rate limiter.
+ * @return array|WP_Error  Array con clave 'serviceItems' en caso de éxito, o WP_Error en error.
+ */
+public static function get_location_services( $business_id, $account_id, $location_id, $force_refresh = false ) {
+    $business_id = absint( $business_id );
+
+    if ( ! $business_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id for services.', 'lealez' ) );
+    }
+
+    /**
+     * Business Information API v1 usa el resource name de la ubicación en formato:
+     *   locations/{locationId}
+     *
+     * Si recibimos el ID numérico lo construimos. Si recibimos el resource name completo
+     * accounts/X/locations/Y, extraemos solo la parte locations/Y.
+     */
+    $location_id_str        = trim( (string) $location_id );
+    $location_resource_name = '';
+
+    if ( '' !== $location_id_str ) {
+        if ( preg_match( '~(locations/[^/\s]+)~', $location_id_str, $matches ) ) {
+            // Contiene "locations/..." — extraer esa parte
+            $location_resource_name = $matches[1];
+        } elseif ( preg_match( '/^\d+$/', $location_id_str ) ) {
+            // ID numérico puro
+            $location_resource_name = 'locations/' . $location_id_str;
+        } else {
+            $location_resource_name = ltrim( $location_id_str, '/' );
+        }
+    }
+
+    if ( '' === $location_resource_name ) {
+        return new WP_Error(
+            'missing_params',
+            __( 'Missing/invalid locationId for services. Se requiere el resource name de la ubicación.', 'lealez' ),
+            array( 'location_id_raw' => $location_id )
+        );
+    }
+
+    // Endpoint: GET /v1/{locationName}?readMask=serviceItems
+    $endpoint   = '/' . $location_resource_name;
+    $query_args = array( 'readMask' => 'serviceItems' );
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Fetching serviceItems via Business Information API v1 (locations.get readMask=serviceItems).',
+            array(
+                'location_resource_name' => $location_resource_name,
+                'endpoint'               => self::$business_api_base . $endpoint . '?readMask=serviceItems',
+                'force_refresh'          => $force_refresh ? 'yes' : 'no',
+            )
+        );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[Lealez GMB] get_location_services — endpoint: ' . self::$business_api_base . $endpoint . '?readMask=serviceItems' );
+    }
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$business_api_base,
+        'GET',
+        array(),
+        ! $force_refresh,
+        $query_args
+    );
+
+    if ( is_wp_error( $result ) ) {
+        $err_data  = $result->get_error_data();
+        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+        $raw_body  = is_array( $err_data ) ? (string) ( $err_data['raw_body'] ?? '' ) : '';
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'error',
+                'get_location_services failed (HTTP ' . $http_code . '): ' . $result->get_error_message(),
+                array(
+                    'location_resource_name' => $location_resource_name,
+                    'error_code'             => $result->get_error_code(),
+                    'http_code'              => $http_code,
+                )
+            );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez GMB] get_location_services ERROR (HTTP ' . $http_code . '): ' . $result->get_error_message() );
+            if ( '' !== $raw_body ) {
+                error_log( '[Lealez GMB] get_location_services RAW_BODY: ' . substr( $raw_body, 0, 2000 ) );
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * La respuesta de Business Information API v1 es el objeto Location completo.
+     * Si la ubicación no tiene serviceItems, el campo simplemente estará ausente
+     * (no retorna 404 — retorna el objeto Location sin ese campo).
+     */
+    $items_count = isset( $result['serviceItems'] ) && is_array( $result['serviceItems'] )
+        ? count( $result['serviceItems'] )
+        : 0;
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf(
+                'serviceItems fetched via Business Information API v1: %d item(s) found. Response keys: %s',
+                $items_count,
+                wp_json_encode( array_keys( $result ) )
+            ),
+            array(
+                'location_resource_name' => $location_resource_name,
+                'response_keys'          => array_keys( $result ),
+                'items_count'            => $items_count,
+            )
+        );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        $res_keys = is_array( $result ) ? array_keys( $result ) : 'not-array';
+        error_log( '[Lealez GMB] get_location_services RESPONSE v1 — HTTP OK — keys: ' . wp_json_encode( $res_keys ) );
+        error_log( '[Lealez GMB] get_location_services RAW (first 2000 chars): ' . substr( wp_json_encode( $result ), 0, 2000 ) );
+    }
+
+    return is_array( $result ) ? $result : array();
+}
+
 
 /**
  * Obtiene el catálogo de servicios/productos de una ubicación via Business Information API v1.
