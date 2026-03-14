@@ -145,7 +145,7 @@ class OY_Location_Products_Metabox {
 
         if ( ! is_array( $products_sections ) ) $products_sections = array();
         if ( ! is_array( $products_featured ) ) $products_featured = array();
-        ?>
+?>
         <style>
         /* ── Tabs ─────────────────────────────────────────────────────────── */
         .oy-products-tabs {
@@ -185,28 +185,26 @@ class OY_Location_Products_Metabox {
         .oy-products-section-remove { color:#dc3232; cursor:pointer; background:none; border:none; font-size:18px; font-weight:bold; }
         .oy-products-items-wrap     { padding:12px 14px; }
 
-        /* ── Items ────────────────────────────────────────────────────────── */
+        /* ── Items — grid simplificado sin imagen ─────────────────────────── */
         .oy-product-item {
-            display:grid; grid-template-columns:80px 1fr auto; gap:12px;
+            display:grid; grid-template-columns:1fr auto; gap:12px;
             align-items:start; padding:12px; margin-bottom:10px;
             border:1px solid #e8e8e8; border-radius:5px; background:#fafafa;
         }
-        .oy-product-item-image {
-            width:80px; height:80px; border:2px dashed #ccc; border-radius:5px;
-            display:flex; align-items:center; justify-content:center;
-            cursor:pointer; overflow:hidden; background:#f0f0f0; flex-shrink:0;
-        }
-        .oy-product-item-image img     { width:100%; height:100%; object-fit:cover; }
-        .oy-product-item-image .oy-prod-img-placeholder { color:#aaa; font-size:24px; text-align:center; }
         .oy-product-item-fields        { display:flex; flex-direction:column; gap:6px; }
         .oy-product-item-fields input[type=text],
-        .oy-product-item-fields input[type=url],
+        .oy-product-item-fields select,
         .oy-product-item-fields textarea { width:100%; box-sizing:border-box; }
         .oy-product-item-fields textarea { resize:vertical; min-height:54px; font-size:12px; }
         .oy-product-item-row   { display:flex; gap:8px; align-items:center; }
-        .oy-product-item-actions { display:flex; flex-direction:column; gap:4px; }
+        .oy-item-price-row     { display:flex; gap:8px; align-items:center; }
+        .oy-item-price-amount  { display:flex; align-items:center; gap:4px; }
+        .oy-product-item-actions { display:flex; flex-direction:column; gap:4px; padding-top:2px; }
         .oy-product-item-remove  { color:#dc3232; cursor:pointer; background:none; border:none; font-size:18px; }
         .oy-add-product-item-btn { display:block; width:100%; text-align:center; margin-top:8px; }
+        .oy-service-name-input   { font-size:13px; }
+        .oy-service-desc-input   { font-size:12px; min-height:50px; }
+        .oy-desc-counter         { font-size:11px; color:#999; text-align:right; display:block; }
 
         /* ── Destacados ───────────────────────────────────────────────────── */
         .oy-product-featured-item {
@@ -350,14 +348,14 @@ class OY_Location_Products_Metabox {
         <script type="text/html" id="oy-products-section-template">
             <?php $this->render_section_html( '__SEC_IDX__', '', array(), false ); ?>
         </script>
-        <script type="text/html" id="oy-products-item-template">
+<script type="text/html" id="oy-products-item-template">
             <?php $this->render_item_html( '__SEC_IDX__', '__ITEM_IDX__', '', '', '', 0, '' ); ?>
         </script>
         <script type="text/html" id="oy-products-featured-template">
             <?php $this->render_featured_item_html( '__FEAT_IDX__', '', '', '', '', 0, '' ); ?>
         </script>
 
-        <script>
+<script>
         (function($){
             'use strict';
 
@@ -379,7 +377,7 @@ class OY_Location_Products_Metabox {
 
             // ── Eliminar sección ────────────────────────────────────────
             $(document).on('click', '.oy-products-section-remove', function(){
-                if ( confirm('<?php echo esc_js( __( '¿Eliminar esta categoría y todos sus productos?', 'lealez' ) ); ?>') ) {
+                if ( confirm('<?php echo esc_js( __( '¿Eliminar esta categoría y todos sus servicios?', 'lealez' ) ); ?>') ) {
                     $(this).closest('.oy-products-section').slideUp(200, function(){
                         $(this).remove();
                         oy_products_reindex_sections();
@@ -412,23 +410,39 @@ class OY_Location_Products_Metabox {
                 $(this).closest('.oy-product-item').slideUp(150, function(){ $(this).remove(); });
             });
 
-            // ── Imagen de item (media library) ──────────────────────────
-            $(document).on('click', '.oy-product-item-image', function(){
-                var $thumb   = $(this);
-                var $idInput = $thumb.siblings('input.oy-product-image-id');
-                var frame    = wp.media({
-                    title:    '<?php echo esc_js( __( 'Seleccionar imagen del producto', 'lealez' ) ); ?>',
-                    button:   { text: '<?php echo esc_js( __( 'Usar imagen', 'lealez' ) ); ?>' },
-                    multiple: false,
-                    library:  { type: 'image' }
-                });
-                frame.on('select', function(){
-                    var att       = frame.state().get('selection').first().toJSON();
-                    var thumb_url = att.sizes && att.sizes.thumbnail ? att.sizes.thumbnail.url : att.url;
-                    $thumb.html('<img src="' + thumb_url + '" alt="">');
-                    $idInput.val(att.id);
-                });
-                frame.open();
+            // ── Toggle visibilidad del monto según tipo de precio ───────
+            // Aplica al cargar la página (estado inicial) y al cambiar el select
+            function oy_toggle_price_amount( $select ) {
+                var type    = $select.val();
+                var $amount = $select.closest('.oy-item-price-row').find('.oy-item-price-amount');
+                if ( type === 'no_price' || type === 'free' ) {
+                    $amount.hide();
+                    $amount.find('input').val('');
+                } else {
+                    $amount.show();
+                }
+            }
+
+            // Al cambiar el select de precio
+            $(document).on('change', '.oy-price-type-select', function(){
+                oy_toggle_price_amount( $(this) );
+            });
+
+            // Inicializar en todos los selects existentes al cargar
+            $('.oy-price-type-select').each(function(){
+                oy_toggle_price_amount( $(this) );
+            });
+
+            // ── Contador de caracteres en descripción ───────────────────
+            $(document).on('input', '.oy-service-desc-input', function(){
+                var len     = $(this).val().length;
+                var $counter = $(this).siblings('.oy-desc-counter');
+                $counter.text( len + '/300' );
+                if ( len >= 280 ) {
+                    $counter.css('color', '#c0392b');
+                } else {
+                    $counter.css('color', '#999');
+                }
             });
 
             // ── Imagen de producto destacado ────────────────────────────
@@ -550,7 +564,7 @@ class OY_Location_Products_Metabox {
      * @param array      $items    Array de productos
      * @param bool       $from_gmb Si fue importado desde GMB
      */
-    private function render_section_html( $sec_idx, $name, $items, $from_gmb = false ) {
+private function render_section_html( $sec_idx, $name, $items, $from_gmb = false ) {
         $item_count = count( $items );
         ?>
         <div class="oy-products-section" data-section-idx="<?php echo esc_attr( $sec_idx ); ?>">
@@ -560,7 +574,7 @@ class OY_Location_Products_Metabox {
                        class="oy-products-section-name-input"
                        name="location_products_sections[<?php echo esc_attr( $sec_idx ); ?>][name]"
                        value="<?php echo esc_attr( $name ); ?>"
-                       placeholder="<?php esc_attr_e( 'Nombre de la categoría (ej: Ropa, Accesorios, Electrónicos...)', 'lealez' ); ?>">
+                       placeholder="<?php esc_attr_e( 'Nombre de la categoría (ej: Marketing, Diseño web...)', 'lealez' ); ?>">
                 <?php if ( $from_gmb ) : ?>
                     <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;background:#e8f0fe;border:1px solid #b3d4f5;color:#1a56a0;margin-left:4px;white-space:nowrap;">🔄 GMB</span>
                 <?php endif; ?>
@@ -575,108 +589,108 @@ class OY_Location_Products_Metabox {
             </div>
             <div class="oy-products-items-wrap">
                 <?php foreach ( $items as $item_idx => $item ) :
-                    $item_name  = sanitize_text_field( $item['name']        ?? '' );
-                    $item_price = sanitize_text_field( $item['price']       ?? '' );
-                    $item_desc  = sanitize_textarea_field( $item['description'] ?? '' );
-                    $item_url   = esc_url_raw( $item['product_url']         ?? '' );
-                    $item_sku   = sanitize_text_field( $item['sku']         ?? '' );
-                    $item_img   = (int) ( $item['image_id'] ?? 0 );
-                    $item_img_url = $item_img ? wp_get_attachment_image_url( $item_img, 'thumbnail' ) : '';
-                                        $item_from_gmb = ! empty( $item['from_gmb'] ) ? 1 : 0;
+                    $item_name       = sanitize_text_field( $item['name']        ?? '' );
+                    $item_price_raw  = sanitize_text_field( $item['price']       ?? '' );
+                    $item_desc       = sanitize_textarea_field( $item['description'] ?? '' );
+                    $item_from_gmb   = ! empty( $item['from_gmb'] ) ? 1 : 0;
+                    // Inferir price_type para retrocompatibilidad con datos guardados sin este campo
+                    if ( ! empty( $item['price_type'] ) ) {
+                        $item_price_type = sanitize_text_field( $item['price_type'] );
+                    } elseif ( '' !== $item_price_raw ) {
+                        $item_price_type = 'fixed';
+                    } else {
+                        $item_price_type = 'no_price';
+                    }
                     $this->render_item_html(
                         $sec_idx,
                         $item_idx,
                         $item_name,
-                        $item_price,
+                        $item_price_type,
+                        $item_price_raw,
                         $item_desc,
-                        $item_img,
-                        $item_img_url,
-                        $item_url,
-                        $item_sku,
                         $item_from_gmb
                     );
                 endforeach; ?>
                 <button type="button" class="button button-small oy-add-product-item-btn">
-                    + <?php _e( 'Agregar un producto', 'lealez' ); ?>
+                    + <?php _e( 'Agregar un servicio', 'lealez' ); ?>
                 </button>
             </div>
         </div>
         <?php
     }
 
-    /**
-     * Render HTML para un producto individual.
+/**
+     * Render HTML para un servicio/producto individual.
+     * Campos alineados con la UI de Google Business Profile:
+     * nombre, tipo de precio (Sin precio/Gratis/Fijo/Desde), monto, descripción (máx 300).
      *
      * @param int|string $sec_idx
      * @param int|string $item_idx
      * @param string     $name
-     * @param string     $price
+     * @param string     $price_type  no_price | free | fixed | from
+     * @param string     $price       Monto/texto del precio
      * @param string     $desc
-     * @param int        $image_id
-     * @param string     $image_url
-     * @param string     $product_url
-     * @param string     $sku
      * @param int        $from_gmb
      */
-    private function render_item_html( $sec_idx, $item_idx, $name, $price, $desc, $image_id, $image_url, $product_url = '', $sku = '', $from_gmb = 0 ) {
-        $base      = "location_products_sections[{$sec_idx}][items][{$item_idx}]";
-        $has_image = ! empty( $image_url );
+    private function render_item_html( $sec_idx, $item_idx, $name, $price_type = 'no_price', $price = '', $desc = '', $from_gmb = 0 ) {
+        $base            = "location_products_sections[{$sec_idx}][items][{$item_idx}]";
+        $show_amount     = in_array( $price_type, array( 'fixed', 'from' ), true );
+        $amount_style    = $show_amount ? '' : 'display:none;';
         ?>
         <div class="oy-product-item">
-            <div>
-                <div class="oy-product-item-image"
-                     title="<?php esc_attr_e( 'Clic para seleccionar imagen', 'lealez' ); ?>">
-                    <?php if ( $has_image ) : ?>
-                        <img src="<?php echo esc_url( $image_url ); ?>" alt="">
-                    <?php else : ?>
-                        <div class="oy-prod-img-placeholder">📦<br><small style="font-size:10px;"><?php _e( 'Imagen', 'lealez' ); ?></small></div>
-                    <?php endif; ?>
-                </div>
-                <input type="hidden"
-                       class="oy-product-image-id"
-                       name="<?php echo esc_attr( $base ); ?>[image_id]"
-                       value="<?php echo esc_attr( $image_id ?: '' ); ?>">
+            <div class="oy-product-item-fields">
+
                 <input type="hidden"
                        name="<?php echo esc_attr( $base ); ?>[from_gmb]"
                        value="<?php echo ! empty( $from_gmb ) ? '1' : '0'; ?>">
-            </div>
-            <div class="oy-product-item-fields">
+
+                <?php /* ── Nombre del servicio ── */ ?>
                 <div class="oy-product-item-row">
                     <input type="text"
                            name="<?php echo esc_attr( $base ); ?>[name]"
                            value="<?php echo esc_attr( $name ); ?>"
-                           placeholder="<?php esc_attr_e( 'Nombre del producto*', 'lealez' ); ?>"
-                           class="regular-text"
-                           style="flex:1;max-width:280px;"
-                           maxlength="140">
-                    <input type="text"
-                           name="<?php echo esc_attr( $base ); ?>[price]"
-                           value="<?php echo esc_attr( $price ); ?>"
-                           placeholder="<?php esc_attr_e( 'Precio', 'lealez' ); ?>"
-                           style="max-width:120px;">
-                </div>
-                <textarea name="<?php echo esc_attr( $base ); ?>[description]"
-                          placeholder="<?php esc_attr_e( 'Descripción del producto (opcional, máx 1000 caracteres)', 'lealez' ); ?>"
-                          maxlength="1000"><?php echo esc_textarea( $desc ); ?></textarea>
-                <div class="oy-product-item-row">
-                    <input type="url"
-                           name="<?php echo esc_attr( $base ); ?>[product_url]"
-                           value="<?php echo esc_attr( $product_url ); ?>"
-                           placeholder="<?php esc_attr_e( 'URL del producto (https://...)', 'lealez' ); ?>"
+                           placeholder="<?php esc_attr_e( 'Nombre del servicio*', 'lealez' ); ?>"
+                           class="regular-text oy-service-name-input"
                            style="flex:1;"
-                           maxlength="2048">
-                    <input type="text"
-                           name="<?php echo esc_attr( $base ); ?>[sku]"
-                           value="<?php echo esc_attr( $sku ); ?>"
-                           placeholder="<?php esc_attr_e( 'SKU / Ref.', 'lealez' ); ?>"
-                           style="max-width:100px;"
-                           maxlength="100">
+                           maxlength="140">
+                    <?php if ( $from_gmb ) : ?>
+                        <span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px;background:#e8f0fe;border:1px solid #b3d4f5;color:#1a56a0;white-space:nowrap;">🔄 GMB</span>
+                    <?php endif; ?>
                 </div>
+
+                <?php /* ── Precio: tipo + monto (igual que UI de GBP) ── */ ?>
+                <div class="oy-product-item-row oy-item-price-row">
+                    <select name="<?php echo esc_attr( $base ); ?>[price_type]"
+                            class="oy-price-type-select"
+                            style="min-width:130px;">
+                        <option value="no_price" <?php selected( $price_type, 'no_price' ); ?>><?php _e( 'Sin precio', 'lealez' ); ?></option>
+                        <option value="free"     <?php selected( $price_type, 'free' ); ?>><?php _e( 'Gratis', 'lealez' ); ?></option>
+                        <option value="fixed"    <?php selected( $price_type, 'fixed' ); ?>><?php _e( 'Fijo', 'lealez' ); ?></option>
+                        <option value="from"     <?php selected( $price_type, 'from' ); ?>><?php _e( 'Desde', 'lealez' ); ?></option>
+                    </select>
+                    <span class="oy-item-price-amount" style="display:flex;align-items:center;gap:4px;<?php echo esc_attr( $amount_style ); ?>">
+                        <input type="text"
+                               name="<?php echo esc_attr( $base ); ?>[price]"
+                               value="<?php echo esc_attr( $price ); ?>"
+                               placeholder="<?php esc_attr_e( 'Ej: 300000', 'lealez' ); ?>"
+                               style="max-width:140px;">
+                    </span>
+                </div>
+
+                <?php /* ── Descripción del servicio (máx 300, igual que GBP) ── */ ?>
+                <textarea name="<?php echo esc_attr( $base ); ?>[description]"
+                          placeholder="<?php esc_attr_e( 'Descripción del servicio (opcional, máx 300 caracteres)', 'lealez' ); ?>"
+                          maxlength="300"
+                          class="oy-service-desc-input"><?php echo esc_textarea( $desc ); ?></textarea>
+                <span class="oy-desc-counter" style="font-size:11px;color:#888;text-align:right;display:block;">
+                    <?php echo mb_strlen( $desc ); ?>/300
+                </span>
+
             </div>
             <div class="oy-product-item-actions">
                 <button type="button"
                         class="oy-product-item-remove"
-                        title="<?php esc_attr_e( 'Eliminar producto', 'lealez' ); ?>">×</button>
+                        title="<?php esc_attr_e( 'Eliminar servicio', 'lealez' ); ?>">×</button>
             </div>
         </div>
         <?php
@@ -1246,41 +1260,78 @@ private function map_products_to_sections( $result ) {
     }
 
 /**
-     * ── Formato C: serviceList / serviceItems[] ───────────────────────────
-     * Fuente oficial actual para negocios no-restaurante (v4 API).
-     * Cada item puede ser freeFormServiceItem o structuredServiceItem.
+     * ── Formato C: serviceItems[] — Business Information API v1.
+     * Incluye datos de categorías para resolver structuredServiceItem displayNames.
      */
     if ( ! empty( $result['serviceItems'] ) && is_array( $result['serviceItems'] ) ) {
+
+        /**
+         * Construir lookup: serviceTypeId → { displayName, categoryName }
+         * a partir del objeto categories incluido en la respuesta
+         * cuando se solicitó readMask=serviceItems,categories.
+         */
+        $service_type_lookup = array();
+        $categories_data     = $result['categories'] ?? array();
+
+        $all_categories = array();
+        if ( ! empty( $categories_data['primaryCategory'] ) && is_array( $categories_data['primaryCategory'] ) ) {
+            $all_categories[] = $categories_data['primaryCategory'];
+        }
+        if ( ! empty( $categories_data['additionalCategories'] ) && is_array( $categories_data['additionalCategories'] ) ) {
+            foreach ( $categories_data['additionalCategories'] as $add_cat ) {
+                if ( is_array( $add_cat ) ) {
+                    $all_categories[] = $add_cat;
+                }
+            }
+        }
+
+        foreach ( $all_categories as $cat ) {
+            $cat_display_name = sanitize_text_field( (string) ( $cat['displayName'] ?? '' ) );
+            if ( empty( $cat['serviceTypes'] ) || ! is_array( $cat['serviceTypes'] ) ) {
+                continue;
+            }
+            foreach ( $cat['serviceTypes'] as $stype ) {
+                $stype_id = (string) ( $stype['serviceTypeId'] ?? '' );
+                if ( '' === $stype_id ) {
+                    continue;
+                }
+                $service_type_lookup[ $stype_id ] = array(
+                    'displayName'  => sanitize_text_field( (string) ( $stype['displayName'] ?? '' ) ),
+                    'categoryName' => $cat_display_name,
+                );
+            }
+        }
+
         $grouped = array();
 
         foreach ( $result['serviceItems'] as $item ) {
-            // Saltear items no activos si Google los marca explícitamente
             if ( isset( $item['isOffered'] ) && false === $item['isOffered'] ) {
                 continue;
             }
 
-            $mapped = $this->map_product_item( $item );
+            $mapped = $this->map_product_item( $item, $service_type_lookup );
 
             if ( empty( $mapped['name'] ) ) {
                 continue;
             }
 
-            // Extraer nombre de categoría según el tipo de serviceItem
+            // ── Determinar categoría del item ────────────────────────────
             $category_name = '';
 
             if ( isset( $item['freeFormServiceItem'] ) && is_array( $item['freeFormServiceItem'] ) ) {
-                // freeFormServiceItem.category es el nombre de categoría libre
+                // freeFormServiceItem.category = nombre de categoría libre definido por el negocio
                 if ( ! empty( $item['freeFormServiceItem']['category'] ) ) {
                     $category_name = sanitize_text_field( (string) $item['freeFormServiceItem']['category'] );
                 }
             } elseif ( isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ) {
-                // structuredServiceItem no tiene categoría libre; usamos el serviceType si existe
-                if ( ! empty( $item['structuredServiceItem']['serviceType'] ) ) {
-                    $category_name = sanitize_text_field( (string) $item['structuredServiceItem']['serviceType'] );
+                // Para items estructurados, la categoría es el displayName de la categoría padre
+                $stype_id = (string) ( $item['structuredServiceItem']['serviceTypeId'] ?? '' );
+                if ( ! empty( $service_type_lookup[ $stype_id ]['categoryName'] ) ) {
+                    $category_name = $service_type_lookup[ $stype_id ]['categoryName'];
                 }
             }
 
-            // Fallbacks para formatos legacy o alternativos
+            // Fallbacks para formatos legacy
             if ( '' === $category_name ) {
                 if ( ! empty( $item['serviceType'] ) ) {
                     $category_name = sanitize_text_field( (string) $item['serviceType'] );
@@ -1292,7 +1343,7 @@ private function map_products_to_sections( $result ) {
             }
 
             if ( '' === $category_name ) {
-                $category_name = __( 'Servicios / Catálogo', 'lealez' );
+                $category_name = __( 'Servicios', 'lealez' );
             }
 
             if ( ! isset( $grouped[ $category_name ] ) ) {
@@ -1371,159 +1422,138 @@ private function map_products_to_sections( $result ) {
 }
 
 /**
-     * Mapear un ítem individual de Google al formato interno del metabox.
+     * Mapear un ítem de serviceItems de GBP al formato interno del metabox.
      *
-     * Soporta los tres formatos reales que devuelve la API de GBP v4:
+     * Formatos soportados:
      *
-     * 1. freeFormServiceItem (serviceList — negocio no-restaurante):
+     * 1. freeFormServiceItem (Business Information API v1):
      *    item.freeFormServiceItem.label.displayName  → name
      *    item.freeFormServiceItem.label.description  → description
-     *    item.price {units, nanos, currencyCode}     → price (nivel raíz del item)
+     *    item.price {units, nanos, currencyCode}     → price + price_type
      *
-     * 2. structuredServiceItem (serviceList — tipo de servicio de Google):
-     *    item.structuredServiceItem.serviceTypeId    → sku (identificador de referencia)
-     *    item.structuredServiceItem.description      → description (override personalizado)
-     *    item.price                                  → price (nivel raíz del item)
-     *    NOTA: el displayName del serviceTypeId no está en la respuesta de la API;
-     *    se requeriría un lookup adicional que no hacemos aquí.
-     *
-     * 3. productItem / payload legacy:
-     *    item.productTitle / item.displayName / item.name  → name
-     *    item.productDescription / item.description        → description
-     *    item.price / item.priceRange                      → price
-     *    item.landingPageUri / callToAction.url            → product_url
-     *    item.productCode / item.sku                       → sku
+     * 2. structuredServiceItem (Business Information API v1):
+     *    item.structuredServiceItem.serviceTypeId    → lookup → name
+     *    item.structuredServiceItem.description      → description (override)
+     *    item.price                                  → price + price_type
      *
      * @param array $item
+     * @param array $service_type_lookup  Mapa serviceTypeId → ['displayName', 'categoryName']
      * @return array
      */
-private function map_product_item( $item ) {
-    if ( ! is_array( $item ) ) {
+    private function map_product_item( $item, $service_type_lookup = array() ) {
+        if ( ! is_array( $item ) ) {
+            return array(
+                'name'        => '',
+                'price_type'  => 'no_price',
+                'price'       => '',
+                'description' => '',
+                'from_gmb'    => 1,
+            );
+        }
+
+        $free_form  = isset( $item['freeFormServiceItem'] )   && is_array( $item['freeFormServiceItem'] )   ? $item['freeFormServiceItem']   : null;
+        $structured = isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ? $item['structuredServiceItem'] : null;
+        $free_label = ( $free_form && isset( $free_form['label'] ) && is_array( $free_form['label'] ) ) ? $free_form['label'] : null;
+
+        // ── Nombre ───────────────────────────────────────────────────────────
+        $name = '';
+
+        if ( $free_label && ! empty( $free_label['displayName'] ) ) {
+            $name = sanitize_text_field( (string) $free_label['displayName'] );
+        }
+
+        if ( '' === $name && $structured && ! empty( $structured['serviceTypeId'] ) ) {
+            $service_type_id = (string) $structured['serviceTypeId'];
+            // Primero intentar resolver desde el lookup de categorías
+            if ( ! empty( $service_type_lookup[ $service_type_id ]['displayName'] ) ) {
+                $name = sanitize_text_field( (string) $service_type_lookup[ $service_type_id ]['displayName'] );
+            } else {
+                // Fallback: formatear el ID legiblemente (quitar prefijo, reemplazar _ por espacios)
+                $readable = preg_replace( '/^job_type_id:/', '', $service_type_id );
+                $readable = str_replace( '_', ' ', $readable );
+                $name     = sanitize_text_field( ucwords( $readable ) );
+            }
+        }
+
+        // Legacy: otros formatos
+        if ( '' === $name ) {
+            if ( ! empty( $item['productTitle'] ) ) {
+                $name = sanitize_text_field( (string) $item['productTitle'] );
+            } elseif ( ! empty( $item['displayName'] ) ) {
+                $name = sanitize_text_field( (string) $item['displayName'] );
+            } elseif ( ! empty( $item['name'] ) ) {
+                $raw_name = (string) $item['name'];
+                if ( false === strpos( $raw_name, 'accounts/' ) && false === strpos( $raw_name, 'locations/' ) ) {
+                    $name = sanitize_text_field( $raw_name );
+                }
+            }
+        }
+
+        // ── Descripción ──────────────────────────────────────────────────────
+        $description = '';
+
+        if ( $free_label && ! empty( $free_label['description'] ) ) {
+            $description = sanitize_textarea_field( (string) $free_label['description'] );
+        } elseif ( $structured && ! empty( $structured['description'] ) ) {
+            $description = sanitize_textarea_field( (string) $structured['description'] );
+        } elseif ( ! empty( $item['productDescription'] ) ) {
+            $description = sanitize_textarea_field( (string) $item['productDescription'] );
+        } elseif ( ! empty( $item['description'] ) ) {
+            $description = sanitize_textarea_field( (string) $item['description'] );
+        }
+        // GBP limita a 300 caracteres
+        if ( mb_strlen( $description ) > 300 ) {
+            $description = mb_substr( $description, 0, 300 );
+        }
+
+        // ── Precio y tipo de precio ───────────────────────────────────────────
+        // En Business Information API v1, el precio está en item.price (Money object).
+        // No existe campo priceType explícito; se infiere del valor.
+        $price_type = 'no_price';
+        $price      = '';
+        $price_data = null;
+
+        if ( isset( $item['price'] ) ) {
+            $price_data = $item['price'];
+        } elseif ( isset( $item['priceRange'] ) ) {
+            $price_data = $item['priceRange'];
+        }
+
+        if ( is_array( $price_data ) ) {
+            $units        = isset( $price_data['units'] )        ? (string) $price_data['units']        : '';
+            $nanos        = isset( $price_data['nanos'] )        ? (int)    $price_data['nanos']        : 0;
+            $currencyCode = isset( $price_data['currencyCode'] ) ? sanitize_text_field( (string) $price_data['currencyCode'] ) : '';
+
+            if ( '' !== $units && '0' !== $units ) {
+                $amount = (float) $units;
+                if ( 0 !== $nanos ) {
+                    $amount += ( $nanos / 1000000000 );
+                }
+                // Mostrar número entero si es entero, con decimales si los tiene
+                $price      = ( $amount == (int) $amount )
+                    ? number_format( $amount, 0, '.', '' )
+                    : number_format( $amount, 2, '.', '' );
+                if ( '' !== $currencyCode ) {
+                    $price .= ' ' . $currencyCode;
+                }
+                $price_type = 'fixed';
+            } else {
+                // units = '0' o vacío → gratis
+                $price_type = 'free';
+            }
+        } elseif ( is_string( $price_data ) && '' !== trim( $price_data ) ) {
+            $price      = sanitize_text_field( $price_data );
+            $price_type = 'fixed';
+        }
+
         return array(
-            'name'        => '',
-            'price'       => '',
-            'description' => '',
-            'product_url' => '',
-            'sku'         => '',
-            'image_id'    => 0,
+            'name'        => $name,
+            'price_type'  => $price_type,
+            'price'       => $price,
+            'description' => $description,
             'from_gmb'    => 1,
         );
     }
-
-    // Detectar sub-objetos del formato serviceList v4
-    $free_form  = isset( $item['freeFormServiceItem'] )   && is_array( $item['freeFormServiceItem'] )   ? $item['freeFormServiceItem']   : null;
-    $structured = isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ? $item['structuredServiceItem'] : null;
-    $free_label = ( $free_form && isset( $free_form['label'] ) && is_array( $free_form['label'] ) ) ? $free_form['label'] : null;
-
-    // ── Nombre ───────────────────────────────────────────────────────────
-    $name = '';
-
-    if ( $free_label && ! empty( $free_label['displayName'] ) ) {
-        // freeFormServiceItem → label.displayName (formato primario v4 serviceList)
-        $name = sanitize_text_field( (string) $free_label['displayName'] );
-    } elseif ( ! empty( $item['productTitle'] ) ) {
-        $name = sanitize_text_field( (string) $item['productTitle'] );
-    } elseif ( ! empty( $item['displayName'] ) ) {
-        $name = sanitize_text_field( (string) $item['displayName'] );
-    } elseif ( ! empty( $item['name'] ) ) {
-        // 'name' en v4 suele ser el resource name (ej: accounts/X/locations/Y/...)
-        // lo ignoramos si contiene 'accounts/' para no confundirlo con el nombre del servicio
-        $raw_name = (string) $item['name'];
-        if ( false === strpos( $raw_name, 'accounts/' ) && false === strpos( $raw_name, 'locations/' ) ) {
-            $name = sanitize_text_field( $raw_name );
-        }
-    }
-
-    // Para structuredServiceItem: el nombre real requiere un lookup del serviceTypeId
-    // que no hacemos aquí; usamos el ID como nombre de referencia.
-    if ( '' === $name && $structured && ! empty( $structured['serviceTypeId'] ) ) {
-        $name = sanitize_text_field( (string) $structured['serviceTypeId'] );
-    }
-
-    // ── Descripción ──────────────────────────────────────────────────────
-    $description = '';
-
-    if ( $free_label && ! empty( $free_label['description'] ) ) {
-        // freeFormServiceItem → label.description
-        $description = sanitize_textarea_field( (string) $free_label['description'] );
-    } elseif ( $structured && ! empty( $structured['description'] ) ) {
-        // structuredServiceItem → description (override personalizado del negocio)
-        $description = sanitize_textarea_field( (string) $structured['description'] );
-    } elseif ( ! empty( $item['productDescription'] ) ) {
-        $description = sanitize_textarea_field( (string) $item['productDescription'] );
-    } elseif ( ! empty( $item['description'] ) ) {
-        $description = sanitize_textarea_field( (string) $item['description'] );
-    }
-
-    // ── URL del producto ─────────────────────────────────────────────────
-    $product_url = '';
-    if ( ! empty( $item['callToAction']['url'] ) ) {
-        $product_url = esc_url_raw( (string) $item['callToAction']['url'] );
-    } elseif ( ! empty( $item['landingPageUri'] ) ) {
-        $product_url = esc_url_raw( (string) $item['landingPageUri'] );
-    } elseif ( ! empty( $item['landingPageUrl'] ) ) {
-        $product_url = esc_url_raw( (string) $item['landingPageUrl'] );
-    } elseif ( ! empty( $item['productUrl'] ) ) {
-        $product_url = esc_url_raw( (string) $item['productUrl'] );
-    } elseif ( ! empty( $item['uri'] ) ) {
-        $product_url = esc_url_raw( (string) $item['uri'] );
-    }
-
-    // ── SKU / Referencia ─────────────────────────────────────────────────
-    $sku = '';
-    if ( ! empty( $item['productCode'] ) ) {
-        $sku = sanitize_text_field( (string) $item['productCode'] );
-    } elseif ( ! empty( $item['sku'] ) ) {
-        $sku = sanitize_text_field( (string) $item['sku'] );
-    } elseif ( $structured && ! empty( $structured['serviceTypeId'] ) ) {
-        // Guardar el serviceTypeId como SKU de referencia
-        $sku = sanitize_text_field( (string) $structured['serviceTypeId'] );
-    } elseif ( ! empty( $item['serviceId'] ) ) {
-        $sku = sanitize_text_field( (string) $item['serviceId'] );
-    }
-
-    // ── Precio ───────────────────────────────────────────────────────────
-    // En serviceList v4, el precio está en el nivel raíz del serviceItem (item.price),
-    // NO dentro de freeFormServiceItem o structuredServiceItem.
-    $price      = '';
-    $price_data = null;
-
-    if ( isset( $item['price'] ) ) {
-        $price_data = $item['price'];
-    } elseif ( isset( $item['priceRange'] ) ) {
-        $price_data = $item['priceRange'];
-    }
-
-    if ( is_array( $price_data ) ) {
-        $units        = isset( $price_data['units'] )        ? (string) $price_data['units']        : '';
-        $nanos        = isset( $price_data['nanos'] )        ? (int)    $price_data['nanos']        : 0;
-        $currencyCode = isset( $price_data['currencyCode'] ) ? sanitize_text_field( (string) $price_data['currencyCode'] ) : '';
-
-        // Solo generar precio si units no está vacío ni es '0'
-        if ( '' !== $units && '0' !== $units ) {
-            $amount = (float) $units;
-            if ( 0 !== $nanos ) {
-                $amount += ( $nanos / 1000000000 );
-            }
-            $price = number_format( $amount, 2, '.', '' );
-            if ( '' !== $currencyCode ) {
-                $price .= ' ' . $currencyCode;
-            }
-        }
-    } elseif ( is_string( $price_data ) && '' !== trim( $price_data ) ) {
-        $price = sanitize_text_field( $price_data );
-    }
-
-    return array(
-        'name'        => $name,
-        'price'       => $price,
-        'description' => $description,
-        'product_url' => $product_url,
-        'sku'         => $sku,
-        'image_id'    => 0,
-        'from_gmb'    => 1,
-    );
-}
 
     // =========================================================================
     // GUARDADO
@@ -1535,20 +1565,17 @@ private function map_product_item( $item ) {
      * @param int     $post_id
      * @param WP_Post $post
      */
-    public function save_meta_box( $post_id, $post ) {
+public function save_meta_box( $post_id, $post ) {
 
-        // Verificar nonce
         if ( ! isset( $_POST[ $this->nonce_name ] ) ||
              ! wp_verify_nonce( wp_unslash( $_POST[ $this->nonce_name ] ), $this->nonce_action ) ) {
             return;
         }
 
-        // Autosave
         if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
             return;
         }
 
-        // Permisos
         if ( ! current_user_can( 'edit_post', $post_id ) ) {
             return;
         }
@@ -1570,14 +1597,21 @@ private function map_product_item( $item ) {
                 if ( ! is_array( $item ) ) continue;
                 $item_name = sanitize_text_field( $item['name'] ?? '' );
                 if ( empty( $item_name ) ) continue;
+
+                $price_type_raw = sanitize_text_field( $item['price_type'] ?? 'no_price' );
+                $allowed_types  = array( 'no_price', 'free', 'fixed', 'from' );
+                $price_type     = in_array( $price_type_raw, $allowed_types, true ) ? $price_type_raw : 'no_price';
+
                 $items_clean[] = array(
                     'name'        => $item_name,
-                    'price'       => sanitize_text_field( $item['price']       ?? '' ),
-                    'description' => sanitize_textarea_field( $item['description'] ?? '' ),
-                    'product_url' => esc_url_raw( (string) ( $item['product_url'] ?? '' ) ),
-                    'sku'         => sanitize_text_field( $item['sku']          ?? '' ),
-                    'image_id'    => absint( $item['image_id']                   ?? 0 ),
+                    'price_type'  => $price_type,
+                    'price'       => sanitize_text_field( $item['price'] ?? '' ),
+                    'description' => mb_substr( sanitize_textarea_field( $item['description'] ?? '' ), 0, 300 ),
                     'from_gmb'    => ! empty( $item['from_gmb'] ) ? 1 : 0,
+                    // Campos legacy — se preservan si vienen en POST para no perder datos existentes
+                    'product_url' => esc_url_raw( (string) ( $item['product_url'] ?? '' ) ),
+                    'sku'         => sanitize_text_field( $item['sku'] ?? '' ),
+                    'image_id'    => absint( $item['image_id'] ?? 0 ),
                 );
             }
             $sections_clean[] = array(
@@ -1600,10 +1634,10 @@ private function map_product_item( $item ) {
             if ( empty( $feat_name ) ) continue;
             $featured_clean[] = array(
                 'name'        => $feat_name,
-                'price'       => sanitize_text_field( $feat['price']       ?? '' ),
+                'price'       => sanitize_text_field( $feat['price'] ?? '' ),
                 'description' => sanitize_textarea_field( $feat['description'] ?? '' ),
                 'product_url' => esc_url_raw( (string) ( $feat['product_url'] ?? '' ) ),
-                'image_id'    => absint( $feat['image_id']                   ?? 0 ),
+                'image_id'    => absint( $feat['image_id'] ?? 0 ),
             );
         }
         update_post_meta( $post_id, 'location_products_featured', $featured_clean );
