@@ -1146,19 +1146,20 @@ public function ajax_sync_products() {
     // MAPEO DE DATOS GMB
     // =========================================================================
 
-    /**
-     * Mapear la respuesta de productos de Google al formato interno
-     * location_products_sections.
-     *
-     * Soporta:
-     * - categories[] (formato retail moderno)
-     * - productItems[] (formato legacy)
-     * - items[] (alias)
-     * - array indexado plano
-     *
-     * @param array $result
-     * @return array
-     */
+/**
+ * Mapear la respuesta de productos/servicios de Google al formato interno
+ * location_products_sections.
+ *
+ * Soporta:
+ * - serviceItems[] (Business Information API v1 — fuente actual)
+ * - categories[] (formato retail legacy — array indexado)
+ * - productItems[] (formato legacy)
+ * - sections[] (formato serviceList legacy)
+ * - array indexado plano
+ *
+ * @param array $result
+ * @return array
+ */
 private function map_products_to_sections( $result ) {
     $sections = array();
 
@@ -1176,8 +1177,132 @@ private function map_products_to_sections( $result ) {
         $result['productItems'] = $result;
     }
 
-    // ── Formato A: categories[] ─────────────────────────────────────────
-    if ( ! empty( $result['categories'] ) && is_array( $result['categories'] ) ) {
+    /**
+     * ── Formato C: serviceItems[] — Business Information API v1 (fuente actual).
+     * Se evalúa PRIMERO porque la respuesta v1 puede incluir también un objeto
+     * 'categories' (con primaryCategory, additionalCategories) que no debe
+     * confundirse con el Formato A de categorías de productos.
+     * Incluye lookup de serviceTypeId → displayName usando 'categories' de la misma respuesta.
+     */
+    if ( ! empty( $result['serviceItems'] ) && is_array( $result['serviceItems'] ) ) {
+
+        /**
+         * Construir lookup: serviceTypeId → { displayName, categoryName }
+         * a partir del objeto categories incluido cuando se solicitó
+         * readMask=serviceItems,categories.
+         *
+         * Estructura esperada de $result['categories']:
+         * {
+         *   "primaryCategory": { "displayName": "...", "serviceTypes": [{serviceTypeId, displayName}] },
+         *   "additionalCategories": [ { "displayName": "...", "serviceTypes": [...] } ]
+         * }
+         */
+        $service_type_lookup = array();
+        $categories_data     = $result['categories'] ?? array();
+
+        $all_categories = array();
+        if ( ! empty( $categories_data['primaryCategory'] ) && is_array( $categories_data['primaryCategory'] ) ) {
+            $all_categories[] = $categories_data['primaryCategory'];
+        }
+        if ( ! empty( $categories_data['additionalCategories'] ) && is_array( $categories_data['additionalCategories'] ) ) {
+            foreach ( $categories_data['additionalCategories'] as $add_cat ) {
+                if ( is_array( $add_cat ) ) {
+                    $all_categories[] = $add_cat;
+                }
+            }
+        }
+
+        foreach ( $all_categories as $cat ) {
+            $cat_display_name = sanitize_text_field( (string) ( $cat['displayName'] ?? '' ) );
+            if ( empty( $cat['serviceTypes'] ) || ! is_array( $cat['serviceTypes'] ) ) {
+                continue;
+            }
+            foreach ( $cat['serviceTypes'] as $stype ) {
+                $stype_id = (string) ( $stype['serviceTypeId'] ?? '' );
+                if ( '' === $stype_id ) {
+                    continue;
+                }
+                $service_type_lookup[ $stype_id ] = array(
+                    'displayName'  => sanitize_text_field( (string) ( $stype['displayName'] ?? '' ) ),
+                    'categoryName' => $cat_display_name,
+                );
+            }
+        }
+
+        $grouped = array();
+
+        foreach ( $result['serviceItems'] as $item ) {
+            if ( isset( $item['isOffered'] ) && false === $item['isOffered'] ) {
+                continue;
+            }
+
+            $mapped = $this->map_product_item( $item, $service_type_lookup );
+
+            if ( empty( $mapped['name'] ) ) {
+                continue;
+            }
+
+            // ── Determinar categoría del item ────────────────────────────
+            $category_name = '';
+
+            if ( isset( $item['freeFormServiceItem'] ) && is_array( $item['freeFormServiceItem'] ) ) {
+                // freeFormServiceItem.category = nombre de categoría libre definido por el negocio
+                if ( ! empty( $item['freeFormServiceItem']['category'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['freeFormServiceItem']['category'] );
+                }
+            } elseif ( isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ) {
+                // Para items estructurados, la categoría es el displayName de la categoría padre en GBP
+                $stype_id = (string) ( $item['structuredServiceItem']['serviceTypeId'] ?? '' );
+                if ( ! empty( $service_type_lookup[ $stype_id ]['categoryName'] ) ) {
+                    $category_name = $service_type_lookup[ $stype_id ]['categoryName'];
+                }
+            }
+
+            // Fallbacks para formatos legacy o alternativos
+            if ( '' === $category_name ) {
+                if ( ! empty( $item['serviceType'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['serviceType'] );
+                } elseif ( ! empty( $item['category'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['category'] );
+                } elseif ( ! empty( $item['categoryName'] ) ) {
+                    $category_name = sanitize_text_field( (string) $item['categoryName'] );
+                }
+            }
+
+            if ( '' === $category_name ) {
+                $category_name = __( 'Servicios', 'lealez' );
+            }
+
+            if ( ! isset( $grouped[ $category_name ] ) ) {
+                $grouped[ $category_name ] = array();
+            }
+
+            $grouped[ $category_name ][] = $mapped;
+        }
+
+        foreach ( $grouped as $cat_name => $items ) {
+            if ( ! empty( $items ) ) {
+                $sections[] = array(
+                    'name'     => $cat_name,
+                    'items'    => $items,
+                    'from_gmb' => 1,
+                );
+            }
+        }
+
+        return $sections;
+    }
+
+    /**
+     * ── Formato A: categories[] — formato retail legacy (array indexado de categorías).
+     *
+     * IMPORTANTE: solo aplica cuando categories es un array indexado (0, 1, 2...)
+     * de objetos de categoría con sus productos. NO aplica cuando categories es
+     * el objeto de Business Information API v1 (que tiene clave 'primaryCategory').
+     */
+    if ( ! empty( $result['categories'] ) && is_array( $result['categories'] )
+         && isset( $result['categories'][0] ) && is_array( $result['categories'][0] ) ) {
+
         foreach ( $result['categories'] as $category ) {
             if ( ! is_array( $category ) ) {
                 continue;
@@ -1250,113 +1375,6 @@ private function map_products_to_sections( $result ) {
             if ( ! empty( $items ) ) {
                 $sections[] = array(
                     'name'     => $category_name,
-                    'items'    => $items,
-                    'from_gmb' => 1,
-                );
-            }
-        }
-
-        return $sections;
-    }
-
-/**
-     * ── Formato C: serviceItems[] — Business Information API v1.
-     * Incluye datos de categorías para resolver structuredServiceItem displayNames.
-     */
-    if ( ! empty( $result['serviceItems'] ) && is_array( $result['serviceItems'] ) ) {
-
-        /**
-         * Construir lookup: serviceTypeId → { displayName, categoryName }
-         * a partir del objeto categories incluido en la respuesta
-         * cuando se solicitó readMask=serviceItems,categories.
-         */
-        $service_type_lookup = array();
-        $categories_data     = $result['categories'] ?? array();
-
-        $all_categories = array();
-        if ( ! empty( $categories_data['primaryCategory'] ) && is_array( $categories_data['primaryCategory'] ) ) {
-            $all_categories[] = $categories_data['primaryCategory'];
-        }
-        if ( ! empty( $categories_data['additionalCategories'] ) && is_array( $categories_data['additionalCategories'] ) ) {
-            foreach ( $categories_data['additionalCategories'] as $add_cat ) {
-                if ( is_array( $add_cat ) ) {
-                    $all_categories[] = $add_cat;
-                }
-            }
-        }
-
-        foreach ( $all_categories as $cat ) {
-            $cat_display_name = sanitize_text_field( (string) ( $cat['displayName'] ?? '' ) );
-            if ( empty( $cat['serviceTypes'] ) || ! is_array( $cat['serviceTypes'] ) ) {
-                continue;
-            }
-            foreach ( $cat['serviceTypes'] as $stype ) {
-                $stype_id = (string) ( $stype['serviceTypeId'] ?? '' );
-                if ( '' === $stype_id ) {
-                    continue;
-                }
-                $service_type_lookup[ $stype_id ] = array(
-                    'displayName'  => sanitize_text_field( (string) ( $stype['displayName'] ?? '' ) ),
-                    'categoryName' => $cat_display_name,
-                );
-            }
-        }
-
-        $grouped = array();
-
-        foreach ( $result['serviceItems'] as $item ) {
-            if ( isset( $item['isOffered'] ) && false === $item['isOffered'] ) {
-                continue;
-            }
-
-            $mapped = $this->map_product_item( $item, $service_type_lookup );
-
-            if ( empty( $mapped['name'] ) ) {
-                continue;
-            }
-
-            // ── Determinar categoría del item ────────────────────────────
-            $category_name = '';
-
-            if ( isset( $item['freeFormServiceItem'] ) && is_array( $item['freeFormServiceItem'] ) ) {
-                // freeFormServiceItem.category = nombre de categoría libre definido por el negocio
-                if ( ! empty( $item['freeFormServiceItem']['category'] ) ) {
-                    $category_name = sanitize_text_field( (string) $item['freeFormServiceItem']['category'] );
-                }
-            } elseif ( isset( $item['structuredServiceItem'] ) && is_array( $item['structuredServiceItem'] ) ) {
-                // Para items estructurados, la categoría es el displayName de la categoría padre
-                $stype_id = (string) ( $item['structuredServiceItem']['serviceTypeId'] ?? '' );
-                if ( ! empty( $service_type_lookup[ $stype_id ]['categoryName'] ) ) {
-                    $category_name = $service_type_lookup[ $stype_id ]['categoryName'];
-                }
-            }
-
-            // Fallbacks para formatos legacy
-            if ( '' === $category_name ) {
-                if ( ! empty( $item['serviceType'] ) ) {
-                    $category_name = sanitize_text_field( (string) $item['serviceType'] );
-                } elseif ( ! empty( $item['category'] ) ) {
-                    $category_name = sanitize_text_field( (string) $item['category'] );
-                } elseif ( ! empty( $item['categoryName'] ) ) {
-                    $category_name = sanitize_text_field( (string) $item['categoryName'] );
-                }
-            }
-
-            if ( '' === $category_name ) {
-                $category_name = __( 'Servicios', 'lealez' );
-            }
-
-            if ( ! isset( $grouped[ $category_name ] ) ) {
-                $grouped[ $category_name ] = array();
-            }
-
-            $grouped[ $category_name ][] = $mapped;
-        }
-
-        foreach ( $grouped as $cat_name => $items ) {
-            if ( ! empty( $items ) ) {
-                $sections[] = array(
-                    'name'     => $cat_name,
                     'items'    => $items,
                     'from_gmb' => 1,
                 );
