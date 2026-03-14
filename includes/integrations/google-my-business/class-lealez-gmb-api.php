@@ -2886,236 +2886,122 @@ return is_array( $result ) ? $result : array();
 
 
 /**
- * Obtiene los servicios de una ubicación desde Google My Business API v4 (services).
+ * Obtiene el catálogo de servicios/productos de una ubicación via Business Information API v1.
  *
- * Aplica para negocios de tipo servicio o producto (no restaurantes). Devuelve una
- * lista plana de servicios con nombre, descripción y precio, agrupables por categoría.
- *
- * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/services
+ * Usa get_location_services() que ahora llama al endpoint correcto:
+ *   GET /v1/locations/{locationId}?readMask=serviceItems
  *
  * @param int    $business_id   WP Post ID del oy_business.
- * @param string $account_id    Account ID numérico, "accounts/{id}", o resource name completo.
+ * @param string $account_id    Account ID (se pasa a get_location_services).
  * @param string $location_id   Location ID numérico, "locations/{id}", o resource name completo.
- * @param bool   $force_refresh Si true, ignora caché del rate limiter.
- * @return array|WP_Error  Array con clave 'services' (array) en caso de éxito.
+ * @param bool   $force_refresh Si true, ignora caché.
+ * @return array|WP_Error  Array con serviceItems en caso de éxito.
  */
-public static function get_location_services( $business_id, $account_id, $location_id, $force_refresh = false ) {
+public static function get_location_products( $business_id, $account_id, $location_id, $force_refresh = false ) {
     $business_id = absint( $business_id );
 
     if ( ! $business_id ) {
-        return new WP_Error( 'missing_params', __( 'Missing business_id for services.', 'lealez' ) );
+        return new WP_Error( 'missing_params', __( 'Missing business_id for products.', 'lealez' ) );
     }
 
-    // Normalizar account_id a numérico
-    $account_id_normalized = self::extract_account_id_from_name( (string) $account_id );
-    if ( '' === $account_id_normalized ) {
-        $account_id_normalized = trim( (string) $account_id, '/' );
-    }
-
-    // Normalizar location_id a numérico
-    $location_id_normalized = self::extract_location_id_from_any( (string) $location_id );
-    if ( '' === $location_id_normalized ) {
-        $location_id_normalized = trim( (string) $location_id, '/' );
-    }
-
-    if ( '' === $account_id_normalized || '' === $location_id_normalized ) {
+    if ( '' === trim( (string) $location_id ) ) {
         return new WP_Error(
             'missing_params',
-            __( 'Missing/invalid accountId or locationId for services.', 'lealez' ),
+            __( 'Missing/invalid locationId for products.', 'lealez' ),
             array(
-                'account_id_raw'         => $account_id,
-                'account_id_normalized'  => $account_id_normalized,
-                'location_id_raw'        => $location_id,
-                'location_id_normalized' => $location_id_normalized,
+                'location_id_raw' => $location_id,
             )
         );
     }
 
     /**
-     * Endpoint REST para servicios en GBP API v4:
-     *   GET /accounts/{accountId}/locations/{locationId}/serviceList
-     *
-     * REQUISITO: en Google Cloud Console debe estar habilitada la API
-     * "Google My Business API" (la v4 legacy), no solo "Business Profile API".
-     * Sin ese permiso, el endpoint retorna HTML 404 en lugar de JSON.
+     * Delegar a get_location_services(), que usa Business Information API v1
+     * con readMask=serviceItems — el endpoint correcto según la documentación.
      */
-    $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
-                . '/locations/' . rawurlencode( $location_id_normalized )
-                . '/serviceList';
+    $service_list = self::get_location_services(
+        $business_id,
+        $account_id,
+        $location_id,
+        $force_refresh
+    );
 
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'info',
-            'Fetching serviceList (GMB API v4).',
+    // Error real de API
+    if ( is_wp_error( $service_list ) ) {
+        $err_data  = $service_list->get_error_data();
+        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[Lealez GMB] get_location_products — error desde get_location_services: HTTP ' .
+                $http_code . ' — ' . $service_list->get_error_message()
+            );
+        }
+
+        return new WP_Error(
+            'products_api_error',
+            sprintf(
+                __( 'Error al consultar servicios de Google Business Profile (HTTP %1$d): %2$s', 'lealez' ),
+                $http_code,
+                $service_list->get_error_message()
+            ),
             array(
-                'account_id'    => $account_id_normalized,
-                'location_id'   => $location_id_normalized,
-                'endpoint'      => self::$mybusiness_v4_base . $endpoint,
-                'force_refresh' => $force_refresh ? 'yes' : 'no',
+                'code'        => $http_code,
+                'location_id' => $location_id,
+                'source'      => 'business_information_api_v1',
+                'previous'    => array(
+                    'error_code' => $service_list->get_error_code(),
+                    'message'    => $service_list->get_error_message(),
+                    'data'       => $service_list->get_error_data(),
+                ),
             )
         );
     }
 
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[Lealez GMB] get_location_services — endpoint: ' . self::$mybusiness_v4_base . $endpoint );
-    }
-
-    $result = self::make_request(
-        $business_id,
-        $endpoint,
-        self::$mybusiness_v4_base,
-        'GET',
-        array(),
-        ! $force_refresh,
-        array()
-    );
-
-    if ( is_wp_error( $result ) ) {
-        $err_data  = $result->get_error_data();
-        $http_code = is_array( $err_data ) ? (int) ( $err_data['code'] ?? 0 ) : 0;
-        $raw_body  = is_array( $err_data ) ? (string) ( $err_data['raw_body'] ?? '' ) : '';
-
-        if ( 404 === $http_code ) {
-            /**
-             * Distinguir entre dos tipos de 404:
-             *
-             * 1. JSON 404 ({"error":{"code":404,"status":"NOT_FOUND"}})
-             *    → El endpoint existe pero el recurso serviceList no existe para
-             *      esta ubicación (nunca se guardaron servicios en GBP).
-             *      Esto es normal y esperado.
-             *
-             * 2. HTML 404 (<!DOCTYPE html>... Error 404 Not Found)
-             *    → El endpoint en sí no está disponible para este proyecto/cuenta.
-             *      Causa más común: la API "Google My Business" no está habilitada
-             *      en Google Cloud Console (solo está "Business Profile API").
-             *      O la cuenta no tiene acceso avanzado a la API v4.
-             */
-            $is_html_response = (
-                stripos( $raw_body, '<!doctype' ) !== false ||
-                stripos( $raw_body, '<html' ) !== false
-            );
-
-            if ( $is_html_response ) {
-                // HTML 404 = endpoint inaccesible, problema de credenciales/habilitación
-                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                    Lealez_GMB_Logger::log(
-                        $business_id,
-                        'error',
-                        'get_location_services HTML 404 — el endpoint /serviceList no está accesible para esta cuenta. Verifica que "Google My Business API" (v4) esté habilitada en Google Cloud Console.',
-                        array(
-                            'account_id'  => $account_id_normalized,
-                            'location_id' => $location_id_normalized,
-                            'endpoint'    => self::$mybusiness_v4_base . $endpoint,
-                        )
-                    );
-                }
-
-                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                    error_log( '[Lealez GMB] get_location_services HTML 404 — endpoint inaccesible. El proyecto de Google Cloud probablemente no tiene habilitada "Google My Business API". URL: ' . self::$mybusiness_v4_base . $endpoint );
-                }
-
-                return new WP_Error(
-                    'service_list_endpoint_unavailable',
-                    __( 'El endpoint /serviceList no está accesible para este proyecto de Google Cloud.', 'lealez' ),
-                    array(
-                        'code'        => 404,
-                        'html_404'    => true,
-                        'account_id'  => $account_id_normalized,
-                        'location_id' => $location_id_normalized,
-                        'endpoint'    => self::$mybusiness_v4_base . $endpoint,
-                    )
-                );
-            }
-
-            // JSON 404 = recurso no existe todavía (normal para ubicaciones nuevas sin servicios)
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'info',
-                    'serviceList devolvió JSON 404 — esta ubicación aún no tiene lista de servicios guardada en GBP.',
-                    array(
-                        'account_id'  => $account_id_normalized,
-                        'location_id' => $location_id_normalized,
-                    )
-                );
-            }
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[Lealez GMB] get_location_services JSON 404 — sin serviceList todavía para esta ubicación (esperado si nunca se guardaron servicios en GBP).' );
-            }
-
-            // Flag interno: recurso vacío, no es error técnico
-            return array( '_gmb_no_service_list' => true );
-        }
-
-        // Otros errores reales (401, 403, 500, etc.)
+    /**
+     * La ubicación respondió pero no tiene serviceItems.
+     * Puede ser que canModifyServiceList=false para esta categoría de negocio,
+     * o que aún no tenga servicios configurados en GBP.
+     */
+    if ( empty( $service_list['serviceItems'] ) ) {
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
-                'error',
-                'get_location_services failed (HTTP ' . $http_code . '): ' . $result->get_error_message(),
-                array(
-                    'account_id'  => $account_id_normalized,
-                    'location_id' => $location_id_normalized,
-                    'error_code'  => $result->get_error_code(),
-                    'http_code'   => $http_code,
-                    'hint'        => 'El endpoint REST documentado para servicios en Business Profile v4 es /serviceList.',
-                )
+                'info',
+                'get_location_products: la ubicación no tiene serviceItems en su perfil de GBP.',
+                array( 'location_id' => $location_id )
             );
         }
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[Lealez GMB] get_location_services ERROR (HTTP ' . $http_code . '): ' . $result->get_error_message() );
-            if ( ! empty( $raw_body ) ) {
-                error_log( '[Lealez GMB] get_location_services HTTP_CODE: ' . $http_code );
-                error_log( '[Lealez GMB] get_location_services RAW_BODY: ' . substr( $raw_body, 0, 2000 ) );
-            }
+            error_log( '[Lealez GMB] get_location_products — sin serviceItems para esta ubicación.' );
         }
 
-        return $result;
-    }
-
-    /**
-     * La respuesta de Google para serviceList no viene como "services",
-     * sino con un objeto ServiceList que contiene serviceItems.
-     * Aquí no alteramos el payload crudo; solo lo devolvemos normalizado a array.
-     */
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        $items_count = 0;
-
-        if ( ! empty( $result['serviceItems'] ) && is_array( $result['serviceItems'] ) ) {
-            $items_count = count( $result['serviceItems'] );
-        } elseif ( ! empty( $result['sections'] ) && is_array( $result['sections'] ) ) {
-            foreach ( $result['sections'] as $section ) {
-                $items_count += count( $section['serviceItems'] ?? array() );
-                $items_count += count( $section['items'] ?? array() );
-            }
-        }
-
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'success',
-            sprintf(
-                'serviceList fetched: %d service item(s) found. Response keys: %s',
-                $items_count,
-                wp_json_encode( array_keys( $result ) )
-            ),
+        return new WP_Error(
+            'no_service_list_yet',
+            __( 'Esta ubicación aún no tiene servicios configurados en Google Business Profile, o la categoría del negocio no soporta la lista de servicios (canModifyServiceList=false).', 'lealez' ),
             array(
-                'account_id'    => $account_id_normalized,
-                'location_id'   => $location_id_normalized,
-                'response_keys' => array_keys( $result ),
+                'code'        => 404,
+                'location_id' => $location_id,
             )
         );
     }
 
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        $res_keys = is_array( $result ) ? array_keys( $result ) : 'not-array';
-        error_log( '[Lealez GMB] get_location_services RESPONSE — HTTP OK — keys: ' . wp_json_encode( $res_keys ) );
-        error_log( '[Lealez GMB] get_location_services RAW (first 2000 chars): ' . substr( wp_json_encode( $result ), 0, 2000 ) );
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf(
+                'get_location_products OK via Business Information API v1: %d serviceItem(s) encontrado(s).',
+                count( $service_list['serviceItems'] )
+            ),
+            array(
+                'location_id'    => $location_id,
+                'response_keys'  => array_keys( $service_list ),
+            )
+        );
     }
 
-    return is_array( $result ) ? $result : array();
+    return $service_list;
 }
 
 
