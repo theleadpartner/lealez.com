@@ -130,7 +130,7 @@ class OY_Location_GMB_Integration_Metabox {
         $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
         $account_name  = $business_id ? (string) get_post_meta( $business_id, 'gmb_account_name', true ) : '';
 
-        // ── Nonces para todos los sub-handlers ──────────────────────────────
+// ── Nonces para todos los sub-handlers ──────────────────────────────
         // Cada metabox verifica su propio nonce — generamos todos aquí para el JS
         $nonces = array(
             'main'        => wp_create_nonce( self::AJAX_NONCE_ACTION ),
@@ -141,6 +141,7 @@ class OY_Location_GMB_Integration_Metabox {
             'keywords'    => wp_create_nonce( 'oy_gmb_keywords_nonce' ),
             'reviews'     => wp_create_nonce( 'oy_gmb_reviews_nonce' ),
             'posts'       => wp_create_nonce( 'oy_gmb_posts_nonce' ),
+            'services'    => wp_create_nonce( 'oy_location_gmb_ajax' ),
             'busyhours'   => wp_create_nonce( 'oy_gmb_busyhours_nonce' ),
         );
 
@@ -311,7 +312,7 @@ class OY_Location_GMB_Integration_Metabox {
                     <div class="oy-progress-fill" id="oy-progress-fill"></div>
                 </div>
                 <ul class="oy-sync-steps" id="oy-sync-steps">
-                    <li id="oy-step-import">
+<li id="oy-step-import">
                         <em class="oy-step-icon">⏳</em>
                         <span class="oy-step-label"><?php _e( 'Importar datos base', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
                     </li>
@@ -342,6 +343,10 @@ class OY_Location_GMB_Integration_Metabox {
                     <li id="oy-step-menus">
                         <em class="oy-step-icon">⏳</em>
                         <span class="oy-step-label"><?php _e( 'Menú de comida', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
+                    </li>
+                    <li id="oy-step-services">
+                        <em class="oy-step-icon">⏳</em>
+                        <span class="oy-step-label"><?php _e( 'Catálogo de servicios', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
                     </li>
                     <li id="oy-step-busyhours">
                         <em class="oy-step-icon">⏳</em>
@@ -462,7 +467,7 @@ class OY_Location_GMB_Integration_Metabox {
 
             // ── Definición de los 8 pasos ──────────────────────────────────────
             // Cada paso puede ser 'single' (una llamada) o 'multi' (lógica propia)
-            var TOTAL_STEPS = 9;
+           var TOTAL_STEPS = 10;
 
             // ── Helper: actualizar estado visual de un paso ───────────────────
             function setStep(id, state, msg) {
@@ -529,8 +534,8 @@ class OY_Location_GMB_Integration_Metabox {
                 $('#oy-sync-global-msg').text('<?php echo esc_js( __( 'Iniciando sincronización...', 'lealez' ) ); ?>').css('color','#555');
                 setProgress(0);
 
-                // Resetear todos los pasos
-                ['import','hours','more','perf','keywords','reviews','posts','menus','busyhours'].forEach(function(id){
+// Resetear todos los pasos
+                ['import','hours','more','perf','keywords','reviews','posts','menus','services','busyhours'].forEach(function(id){
                     setStep(id, 'pending', '');
                 });
 
@@ -710,7 +715,31 @@ class OY_Location_GMB_Integration_Metabox {
                     return def.promise();
                 });
 
-// ── PASO 9: Horario de mayor interés (compute → save) ──────────
+// ── PASO 9: Catálogo de servicios ─────────────────────────────────
+                chain = chain.then(function(){
+                    setStep('services', 'running', '<?php echo esc_js( __( 'sincronizando...', 'lealez' ) ); ?>');
+                    var def = $.Deferred();
+                    doAjax('oy_sync_location_products', baseData, 'nonce', nonces.services)
+                    .done(function(r){
+                        var ok = r && r.success;
+                        stepResults.services = ok ? 'ok' : 'error';
+                        var msg = ok
+                            ? (r.data && r.data.message ? r.data.message : '<?php echo esc_js( __( 'sincronizados', 'lealez' ) ); ?>')
+                            : errMsg(r);
+                        setStep('services', ok ? 'ok' : 'error', msg);
+                        // Notificar al metabox de servicios para que actualice su UI
+                        if ( ok ) { $(document).trigger('oy:gmb:services:refreshed', [r.data || {}]); }
+                        doneCount++; setProgress(doneCount); def.resolve();
+                    })
+                    .fail(function(){
+                        stepResults.services = 'error';
+                        setStep('services', 'error', '<?php echo esc_js( __( 'error de red', 'lealez' ) ); ?>');
+                        doneCount++; setProgress(doneCount); def.resolve();
+                    });
+                    return def.promise();
+                });
+
+// ── PASO 10: Horario de mayor interés (compute → save) ─────────
                 chain = chain.then(function(){
                     setStep('busyhours', 'running', '<?php echo esc_js( __( 'calculando...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
@@ -914,14 +943,16 @@ class OY_Location_GMB_Integration_Metabox {
         $entries = array_reverse( $log );
         $entries = array_slice( $entries, 0, 20 );
 
-        $step_labels = array(
+$step_labels = array(
             'import'    => __( 'Base', 'lealez' ),
             'hours'     => __( 'Horarios', 'lealez' ),
             'more'      => __( 'Atributos', 'lealez' ),
             'perf'      => __( 'Métricas', 'lealez' ),
             'keywords'  => __( 'Keywords', 'lealez' ),
             'reviews'   => __( 'Reseñas', 'lealez' ),
+            'posts'     => __( 'Publicaciones', 'lealez' ),
             'menus'     => __( 'Menú', 'lealez' ),
+            'services'  => __( 'Servicios', 'lealez' ),
             'busyhours' => __( 'Pico', 'lealez' ),
         );
 
