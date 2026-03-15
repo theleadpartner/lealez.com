@@ -502,7 +502,7 @@ public function add_meta_box() {
                 });
             }
 
-            // ── Sincronizar catálogo desde GMB ──────────────────────────
+// ── Sincronizar catálogo desde GMB ──────────────────────────
             $('#oy-sync-products-btn').on('click', function(){
                 var $btn    = $(this);
                 var $status = $('#oy-sync-products-status');
@@ -532,6 +532,8 @@ public function add_meta_box() {
                         var d   = resp.data || {};
                         var msg = d.message || '<?php echo esc_js( __( 'Completado.', 'lealez' ) ); ?>';
                         $status.html('<span style="color:#2e7d32;font-weight:600;">' + $('<div>').text(msg).html() + '</span>');
+                        // Disparar evento para que el pipeline de integración (u otros componentes) pueda reaccionar
+                        $(document).trigger('oy:gmb:services:refreshed', [d]);
                         setTimeout(function(){ window.location.reload(); }, 1500);
                     } else {
                         var msg = ( resp && resp.data && resp.data.message )
@@ -545,6 +547,34 @@ public function add_meta_box() {
                     $status.html('<span style="color:#c0392b;"><?php echo esc_js( __( 'Error de red. Verifica la conexión e intenta de nuevo.', 'lealez' ) ); ?></span>');
                     $btn.prop('disabled', false).text('🔄 <?php echo esc_js( __( 'Sincronizar desde Google', 'lealez' ) ); ?>');
                 });
+            });
+
+            // ── Escuchar evento oy:gmb:services:refreshed ───────────────
+            // Disparado por: (a) este mismo botón tras sync exitoso,
+            //                (b) el pipeline de integración GMB (PASO 9).
+            // Actualiza el estado visual del botón sin recargar la página
+            // cuando el trigger proviene del pipeline (que ya maneja su propio reload).
+            $(document).on('oy:gmb:services:refreshed', function( e, data ){
+                var $btn    = $('#oy-sync-products-btn');
+                var $status = $('#oy-sync-products-status');
+
+                // Solo actualizar si el evento proviene del pipeline (el botón ya
+                // gestiona su propio feedback antes del reload).
+                // Detectamos el origen: si el botón está habilitado, el evento
+                // vino del pipeline (el botón manual se deshabilita antes del AJAX).
+                if ( $btn.prop('disabled') && $btn.text().indexOf('⏳') === -1 ) {
+                    return; // El sync manual ya está manejando su propio feedback
+                }
+
+                var msg = ( data && data.message )
+                    ? data.message
+                    : '<?php echo esc_js( __( 'Servicios sincronizados desde el pipeline GMB.', 'lealez' ) ); ?>';
+
+                $status.html(
+                    '<span style="color:#2e7d32;font-weight:600;">' +
+                    $('<div>').text(msg).html() +
+                    '</span>'
+                );
             });
 
         })(jQuery);
