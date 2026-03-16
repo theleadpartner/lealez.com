@@ -790,6 +790,35 @@ private static function make_request( $business_id, $endpoint, $api_base, $metho
 
 
 
+// =====================================================================
+// PUBLIC WRAPPER: make_writer_request()
+// Expone make_request() para uso externo (Lealez_GMB_Writer y similares).
+// El Writer ya construye la URL completa (base + path + querystring),
+// por lo que se recibe como $full_url y se asigna a $api_base dejando
+// $endpoint vacío; internamente: $url = $api_base . $endpoint = $full_url.
+// =====================================================================
+
+/**
+ * Punto de entrada público para llamadas HTTP escritas desde clases externas.
+ * Utilizado exclusivamente por Lealez_GMB_Writer.
+ *
+ * @param int    $business_id  ID del oy_business (para OAuth y rate limiting).
+ * @param string $method       Método HTTP: 'GET', 'POST', 'PATCH', 'DELETE'.
+ * @param string $full_url     URL completa del endpoint (base + path + querystring).
+ * @param array  $body         Cuerpo JSON de la solicitud (para POST/PATCH).
+ * @param bool   $use_cache    Si se debe usar caché (solo aplica en GET).
+ *
+ * @return array|WP_Error
+ */
+public static function make_writer_request( $business_id, $method, $full_url, $body = array(), $use_cache = false ) {
+    // make_request( $business_id, $endpoint, $api_base, $method, $body, $use_cache, $query_args )
+    // Pasamos $api_base = $full_url y $endpoint = '' para que:
+    //   $url = $api_base . $endpoint = $full_url . '' = $full_url
+    return self::make_request( $business_id, '', $full_url, $method, $body, $use_cache );
+}
+    
+    
+
     /**
      * Get accounts (with aggressive caching)
      *
