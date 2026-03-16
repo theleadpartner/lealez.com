@@ -1441,8 +1441,25 @@ public function ajax_push_hours_to_gmb() {
         wp_send_json_error( array( 'message' => __( 'Sin permisos para editar este post.', 'lealez' ) ) );
     }
 
+    // ── Cargar Lealez_GMB_Writer bajo demanda si no está disponible ──────
     if ( ! class_exists( 'Lealez_GMB_Writer' ) ) {
-        wp_send_json_error( array( 'message' => __( 'La clase Lealez_GMB_Writer no está disponible. Verifica que el archivo class-lealez-gmb-writer.php esté cargado.', 'lealez' ) ) );
+        $writer_file = defined( 'LEALEZ_PLUGIN_DIR' )
+            ? LEALEZ_PLUGIN_DIR . 'includes/class-lealez-gmb-writer.php'
+            : '';
+        if ( $writer_file && file_exists( $writer_file ) ) {
+            require_once $writer_file;
+        }
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[OY Hours Push] Intentó cargar Lealez_GMB_Writer — archivo=' . $writer_file .
+                ' | existe_archivo=' . ( $writer_file && file_exists( $writer_file ) ? 'SI' : 'NO' ) .
+                ' | clase_cargada=' . ( class_exists( 'Lealez_GMB_Writer' ) ? 'SI' : 'NO' )
+            );
+        }
+    }
+
+    if ( ! class_exists( 'Lealez_GMB_Writer' ) ) {
+        wp_send_json_error( array( 'message' => __( 'La clase Lealez_GMB_Writer no está disponible. Verifica la instalación del plugin.', 'lealez' ) ) );
     }
 
     // ── Estado operativo ─────────────────────────────────────────────────
