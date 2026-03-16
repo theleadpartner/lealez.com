@@ -283,6 +283,29 @@ $gmb_integration_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-
             new OY_Location_GMB_Integration_Metabox();
         }
     }
+
+
+/**
+     * ✅ Metabox externo: Perfil Principal de Google Business Profile
+     * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-profile-metabox.php
+     *
+     * Permite visualizar y enviar a Google los campos principales del perfil:
+     * nombre (title), teléfonos, sitio web, descripción y categorías.
+     * Escritura delegada a Lealez_GMB_Writer::update_location_core().
+     * Historial de cambios renderizado desde '_gmb_writer_log'.
+     * AJAX propio: oy_gmb_profile_push_core, oy_gmb_profile_log_clear
+     *
+     * Sin save_post hook propio — el CPT ya guarda todos los campos.
+     */
+    $profile_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-gmb-profile-metabox.php';
+    if ( file_exists( $profile_metabox_file ) ) {
+        require_once $profile_metabox_file;
+
+        if ( class_exists( 'OY_Location_GMB_Profile_Metabox' ) ) {
+            new OY_Location_GMB_Profile_Metabox();
+        }
+    }
+    
 }
 
 
