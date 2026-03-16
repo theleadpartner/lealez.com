@@ -174,7 +174,7 @@ public function render_metabox( $post ) {
     }, $special_hours ) ) );
 
     ?>
-    <?php /* ── BARRA DE SINCRONIZACIÓN PROPIA ── */ ?>
+<?php /* ── BARRA DE SINCRONIZACIÓN PROPIA ── */ ?>
     <div id="oy-hours-sync-bar" style="background:#f0f6fc; border:1px solid #c3d4e4; border-radius:4px; padding:10px 14px; margin-bottom:14px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <span style="font-weight:600; color:#1d5b8e;">
             <span class="dashicons dashicons-clock" style="vertical-align:middle;"></span>
@@ -185,7 +185,8 @@ public function render_metabox( $post ) {
                 id="oy-hours-sync-btn"
                 class="button button-secondary"
                 <?php echo ( $parent_business_id && $gmb_location_name ) ? '' : 'disabled'; ?>
-                style="margin-left:auto;">
+                style="margin-left:auto;"
+                title="<?php esc_attr_e( 'Lee los horarios actuales desde Google y los carga en el formulario. No modifica GMB.', 'lealez' ); ?>">
             <span class="dashicons dashicons-update" style="vertical-align:middle; margin-top:2px;"></span>
             <?php _e( 'Sincronizar Horario desde GMB', 'lealez' ); ?>
         </button>
@@ -194,7 +195,8 @@ public function render_metabox( $post ) {
                 id="oy-hours-push-btn"
                 class="button"
                 style="background:#2271b1; color:#fff; border-color:#2271b1;"
-                <?php echo ( $parent_business_id && $gmb_location_name ) ? '' : 'disabled'; ?>>
+                <?php echo ( $parent_business_id && $gmb_location_name ) ? '' : 'disabled'; ?>
+                title="<?php esc_attr_e( 'Envía los horarios GUARDADOS del post a Google. Guarda el post primero si hiciste cambios.', 'lealez' ); ?>">
             <span class="dashicons dashicons-upload" style="vertical-align:middle; margin-top:2px;"></span>
             <?php _e( 'Enviar Horarios a GMB', 'lealez' ); ?>
         </button>
@@ -208,6 +210,13 @@ public function render_metabox( $post ) {
         <div id="oy-hours-push-lastinfo" style="flex-basis:100%; font-size:12px; color:#666; margin-top:-4px;">
             <?php echo esc_html( $last_push_label ); ?>
         </div>
+
+        <?php if ( $parent_business_id && $gmb_location_name ) : ?>
+        <div style="flex-basis:100%; background:#fff3cd; border-left:3px solid #ffc107; padding:7px 10px; font-size:12px; color:#664d03; border-radius:0 3px 3px 0; margin-top:2px; line-height:1.5;">
+            <span class="dashicons dashicons-info" style="vertical-align:middle; font-size:14px;"></span>
+            <?php _e( '<strong>Importante:</strong> "Enviar Horarios a GMB" publica los horarios <em>guardados</em> del post en Google. Si modificaste los horarios arriba, primero haz clic en <strong>Actualizar</strong> para guardar los cambios, y luego usa este botón.', 'lealez' ); ?>
+        </div>
+        <?php endif; ?>
     </div>
 
     <?php /* ── ZONA HORARIA ── */ ?>
@@ -808,7 +817,7 @@ public function render_metabox( $post ) {
                 return;
             }
 
-            if (!confirm('<?php echo esc_js( __( '¿Estás seguro de que deseas enviar los horarios guardados a Google My Business? Esto sobreescribirá los horarios actuales en GMB.', 'lealez' ) ); ?>')) {
+if (!confirm('<?php echo esc_js( __( "IMPORTANTE: Este botón envía a Google los horarios GUARDADOS del post.\n\nSi acabas de modificar los horarios en el formulario pero aún no has hecho clic en \"Actualizar\", los cambios NO se reflejarán en GMB.\n\n¿Los horarios que deseas enviar ya están guardados en el post?", 'lealez' ) ); ?>')) {
                 return;
             }
 
@@ -838,6 +847,14 @@ public function render_metabox( $post ) {
                         $last.text('<?php echo esc_js( __( 'Último envío a GMB: ', 'lealez' ) ); ?>' + d.sent_at);
                     }
                     $msg.html('<span style="color:#46b450;">✓ ' + (d.message ? d.message : '<?php echo esc_js( __( 'Horarios enviados.', 'lealez' ) ); ?>') + '</span>');
+
+                    <?php /* ✅ Refrescar el log del metabox de perfil si está visible en la página */ ?>
+                    if (d.log_html && $('#oy-gmb-profile-log-wrap').length) {
+                        $('#oy-gmb-profile-log-wrap').html(d.log_html);
+                        <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+                        console.log('[OY Hours Push] Log del metabox de perfil actualizado.');
+                        <?php endif; ?>
+                    }
                 },
                 error: function(xhr, status, err) {
                     $btn.prop('disabled', false);
@@ -1406,10 +1423,6 @@ public function render_metabox( $post ) {
 // AJAX: Enviar horarios locales hacia GMB (escritura bidireccional)
 // ─────────────────────────────────────────────────────────────────────────
 
-/**
- * Construye los objetos regularHours, specialHours y openInfo desde la
- * meta local del post y los envía a Google vía Lealez_GMB_Writer.
- */
 public function ajax_push_hours_to_gmb() {
 
     $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
@@ -1468,32 +1481,46 @@ public function ajax_push_hours_to_gmb() {
         $hours_status = 'open_with_hours';
     }
 
-    // ── Construir openInfo ───────────────────────────────────────────────
-    $status_map = array(
-        'open_with_hours'    => 'OPEN',
-        'open_without_hours' => 'OPEN',
-        'temporarily_closed' => 'CLOSED_TEMPORARILY',
-        'permanently_closed' => 'CLOSED_PERMANENTLY',
-    );
-    $gmb_status = isset( $status_map[ $hours_status ] ) ? $status_map[ $hours_status ] : 'OPEN';
-    $open_info  = array( 'status' => $gmb_status );
-
-    // ── Construir regularHours (solo cuando hay horarios activos) ────────
+    // ── Construir regularHours y openInfo según el estado ────────────────
+    //
+    // Lógica de envío:
+    //
+    //  open_with_hours    → SOLO regularHours con los períodos guardados.
+    //                       No se toca openInfo (evita sobrescribir openingDate en Google).
+    //
+    //  open_without_hours → openInfo.status = OPEN  +  regularHours vacío (borra turnos en GMB).
+    //
+    //  temporarily_closed → openInfo.status = CLOSED_TEMPORARILY  (sin regularHours).
+    //
+    //  permanently_closed → openInfo.status = CLOSED_PERMANENTLY   (sin regularHours).
+    //
     $regular_hours = null;
+    $open_info     = null;
+
     if ( 'open_with_hours' === $hours_status ) {
         $regular_hours = $this->build_regular_hours_for_gmb( $post_id );
+
+    } elseif ( 'open_without_hours' === $hours_status ) {
+        $open_info     = array( 'status' => 'OPEN' );
+        $regular_hours = array( 'periods' => array() ); // borra todos los turnos en GMB
+
+    } elseif ( 'temporarily_closed' === $hours_status ) {
+        $open_info = array( 'status' => 'CLOSED_TEMPORARILY' );
+
+    } elseif ( 'permanently_closed' === $hours_status ) {
+        $open_info = array( 'status' => 'CLOSED_PERMANENTLY' );
     }
 
-    // ── Construir specialHours (siempre, si existen) ─────────────────────
+    // ── Construir specialHours (siempre, si existen en meta) ─────────────
     $special_hours = $this->build_special_hours_for_gmb( $post_id );
 
-    // ── Llamar al writer ─────────────────────────────────────────────────
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
         error_log(
             '[OY Hours Push] Llamando a Lealez_GMB_Writer::update_location_hours' .
             ' | hours_status=' . $hours_status .
             ' | regular_periods=' . ( is_array( $regular_hours ) && isset( $regular_hours['periods'] ) ? count( $regular_hours['periods'] ) : 'null' ) .
-            ' | special_periods=' . ( is_array( $special_hours ) && isset( $special_hours['specialHourPeriods'] ) ? count( $special_hours['specialHourPeriods'] ) : 'null' )
+            ' | special_periods=' . ( is_array( $special_hours ) && isset( $special_hours['specialHourPeriods'] ) ? count( $special_hours['specialHourPeriods'] ) : 'null' ) .
+            ' | open_info=' . ( is_array( $open_info ) ? wp_json_encode( $open_info ) : 'null' )
         );
     }
 
@@ -1528,10 +1555,22 @@ public function ajax_push_hours_to_gmb() {
         );
     }
 
+    // ── Intentar construir log_html para refrescar el panel de perfil GMB ──
+    // OY_Location_GMB_Profile_Metabox::render_log_table() es public desde la
+    // corrección aplicada en class-oy-location-gmb-profile-metabox.php.
+    $log_html = null;
+    if ( class_exists( 'OY_Location_GMB_Profile_Metabox' ) ) {
+        $profile_metabox = new OY_Location_GMB_Profile_Metabox();
+        if ( method_exists( $profile_metabox, 'render_log_table' ) ) {
+            $log_html = $profile_metabox->render_log_table( $post_id );
+        }
+    }
+
     wp_send_json_success( array(
-        'message' => __( 'Horarios enviados a GMB correctamente.', 'lealez' ),
-        'mask'    => isset( $result['mask'] ) ? $result['mask'] : array(),
-        'sent_at' => $sent_at,
+        'message'  => __( 'Horarios enviados a GMB correctamente.', 'lealez' ),
+        'mask'     => isset( $result['mask'] ) ? $result['mask'] : array(),
+        'sent_at'  => $sent_at,
+        'log_html' => $log_html,
     ) );
 }
 
