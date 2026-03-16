@@ -276,6 +276,22 @@ public function render_metabox( $post ) {
             foreach ( $time_options as $tv => $tl ) { $js_opts[] = array( 'value' => $tv, 'label' => $tl ); }
             echo wp_json_encode( $js_opts );
         ?>;
+
+        /**
+         * Valores PHP horneados directamente en el render.
+         * Los usamos como fuente primaria en los handlers de botón porque
+         * #gmb_location_name es un <select> que se puebla vía AJAX asíncrono
+         * (loadLocationsForBusiness) y puede estar vacío al momento del clic.
+         */
+        var oyHoursPhpData = {
+            postId       : <?php echo intval( $post->ID ); ?>,
+            businessId   : <?php echo intval( $parent_business_id ); ?>,
+            locationName : '<?php echo esc_js( (string) $gmb_location_name ); ?>'
+        };
+
+        <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+        console.log( '[OY Hours] oyHoursPhpData al render:', oyHoursPhpData );
+        <?php endif; ?>
         var oyHoursI18n = {
             addPeriod:    '<?php echo esc_js( __( 'Agregar otro turno', 'lealez' ) ); ?>',
             removePeriod: '<?php echo esc_js( __( 'Eliminar turno', 'lealez' ) ); ?>',
@@ -680,12 +696,25 @@ public function render_metabox( $post ) {
             var $btn   = $(this);
             var $msg   = $('#oy-hours-sync-msg');
             var $last  = $('#oy-hours-sync-lastinfo');
-            var postId = $('#post_ID').val();
-            var bizId  = $('#parent_business_id').val();
-            var locName= $('#gmb_location_name').val();
+
+            // ── Fuente primaria: valores PHP horneados al render.
+            // ── Fallback: leer del DOM (por si el usuario cambió la empresa/ubicación
+            //    en la sesión actual sin recargar la página).
+            var postId  = oyHoursPhpData.postId      || $('#post_ID').val();
+            var bizId   = (oyHoursPhpData.businessId && oyHoursPhpData.businessId !== 0)
+                            ? oyHoursPhpData.businessId
+                            : $('#parent_business_id').val();
+            var locName = oyHoursPhpData.locationName || $('#gmb_location_name').val();
+
+            <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+            console.log( '[OY Hours Sync] postId:', postId, '| bizId:', bizId, '| locName:', locName );
+            <?php endif; ?>
 
             if (!postId || !bizId || !locName) {
                 $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Selecciona la empresa y la ubicación GMB primero.', 'lealez' ) ); ?></span>');
+                <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+                console.warn('[OY Hours Sync] Validación JS fallida — postId:', postId, 'bizId:', bizId, 'locName:', locName);
+                <?php endif; ?>
                 return;
             }
 
@@ -727,7 +756,7 @@ public function render_metabox( $post ) {
                         }
                     }
 
-                    // ✅ Nuevo: Horario especial
+                    // ✅ Horario especial
                     if (d.special_hours && Array.isArray(d.special_hours)) {
                         rebuildSpecialHours(d.special_hours);
                     }
@@ -740,9 +769,12 @@ public function render_metabox( $post ) {
 
                     $msg.html('<span style="color:#46b450;">✓ ' + (d.message ? d.message : '<?php echo esc_js( __( 'Horarios sincronizados', 'lealez' ) ); ?>') + '</span>');
                 },
-                error: function() {
+                error: function(xhr, status, err) {
                     $btn.prop('disabled', false);
                     $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Error de conexión al sincronizar.', 'lealez' ) ); ?></span>');
+                    <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+                    console.error('[OY Hours Sync] AJAX error:', status, err);
+                    <?php endif; ?>
                 }
             });
         });
@@ -755,12 +787,24 @@ public function render_metabox( $post ) {
             var $btn    = $(this);
             var $msg    = $('#oy-hours-push-msg');
             var $last   = $('#oy-hours-push-lastinfo');
-            var postId  = $('#post_ID').val();
-            var bizId   = $('#parent_business_id').val();
-            var locName = $('#gmb_location_name').val();
+
+            // ── Fuente primaria: valores PHP horneados al render.
+            // ── Fallback: leer del DOM.
+            var postId  = oyHoursPhpData.postId      || $('#post_ID').val();
+            var bizId   = (oyHoursPhpData.businessId && oyHoursPhpData.businessId !== 0)
+                            ? oyHoursPhpData.businessId
+                            : $('#parent_business_id').val();
+            var locName = oyHoursPhpData.locationName || $('#gmb_location_name').val();
+
+            <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+            console.log( '[OY Hours Push] postId:', postId, '| bizId:', bizId, '| locName:', locName );
+            <?php endif; ?>
 
             if (!postId || !bizId || !locName) {
                 $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Selecciona la empresa y la ubicación GMB primero.', 'lealez' ) ); ?></span>');
+                <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+                console.warn('[OY Hours Push] Validación JS fallida — postId:', postId, 'bizId:', bizId, 'locName:', locName);
+                <?php endif; ?>
                 return;
             }
 
@@ -795,9 +839,12 @@ public function render_metabox( $post ) {
                     }
                     $msg.html('<span style="color:#46b450;">✓ ' + (d.message ? d.message : '<?php echo esc_js( __( 'Horarios enviados.', 'lealez' ) ); ?>') + '</span>');
                 },
-                error: function() {
+                error: function(xhr, status, err) {
                     $btn.prop('disabled', false);
                     $msg.html('<span style="color:#dc3232;"><?php echo esc_js( __( '⚠ Error de conexión al enviar.', 'lealez' ) ); ?></span>');
+                    <?php if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) : ?>
+                    console.error('[OY Hours Push] AJAX error:', status, err);
+                    <?php endif; ?>
                 }
             });
         });
@@ -1367,12 +1414,24 @@ public function ajax_push_hours_to_gmb() {
 
     $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
     if ( ! wp_verify_nonce( $nonce, $this->ajax_write_nonce_action ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Hours Push] Nonce inválido. Recibido: ' . $nonce . ' | Acción esperada: ' . $this->ajax_write_nonce_action );
+        }
         wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
     }
 
     $post_id       = isset( $_POST['post_id'] )       ? absint( wp_unslash( $_POST['post_id'] ) )                    : 0;
     $business_id   = isset( $_POST['business_id'] )   ? absint( wp_unslash( $_POST['business_id'] ) )                : 0;
     $location_name = isset( $_POST['location_name'] ) ? sanitize_text_field( wp_unslash( $_POST['location_name'] ) ) : '';
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log(
+            '[OY Hours Push] Parámetros recibidos — post_id=' . $post_id .
+            ' | business_id=' . $business_id .
+            ' | location_name=' . $location_name .
+            ' | Lealez_GMB_Writer existe=' . ( class_exists( 'Lealez_GMB_Writer' ) ? 'SI' : 'NO' )
+        );
+    }
 
     if ( ! $post_id || ! $business_id || empty( $location_name ) ) {
         wp_send_json_error( array( 'message' => __( 'Parámetros inválidos. Verifica que el post, la empresa y la ubicación GMB estén seleccionados.', 'lealez' ) ) );
@@ -1412,6 +1471,15 @@ public function ajax_push_hours_to_gmb() {
     $special_hours = $this->build_special_hours_for_gmb( $post_id );
 
     // ── Llamar al writer ─────────────────────────────────────────────────
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log(
+            '[OY Hours Push] Llamando a Lealez_GMB_Writer::update_location_hours' .
+            ' | hours_status=' . $hours_status .
+            ' | regular_periods=' . ( is_array( $regular_hours ) && isset( $regular_hours['periods'] ) ? count( $regular_hours['periods'] ) : 'null' ) .
+            ' | special_periods=' . ( is_array( $special_hours ) && isset( $special_hours['specialHourPeriods'] ) ? count( $special_hours['specialHourPeriods'] ) : 'null' )
+        );
+    }
+
     $result = Lealez_GMB_Writer::update_location_hours(
         $post_id,
         $business_id,
@@ -1422,6 +1490,9 @@ public function ajax_push_hours_to_gmb() {
     );
 
     if ( is_wp_error( $result ) ) {
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY Hours Push] WP_Error del writer: ' . $result->get_error_message() );
+        }
         wp_send_json_error( array( 'message' => $result->get_error_message() ) );
     }
 
@@ -1645,5 +1716,3 @@ private function build_special_hours_for_gmb( $post_id ) {
 }
 
 }
-
-
