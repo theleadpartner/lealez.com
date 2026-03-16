@@ -843,7 +843,7 @@ if ( ! class_exists( 'OY_Location_GMB_Profile_Metabox' ) ) {
          * @param int $post_id ID del post oy_location.
          * @return string HTML listo para insertar.
          */
-        private function render_log_table( $post_id ) {
+public function render_log_table( $post_id ) {
             $raw = get_post_meta( $post_id, '_gmb_writer_log', true );
             $log = array();
 
@@ -868,12 +868,17 @@ if ( ! class_exists( 'OY_Location_GMB_Profile_Metabox' ) ) {
             $log = array_slice( $log, 0, self::MAX_LOG_DISPLAY );
 
             $section_labels = array(
+                // Campos de update_location_core
                 'title'        => __( 'Nombre', 'lealez' ),
                 'phoneNumbers' => __( 'Teléfonos', 'lealez' ),
                 'websiteUri'   => __( 'Sitio web', 'lealez' ),
                 'profile'      => __( 'Descripción', 'lealez' ),
                 'categories'   => __( 'Categorías', 'lealez' ),
                 'storeCode'    => __( 'Código de tienda', 'lealez' ),
+                // Campos de update_location_hours
+                'regularHours' => __( 'Horarios regulares', 'lealez' ),
+                'specialHours' => __( 'Horarios especiales', 'lealez' ),
+                'openInfo'     => __( 'Estado de apertura', 'lealez' ),
             );
 
             $html  = '<div class="oy-gmb-log-table-wrap">';
