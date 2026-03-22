@@ -368,6 +368,34 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 <?php endif; ?>
             </div>
 
+
+<?php /* ── Log de Sincronización ── */ ?>
+            <div id="oy-address-log-panel" style="margin-bottom:16px; border:1px solid #dadce0; border-radius:4px; overflow:hidden; background:#fff;">
+                <div id="oy-address-log-header" style="
+                    display:flex; align-items:center; justify-content:space-between;
+                    padding:8px 14px; background:#f6f7f7; cursor:pointer;
+                    border-bottom:1px solid transparent; user-select:none;
+                ">
+                    <span style="font-size:13px; font-weight:600; color:#1d2327;">
+                        🔍 <?php _e( 'Log de Sincronización — Dirección & Geolocalización', 'lealez' ); ?>
+                    </span>
+                    <span id="oy-address-log-toggle-icon" style="font-size:13px; color:#888; transition:transform .2s;">▶</span>
+                </div>
+                <div id="oy-address-log-body" style="display:none;">
+                    <div id="oy-address-log-entries"></div>
+                    <div style="padding:8px 14px; border-top:1px solid #f0f0f0; background:#fafafa; display:flex; gap:10px; align-items:center;">
+                        <button type="button" id="oy-address-log-clear" class="button button-small"
+                                style="font-size:11px; color:#dc3232; border-color:#dc3232;">
+                            🗑 <?php _e( 'Limpiar historial', 'lealez' ); ?>
+                        </button>
+                        <span style="font-size:11px; color:#aaa; font-style:italic;">
+                            <?php _e( 'Historial guardado en el navegador (localStorage). Máx 20 entradas.', 'lealez' ); ?>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+
             <?php /* ── Ubicación de la empresa ── */ ?>
             <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
                 <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
@@ -971,10 +999,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     })();
                 });
 
-                /**
+/**
                  * ── Botón "Sincronizar dirección desde GMB" ──────────────────────────────
                  *
-                 * Ejecuta solo el PASO 1 del pipeline (oy_get_gmb_location_details).
                  * Compatible con class-oy-location-gmb-integration-metabox.php:
                  *  - Reutiliza el mismo nonce action 'oy_location_gmb_ajax'
                  *  - Llama al mismo AJAX handler que usa el pipeline completo (PASO 1)
@@ -982,84 +1009,293 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                  *  - Actualiza chips de "Áreas de servicio" vía window.oy_service_areas_set()
                  *  - Emite evento oy:gmb:address:refreshed para extensibilidad futura
                  *  - NO compite con #oy-full-sync-btn ni desactiva el pipeline completo
+                 *
+                 * + Log detallado con diff campo por campo y raw GMB response.
                  */
                 (function(){
                     var $ = jQuery;
 
                     var ajaxUrl     = (typeof ajaxurl !== 'undefined') ? ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
                     var addrNonce   = '<?php echo esc_js( $ajax_nonce ); ?>';
+                    var postId      = '<?php echo esc_js( (string) $post->ID ); ?>';
                     var syncRunning = false;
 
-                    /**
-                     * Extrae etiquetas legibles de serviceArea.places[] (respuesta GMB).
-                     * Misma lógica defensiva que extract_service_areas_from_gmb_raw() en PHP.
-                     *
-                     * @param {Object} loc  Objeto de ubicación GMB
-                     * @return {string[]}
-                     */
-                    function extractServiceAreas(loc) {
-                        if (!loc || !loc.serviceArea || !loc.serviceArea.places) {
-                            return [];
-                        }
-                        var places = loc.serviceArea.places;
-                        if (!Array.isArray(places)) { return []; }
+                    // ── LocalStorage key (por post) ───────────────────────────────────────
+                    var LS_KEY     = 'oy_addr_log_' + postId;
+                    var MAX_LOG    = 20;
 
-                        var out  = [];
-                        var seen = {};
+                    // ── Campos monitoreados ───────────────────────────────────────────────
+                    var FIELD_MAP = [
+                        { key: 'address_line1', selector: '#location_address_line1', label: 'Dirección Principal' },
+                        { key: 'address_line2', selector: '#location_address_line2', label: 'Complemento' },
+                        { key: 'neighborhood',  selector: '#location_neighborhood',  label: 'Barrio/Colonia' },
+                        { key: 'city',          selector: '#location_city',          label: 'Ciudad' },
+                        { key: 'state',         selector: '#location_state',         label: 'Estado/Dpto' },
+                        { key: 'country',       selector: '#location_country',       label: 'País (ISO 2)' },
+                        { key: 'postal_code',   selector: '#location_postal_code',   label: 'Código Postal' },
+                        { key: 'latitude',      selector: '#location_latitude',      label: 'Latitud' },
+                        { key: 'longitude',     selector: '#location_longitude',     label: 'Longitud' },
+                        { key: 'map_url',       selector: '#location_map_url',       label: 'URL Google Maps' },
+                        { key: 'service_areas', selector: '#location_service_areas_json', label: 'Áreas de Servicio', isJson: true },
+                    ];
 
-                        places.forEach(function(p) {
-                            var label = '';
-                            if (typeof p === 'string') {
-                                label = p.trim();
-                            } else if (p && typeof p === 'object') {
-                                var candidates = [
-                                    p.displayName || '',
-                                    p.title       || '',
-                                    p.name        || '',
-                                    p.placeName   || '',
-                                    p.placeId     || '',
-                                ];
-                                candidates.forEach(function(c) {
-                                    if (!label && typeof c === 'string' && c.trim()) {
-                                        label = c.trim();
-                                    }
-                                });
-                                if (!label && p.address) {
-                                    if (typeof p.address === 'string') {
-                                        label = p.address.trim();
-                                    } else if (typeof p.address === 'object') {
-                                        var parts = [];
-                                        if (p.address.locality)           { parts.push(p.address.locality); }
-                                        if (p.address.administrativeArea) { parts.push(p.address.administrativeArea); }
-                                        if (parts.length) { label = parts.join(', '); }
-                                    }
-                                }
+                    // ── Snapshot de todos los campos ──────────────────────────────────────
+                    function captureSnapshot() {
+                        var snap = {};
+                        FIELD_MAP.forEach(function(f) {
+                            var val = $(f.selector).val() || '';
+                            if (f.isJson) {
+                                try { val = JSON.parse(val); } catch(e) { val = []; }
+                                if (!Array.isArray(val)) { val = []; }
                             }
-                            label = (label || '').trim();
-                            if (!label) { return; }
-                            var k = label.toLowerCase();
-                            if (seen[k]) { return; }
-                            seen[k] = true;
-                            out.push(label);
+                            snap[f.key] = val;
                         });
-
-                        return out;
+                        return snap;
                     }
 
-                    /**
-                     * Muestra mensaje en la barra de sync de dirección.
-                     *
-                     * @param {string} msg
-                     * @param {string} type  'info' | 'success' | 'error'
-                     */
-                    function setAddrMsg(msg, type) {
-                        var colors = { info: '#555', success: '#46b450', error: '#dc3232' };
-                        $('#oy-address-sync-msg')
-                            .text(msg)
-                            .css('color', colors[type] || '#555');
+                    // ── Diff entre dos snapshots ──────────────────────────────────────────
+                    function buildDiff(before, after) {
+                        var rows = [];
+                        FIELD_MAP.forEach(function(f) {
+                            var bVal = before[f.key];
+                            var aVal = after[f.key];
+
+                            var bStr = f.isJson
+                                ? (Array.isArray(bVal) ? bVal.join(', ') : JSON.stringify(bVal))
+                                : String(bVal == null ? '' : bVal);
+                            var aStr = f.isJson
+                                ? (Array.isArray(aVal) ? aVal.join(', ') : JSON.stringify(aVal))
+                                : String(aVal == null ? '' : aVal);
+
+                            var rawBefore = f.isJson ? JSON.stringify(bVal) : bStr;
+                            var rawAfter  = f.isJson ? JSON.stringify(aVal) : aStr;
+
+                            var status;
+                            if (rawBefore === rawAfter) {
+                                status = 'unchanged';
+                            } else if (!bStr || bStr === '""' || bStr === '[]' || bStr.trim() === '') {
+                                status = 'new';
+                            } else {
+                                status = 'changed';
+                            }
+
+                            rows.push({ label: f.label, before: bStr, after: aStr, status: status });
+                        });
+                        return rows;
                     }
 
-                    // ── CSS animación para ícono giratorio ────────────────────────
+                    // ── localStorage helpers ──────────────────────────────────────────────
+                    function loadLog() {
+                        try {
+                            var raw = localStorage.getItem(LS_KEY);
+                            if (!raw) { return []; }
+                            var arr = JSON.parse(raw);
+                            return Array.isArray(arr) ? arr : [];
+                        } catch(e) { return []; }
+                    }
+
+                    function saveLog(entries) {
+                        try {
+                            if (entries.length > MAX_LOG) {
+                                entries = entries.slice(entries.length - MAX_LOG);
+                            }
+                            localStorage.setItem(LS_KEY, JSON.stringify(entries));
+                        } catch(e) {}
+                    }
+
+                    function clearLog() {
+                        try { localStorage.removeItem(LS_KEY); } catch(e) {}
+                    }
+
+                    function addLogEntry(rawGmb, diff) {
+                        var now = new Date();
+                        var ts  = now.toLocaleDateString('es-CO', { year:'numeric', month:'2-digit', day:'2-digit' })
+                                + ' '
+                                + now.toLocaleTimeString('es-CO', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: false });
+                        var log = loadLog();
+                        log.push({ timestamp: ts, raw: rawGmb, diff: diff });
+                        saveLog(log);
+                        renderLog();
+
+                        // Abrir panel si estaba cerrado
+                        if ($('#oy-address-log-body').is(':hidden')) {
+                            $('#oy-address-log-body').show();
+                            $('#oy-address-log-header').css('borderBottomColor', '#dadce0');
+                            $('#oy-address-log-toggle-icon').text('▼');
+                        }
+                    }
+
+                    // ── Render completo del log ───────────────────────────────────────────
+                    function renderLog() {
+                        var entries    = loadLog();
+                        var $container = $('#oy-address-log-entries');
+                        $container.empty();
+
+                        if (!entries.length) {
+                            $container.append(
+                                $('<p/>').css({
+                                    padding: '12px 16px', margin: 0,
+                                    fontSize: '12px', color: '#888', fontStyle: 'italic'
+                                }).text('Aún no hay sincronizaciones registradas. Usa el botón "Sincronizar dirección desde GMB".')
+                            );
+                            return;
+                        }
+
+                        // Más reciente primero
+                        var sorted = entries.slice().reverse();
+
+                        sorted.forEach(function(entry, idx) {
+                            var changedCount = entry.diff
+                                ? entry.diff.filter(function(r){ return r.status !== 'unchanged'; }).length
+                                : 0;
+                            var isFirst  = idx === 0;
+                            var bgHeader = isFirst ? '#f0f7ff' : '#fff';
+
+                            var $entry = $('<div/>').css({
+                                borderBottom: '1px solid ' + (isFirst ? '#c3d4e6' : '#f0f0f0'),
+                            });
+
+                            // — Header del entry —
+                            var $entryHeader = $('<div/>').css({
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                padding: '8px 14px', cursor: 'pointer', userSelect: 'none',
+                                background: bgHeader, gap: '10px',
+                            });
+
+                            var statusLabel, statusColor;
+                            if (!entry.diff || !entry.diff.length) {
+                                statusLabel = '⚠️ Error / sin datos';
+                                statusColor = '#dc3232';
+                            } else if (changedCount === 0) {
+                                statusLabel = '✅ Sin cambios';
+                                statusColor = '#46b450';
+                            } else {
+                                statusLabel = '✏️ ' + changedCount + ' campo' + (changedCount > 1 ? 's' : '') + ' modificado' + (changedCount > 1 ? 's' : '');
+                                statusColor = '#e06800';
+                            }
+
+                            $entryHeader.append(
+                                $('<span/>').css({ fontSize: '11px', color: '#555', flex: '1', fontFamily: 'monospace' })
+                                    .text('🕐 ' + entry.timestamp + (isFirst ? '  (más reciente)' : ''))
+                            );
+                            $entryHeader.append(
+                                $('<span/>').css({ fontSize: '11px', fontWeight: '600', color: statusColor })
+                                    .text(statusLabel)
+                            );
+                            var $toggleIcon = $('<span/>').css({ fontSize: '11px', color: '#aaa' })
+                                .text(isFirst ? '▼' : '▶');
+                            $entryHeader.append($toggleIcon);
+
+                            // — Body del entry —
+                            var $body = $('<div/>').css({
+                                display: isFirst ? 'block' : 'none',
+                                padding: '0 14px 14px',
+                                background: '#fff',
+                            });
+
+                            $entryHeader.on('click', function() {
+                                $body.toggle();
+                                $toggleIcon.text($body.is(':visible') ? '▼' : '▶');
+                            });
+
+                            // — Tabla de diff —
+                            if (entry.diff && entry.diff.length) {
+                                var $table = $('<table/>').css({
+                                    width: '100%', borderCollapse: 'collapse',
+                                    fontSize: '11px', marginTop: '10px', marginBottom: '10px',
+                                });
+
+                                $('<thead/>').append(
+                                    $('<tr/>').append(
+                                        $('<th/>').css({ textAlign:'left', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555', width:'140px' }).text('Campo'),
+                                        $('<th/>').css({ textAlign:'left', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555' }).text('Antes'),
+                                        $('<th/>').css({ textAlign:'left', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555' }).text('Después'),
+                                        $('<th/>').css({ textAlign:'center', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555', width:'80px' }).text('Estado')
+                                    )
+                                ).appendTo($table);
+
+                                var $tbody = $('<tbody/>');
+
+                                entry.diff.forEach(function(row) {
+                                    var cfg = {
+                                        unchanged: { rowBg: '#fff',    beforeColor: '#aaa',    afterColor: '#aaa',    icon: '—',  iconColor: '#ccc'   },
+                                        new:       { rowBg: '#f6fff9', beforeColor: '#aaa',    afterColor: '#276749', icon: '🆕', iconColor: '#276749' },
+                                        changed:   { rowBg: '#fffbea', beforeColor: '#dc3232', afterColor: '#2271b1', icon: '✏️', iconColor: '#e06800' },
+                                    }[row.status] || { rowBg:'#fff', beforeColor:'#aaa', afterColor:'#aaa', icon:'—', iconColor:'#ccc' };
+
+                                    var bText = row.before && row.before.trim() ? row.before : '(vacío)';
+                                    var aText = row.after  && row.after.trim()  ? row.after  : '(vacío)';
+
+                                    var $tr = $('<tr/>').css({ background: cfg.rowBg });
+
+                                    $('<td/>').css({ padding:'4px 8px', borderBottom:'1px solid #f3f3f3', fontWeight:'600', color:'#1d2327', whiteSpace:'nowrap' }).text(row.label).appendTo($tr);
+
+                                    $('<td/>').css({
+                                        padding:'4px 8px', borderBottom:'1px solid #f3f3f3',
+                                        color: cfg.beforeColor, fontFamily:'monospace',
+                                        maxWidth: '200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                                        textDecoration: row.status === 'changed' ? 'line-through' : 'none',
+                                    }).attr('title', bText).text(bText).appendTo($tr);
+
+                                    $('<td/>').css({
+                                        padding:'4px 8px', borderBottom:'1px solid #f3f3f3',
+                                        color: cfg.afterColor, fontFamily:'monospace', fontWeight: row.status !== 'unchanged' ? '600' : '400',
+                                        maxWidth: '200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                                    }).attr('title', aText).text(aText).appendTo($tr);
+
+                                    $('<td/>').css({
+                                        padding:'4px 8px', borderBottom:'1px solid #f3f3f3',
+                                        textAlign:'center', color: cfg.iconColor, fontSize:'13px',
+                                    }).text(cfg.icon).appendTo($tr);
+
+                                    $tbody.append($tr);
+                                });
+
+                                $table.append($tbody);
+                                $body.append($table);
+                            }
+
+                            // — Raw GMB collapsible —
+                            if (entry.raw && typeof entry.raw === 'object') {
+                                var $rawToggleBtn = $('<button type="button"/>').addClass('button-link').css({
+                                    fontSize: '11px', color: '#1a73e8', padding: '0',
+                                    border: 'none', background: 'transparent',
+                                    cursor: 'pointer', textDecoration: 'underline',
+                                    display: 'block', marginBottom: '6px',
+                                }).text('📡 Ver respuesta completa de GMB ▶');
+
+                                var $rawPre = $('<pre/>').css({
+                                    display: 'none', background: '#1e1e2e', color: '#cdd6f4',
+                                    padding: '10px', borderRadius: '4px', fontSize: '10px',
+                                    lineHeight: '1.6', maxHeight: '240px', overflowY: 'auto',
+                                    whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                                    marginBottom: '8px', fontFamily: 'monospace',
+                                }).text(JSON.stringify(entry.raw, null, 2));
+
+                                $rawToggleBtn.on('click', function() {
+                                    $rawPre.toggle();
+                                    $(this).text($rawPre.is(':visible')
+                                        ? '📡 Ocultar respuesta de GMB ▼'
+                                        : '📡 Ver respuesta completa de GMB ▶');
+                                });
+
+                                $body.append($rawToggleBtn).append($rawPre);
+                            }
+
+                            // — Nota de error si aplica —
+                            if (entry.raw && entry.raw.error) {
+                                $body.append(
+                                    $('<p/>').css({ margin: '8px 0 0', fontSize: '11px', color: '#dc3232', fontStyle: 'italic' })
+                                        .text('⚠️ Error: ' + entry.raw.error)
+                                );
+                            }
+
+                            $entry.append($entryHeader).append($body);
+                            $container.append($entry);
+                        });
+                    }
+
+                    // ── CSS animación para ícono giratorio ────────────────────────────────
                     if (!$('#oy-address-sync-style').length) {
                         $('head').append(
                             '<style id="oy-address-sync-style">' +
@@ -1069,7 +1305,32 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         );
                     }
 
-                    // ── Click handler ─────────────────────────────────────────────
+                    // ── Helpers UI ────────────────────────────────────────────────────────
+                    function setAddrMsg(msg, type) {
+                        var colors = { info: '#555', success: '#46b450', error: '#dc3232' };
+                        $('#oy-address-sync-msg')
+                            .text(msg)
+                            .css('color', colors[type] || '#555');
+                    }
+
+                    // ── Toggle panel de log ───────────────────────────────────────────────
+                    $(document).on('click', '#oy-address-log-header', function() {
+                        var $body = $('#oy-address-log-body');
+                        var $icon = $('#oy-address-log-toggle-icon');
+                        $body.toggle();
+                        $('#oy-address-log-header').css('borderBottomColor', $body.is(':visible') ? '#dadce0' : 'transparent');
+                        $icon.text($body.is(':visible') ? '▼' : '▶');
+                    });
+
+                    // ── Limpiar log ───────────────────────────────────────────────────────
+                    $(document).on('click', '#oy-address-log-clear', function(e) {
+                        e.stopPropagation();
+                        if (!confirm('<?php echo esc_js( __( '¿Borrar todo el historial de sincronizaciones de dirección?', 'lealez' ) ); ?>')) { return; }
+                        clearLog();
+                        renderLog();
+                    });
+
+                    // ── Click handler del botón sync ──────────────────────────────────────
                     $(document).on('click', '#oy-address-sync-btn', function(e) {
                         e.preventDefault();
                         if (syncRunning) { return; }
@@ -1083,6 +1344,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             setAddrMsg('<?php echo esc_js( __( 'Vincula primero una empresa y ubicación GMB.', 'lealez' ) ); ?>', 'error');
                             return;
                         }
+
+                        // 🔵 Snapshot ANTES de aplicar
+                        var snapshotBefore = captureSnapshot();
 
                         syncRunning = true;
                         var $btn = $('#oy-address-sync-btn');
@@ -1103,16 +1367,18 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                     ? resp.data.message
                                     : '<?php echo esc_js( __( 'No se pudo importar la dirección.', 'lealez' ) ); ?>';
                                 setAddrMsg(errMsg, 'error');
+                                addLogEntry({ error: errMsg, request: { businessId: businessId, locationName: locationName } }, []);
                                 return;
                             }
 
                             var loc = (resp.data && resp.data.location) ? resp.data.location : null;
                             if (!loc) {
                                 setAddrMsg('<?php echo esc_js( __( 'Respuesta vacía de GMB.', 'lealez' ) ); ?>', 'error');
+                                addLogEntry({ error: 'Respuesta vacía de la API', rawResp: resp.data || null }, []);
                                 return;
                             }
 
-                            // ── 1. Aplicar todos los campos al formulario ──────────
+                            // ── 1. Aplicar todos los campos al formulario ──────────────────
                             // applyLocationToForm está en window (CPT JS) y actualiza:
                             // dirección, coords, mapa, horarios, categorías, descripción, etc.
                             if (typeof window.applyLocationToForm === 'function') {
@@ -1138,7 +1404,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 }
                             }
 
-                            // ── 2. Áreas de servicio ────────────────────────────────
+                            // ── 2. Áreas de servicio ──────────────────────────────────────
                             // Solo actualiza chips si la API devuelve áreas.
                             // No borra las existentes si GMB no devuelve ninguna.
                             if (typeof window.oy_service_areas_set === 'function') {
@@ -1148,14 +1414,23 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 }
                             }
 
-                            // ── 3. Éxito ────────────────────────────────────────────
+                            // ── 3. Snapshot DESPUÉS + Diff + Log ─────────────────────────
+                            // Pequeño delay para que el DOM refleje los cambios aplicados
+                            setTimeout(function() {
+                                var snapshotAfter = captureSnapshot();
+                                var diff = buildDiff(snapshotBefore, snapshotAfter);
+                                addLogEntry(loc, diff);
+                            }, 100);
+
+                            // ── 4. Éxito ──────────────────────────────────────────────────
                             setAddrMsg('<?php echo esc_js( __( '✅ Dirección importada. Guarda el post para persistir.', 'lealez' ) ); ?>', 'success');
 
-                            // ── 4. Evento para extensibilidad ──────────────────────
+                            // ── 5. Evento para extensibilidad ─────────────────────────────
                             $(document).trigger('oy:gmb:address:refreshed', [{ location: loc }]);
                         })
                         .fail(function() {
                             setAddrMsg('<?php echo esc_js( __( 'Error de red al sincronizar.', 'lealez' ) ); ?>', 'error');
+                            addLogEntry({ error: 'Error de red (fallo AJAX)' }, []);
                         })
                         .always(function() {
                             syncRunning = false;
@@ -1163,6 +1438,11 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             $b.prop('disabled', false);
                             $b.find('.dashicons').removeClass('spin');
                         });
+                    });
+
+                    // ── Inicializar log al cargar ─────────────────────────────────────────
+                    $(document).ready(function() {
+                        renderLog();
                     });
 
                 })(); // end address sync IIFE
