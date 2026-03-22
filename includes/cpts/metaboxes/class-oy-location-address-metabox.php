@@ -1009,10 +1009,8 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                  *  - Actualiza chips de "Áreas de servicio" vía window.oy_service_areas_set()
                  *  - Emite evento oy:gmb:address:refreshed para extensibilidad futura
                  *  - NO compite con #oy-full-sync-btn ni desactiva el pipeline completo
-                 *
-                 * FIX: button reset at start of done/fail (jQuery 3.x exception-safe).
-                 * FIX: $.ajax() con timeout de 45 s (vs $.post() sin timeout).
-                 * Log detallado con diff campo por campo y raw GMB response.
+                 *  - Bloquea si window.oyIntegrationSyncRunning === true (pipeline corriendo)
+                 *  - Expone window.oyAddrLogAPI para que el pipeline alimente el log
                  */
                 (function(){
                     var $ = jQuery;
@@ -1048,9 +1046,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     }
 
                     /**
-                     * Resetea SIEMPRE el estado del botón.
-                     * Se llama al inicio de .done() y .fail() — NUNCA depender
-                     * solo de .always() en jQuery 3.x (excepción en .done() aborta la cadena).
+                     * Resetea el estado del botón de forma segura.
+                     * Se llama al inicio de .done() y .fail() para evitar bloqueos
+                     * en jQuery 3.x (una excepción en .done() aborta la cadena, omitiendo .always()).
                      */
                     function resetBtn() {
                         syncRunning = false;
@@ -1128,7 +1126,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     }
 
                     // ── Agregar entrada al log ────────────────────────────────────────────
-                    function addLogEntry(rawGmb, diff) {
+                    function addLogEntry(rawGmb, diff, source) {
                         try {
                             var now = new Date();
                             var ts = now.toLocaleDateString('es-CO', {
@@ -1145,8 +1143,11 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 safeRaw = { _serializeError: 'Objeto no serializable: ' + circErr.message };
                             }
 
+                            // Indicar si vino del pipeline completo o del botón individual
+                            var entrySource = source || 'button';
+
                             var log = loadLog();
-                            log.push({ timestamp: ts, raw: safeRaw, diff: diff || [] });
+                            log.push({ timestamp: ts, raw: safeRaw, diff: diff || [], source: entrySource });
                             saveLog(log);
                             renderLog();
 
@@ -1176,7 +1177,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                     $('<p/>').css({
                                         padding: '12px 16px', margin: 0,
                                         fontSize: '12px', color: '#888', fontStyle: 'italic'
-                                    }).text('Aún no hay sincronizaciones registradas. Usa el botón "Sincronizar dirección desde GMB".')
+                                    }).text('Aún no hay sincronizaciones registradas. Usa el botón "Sincronizar dirección desde GMB" o ejecuta la Sync completa.')
                                 );
                                 return;
                             }
@@ -1191,6 +1192,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 }).length;
                                 var isFirst  = idx === 0;
                                 var bgHeader = isFirst ? '#f0f7ff' : '#fff';
+
+                                // Origen del registro (botón individual vs pipeline completo)
+                                var srcIcon  = (entry.source === 'pipeline') ? '⚙️' : '🔵';
+                                var srcLabel = (entry.source === 'pipeline') ? ' · Sync completa' : ' · Botón dirección';
 
                                 var $entry = $('<div/>').css({
                                     borderBottom: '1px solid ' + (isFirst ? '#c3d4e6' : '#f0f0f0'),
@@ -1212,7 +1217,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                     statusLabel = '⚠️ Sin datos de diff';
                                     statusColor = '#999';
                                 } else if (changedCount === 0) {
-                                    statusLabel = '✅ Sin cambios (datos idénticos)';
+                                    statusLabel = '✅ Sin cambios';
                                     statusColor = '#46b450';
                                 } else {
                                     statusLabel = '✏️ ' + changedCount + ' campo' + (changedCount !== 1 ? 's' : '') + ' modificado' + (changedCount !== 1 ? 's' : '');
@@ -1221,7 +1226,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                                 $entryHeader.append(
                                     $('<span/>').css({ fontSize: '11px', color: '#555', flex: '1', fontFamily: 'monospace' })
-                                        .text('🕐 ' + entry.timestamp + (isFirst ? '  ← más reciente' : ''))
+                                        .text(srcIcon + ' 🕐 ' + entry.timestamp + srcLabel + (isFirst ? '  ← más reciente' : ''))
                                 );
                                 $entryHeader.append(
                                     $('<span/>').css({ fontSize: '11px', fontWeight: '600', color: statusColor })
@@ -1362,10 +1367,29 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         renderLog();
                     });
 
-                    // ── Click handler del botón sync ──────────────────────────────────────
+                    // ── Escuchar el evento del pipeline para refrescar el log ─────────────
+                    // Cuando runFullSync() completa PASO 1 exitosamente, emite
+                    // oy:gmb:address:refreshed con source='pipeline'. Actualizamos el panel.
+                    $(document).on('oy:gmb:address:refreshed', function(e, data) {
+                        // Si vino del pipeline (no del botón individual) ya fue procesado
+                        // por oyAddrLogAPI.addLogEntry() dentro del pipeline. Solo re-renderizamos.
+                        if (data && data.source === 'pipeline') {
+                            renderLog();
+                        }
+                    });
+
+                    // ── Click handler del botón sync individual ───────────────────────────
                     $(document).on('click', '#oy-address-sync-btn', function(e) {
                         e.preventDefault();
                         if (syncRunning) { return; }
+
+                        // ── Guardia: no disparar si el pipeline completo está corriendo ────
+                        // window.oyIntegrationSyncRunning lo establece runFullSync() en el
+                        // metabox de Integración GMB — Control de Sincronización.
+                        if (window.oyIntegrationSyncRunning) {
+                            setAddrMsg('<?php echo esc_js( __( '⚙️ Sincronización completa en progreso. Espera que termine.', 'lealez' ) ); ?>', 'error');
+                            return;
+                        }
 
                         var businessId   = $.trim($('#parent_business_id').val()        || '');
                         var locationName = $.trim($('#gmb_location_name').val()         || '');
@@ -1390,12 +1414,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }
 
                         // ── $.ajax() con timeout explícito de 45 s ────────────────────────
-                        // $.post() no expone la opción timeout, causando que el botón quede
-                        // bloqueado indefinidamente si el servidor tarda (4 llamadas a GBP API).
                         $.ajax({
                             url:     ajaxUrl,
                             type:    'POST',
-                            timeout: 45000, // 45 segundos
+                            timeout: 45000,
                             data: {
                                 action:        'oy_get_gmb_location_details',
                                 nonce:         addrNonce,
@@ -1405,10 +1427,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             },
                         })
                         .done(function(resp) {
-                            // ── RESET INMEDIATO del botón ─────────────────────────────────
-                            // Antes de CUALQUIER otra cosa: esto garantiza que el botón
-                            // nunca quede bloqueado aunque el código siguiente lance excepción.
-                            // jQuery 3.x no ejecuta .always() si .done() lanza una excepción.
                             resetBtn();
 
                             try {
@@ -1425,7 +1443,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                         error:   errMsg,
                                         request: { businessId: businessId, locationName: locationName },
                                         rawResp: resp || null,
-                                    }, []);
+                                    }, [], 'button');
                                     return;
                                 }
 
@@ -1435,16 +1453,14 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                     addLogEntry({
                                         error:   'Respuesta vacía: location es null',
                                         rawResp: resp.data || null,
-                                    }, []);
+                                    }, [], 'button');
                                     return;
                                 }
 
                                 // ── 1. Aplicar datos al formulario ────────────────────────
-                                // applyLocationToForm ya tiene su propio try-catch interno.
                                 if (typeof window.applyLocationToForm === 'function') {
                                     window.applyLocationToForm(loc);
                                 } else {
-                                    // Fallback manual si el CPT JS aún no cargó
                                     if (loc.storefrontAddress) {
                                         var a = loc.storefrontAddress;
                                         if (a.addressLines && a.addressLines[0]) { $('#location_address_line1').val(a.addressLines[0]); }
@@ -1468,9 +1484,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 if (typeof window.oy_service_areas_set === 'function') {
                                     try {
                                         var areas = extractServiceAreas(loc);
-                                        if (areas.length) {
-                                            window.oy_service_areas_set(areas);
-                                        }
+                                        if (areas.length) { window.oy_service_areas_set(areas); }
                                     } catch(saErr) {
                                         if (window.console && window.console.error) {
                                             console.error('[OY Address Sync] oy_service_areas_set error:', saErr);
@@ -1479,8 +1493,6 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 }
 
                                 // ── 3. Snapshot DESPUÉS + Diff + Log ─────────────────────
-                                // applyLocationToForm y oy_service_areas_set son síncronos:
-                                // no necesitamos setTimeout para capturar el estado final.
                                 var snapshotAfter = captureSnapshot();
                                 var diff = buildDiff(snapshotBefore, snapshotAfter);
                                 var changedCount = diff.filter(function(r) {
@@ -1488,10 +1500,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 }).length;
 
                                 if (window.console && window.console.log) {
-                                    console.log('[OY Address Sync] Diff completado →', changedCount, 'campo(s) con cambios de', diff.length, 'total.');
+                                    console.log('[OY Address Sync] Diff →', changedCount, 'campo(s) con cambios de', diff.length, 'total.');
                                 }
 
-                                addLogEntry(loc, diff);
+                                addLogEntry(loc, diff, 'button');
 
                                 // ── 4. Mensaje de éxito ────────────────────────────────────
                                 if (changedCount > 0) {
@@ -1502,7 +1514,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                                 // ── 5. Evento para extensibilidad ─────────────────────────
                                 try {
-                                    $(document).trigger('oy:gmb:address:refreshed', [{ location: loc, diff: diff }]);
+                                    $(document).trigger('oy:gmb:address:refreshed', [{ location: loc, diff: diff, source: 'button' }]);
                                 } catch(triggerErr) {
                                     if (window.console && window.console.error) {
                                         console.error('[OY Address Sync] trigger error:', triggerErr);
@@ -1510,16 +1522,14 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 }
 
                             } catch(doneErr) {
-                                // Catch-all: cualquier excepción no prevista dentro de .done()
                                 if (window.console && window.console.error) {
                                     console.error('[OY Address Sync] Error en .done():', doneErr);
                                 }
                                 setAddrMsg('Error inesperado al procesar respuesta. Revisa la consola.', 'error');
-                                addLogEntry({ error: 'Error JS en .done(): ' + doneErr.message }, []);
+                                addLogEntry({ error: 'Error JS en .done(): ' + doneErr.message }, [], 'button');
                             }
                         })
                         .fail(function(xhr, status, error) {
-                            // ── RESET INMEDIATO del botón ─────────────────────────────────
                             resetBtn();
 
                             var isTimeout  = status === 'timeout';
@@ -1531,7 +1541,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             if (window.console && window.console.error) {
                                 console.error('[OY Address Sync] AJAX fail →', status, '| HTTP:', httpStatus, '| error:', error);
                                 if (xhr && xhr.responseText) {
-                                    console.error('[OY Address Sync] Respuesta cruda (primeros 500 chars):', xhr.responseText.substring(0, 500));
+                                    console.error('[OY Address Sync] Respuesta cruda:', xhr.responseText.substring(0, 500));
                                 }
                             }
 
@@ -1543,13 +1553,13 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                             try {
                                 addLogEntry({
-                                    error:      errDetail,
-                                    xhr_status: httpStatus,
-                                    ajax_status: status,
+                                    error:          errDetail,
+                                    xhr_status:     httpStatus,
+                                    ajax_status:    status,
                                     responsePreview: xhr && xhr.responseText
                                         ? xhr.responseText.substring(0, 300)
                                         : null,
-                                }, []);
+                                }, [], 'button');
                             } catch(logErr) {
                                 if (window.console && window.console.error) {
                                     console.error('[OY Address Sync] Error al registrar en log:', logErr);
@@ -1558,10 +1568,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         })
                         .always(function() {
                             // Seguridad final: resetea si resetBtn() no fue llamado antes
-                            // (no debería ocurrir, pero es el cinturón de la tirante)
-                            if (syncRunning) {
-                                resetBtn();
-                            }
+                            if (syncRunning) { resetBtn(); }
                         });
                     });
 
@@ -1569,6 +1576,16 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     $(document).ready(function() {
                         renderLog();
                     });
+
+                    // ── Exponer API pública para que el pipeline pueda alimentar el log ───
+                    // El pipeline (runFullSync PASO 1) llama a estas funciones cuando
+                    // oy_get_gmb_location_details retorna exitosamente, para que la
+                    // entrada aparezca en el log de "Dirección y Geolocalización" también.
+                    window.oyAddrLogAPI = {
+                        captureSnapshot: captureSnapshot,
+                        buildDiff:       buildDiff,
+                        addLogEntry:     addLogEntry,
+                    };
 
                 })(); // end address sync IIFE
 
