@@ -170,7 +170,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 // Caso 2: objeto/array
                 if ( '' === $label && is_array( $p ) ) {
 
-                    // Prioridades “humanas”
+                    // Prioridades "humanas"
                     $candidates = array(
                         $p['displayName'] ?? '',
                         $p['title'] ?? '',
@@ -186,7 +186,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }
                     }
 
-                    // Si hay address formateado, lo preferimos como fallback “humano”
+                    // Si hay address formateado, lo preferimos como fallback "humano"
                     if ( '' === $label && isset( $p['address'] ) ) {
                         if ( is_string( $p['address'] ) ) {
                             $label = trim( $p['address'] );
@@ -333,7 +333,41 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
             // Nonce para AJAX del autocomplete (mismo action del CPT)
             $ajax_nonce = wp_create_nonce( 'oy_location_gmb_ajax' );
+
+            // ── Variables para el botón de sync de dirección ──────────────────────────
+            $addr_business_id   = (int) get_post_meta( $post->ID, 'parent_business_id', true );
+            $addr_location_name = (string) get_post_meta( $post->ID, 'gmb_location_name', true );
+            $addr_gmb_connected = ! empty( $addr_business_id ) && ! empty( $addr_location_name );
             ?>
+
+            <?php /* ── Barra de sincronización de dirección ── */ ?>
+            <div id="oy-address-sync-bar" style="
+                display:flex;
+                align-items:center;
+                gap:12px;
+                background:#f6f7f7;
+                border:1px solid #dadce0;
+                border-radius:4px;
+                padding:10px 14px;
+                margin-bottom:16px;
+                flex-wrap:wrap;
+            ">
+                <button type="button"
+                        id="oy-address-sync-btn"
+                        class="button button-secondary"
+                        <?php echo $addr_gmb_connected ? '' : 'disabled'; ?>
+                        style="display:inline-flex; align-items:center; gap:6px;">
+                    <span class="dashicons dashicons-update" style="margin-top:3px;"></span>
+                    <?php _e( 'Sincronizar dirección desde GMB', 'lealez' ); ?>
+                </button>
+                <span id="oy-address-sync-msg" style="font-size:12px; color:#555;"></span>
+                <?php if ( ! $addr_gmb_connected ) : ?>
+                    <span style="font-size:11px; color:#999; font-style:italic;">
+                        <?php _e( '(Requiere empresa y ubicación GMB vinculadas)', 'lealez' ); ?>
+                    </span>
+                <?php endif; ?>
+            </div>
+
             <?php /* ── Ubicación de la empresa ── */ ?>
             <div style="background:#f0f6fc; border:1px solid #c3d4e6; border-radius:4px; padding:14px 16px; margin-bottom:20px;">
                 <h4 style="margin:0 0 8px; font-size:14px; color:#1d2327;">
@@ -349,19 +383,16 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                            id="service_area_only"
                            value="1"
                         <?php checked( $service_area_only, '1' ); ?>>
-                    <strong><?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?></strong>
+                    <?php _e( 'Sin ubicación física — solo envíos y servicios en el hogar', 'lealez' ); ?>
                 </label>
 
-                <div id="oy-show-address-row"
-                     style="display:<?php echo $show_address_row ? 'flex' : 'none'; ?>; align-items:center; gap:10px; margin-top:6px;">
-                    <label class="oy-toggle-label" style="display:flex; align-items:center; gap:8px;">
-                        <input type="checkbox"
-                               name="show_address_to_customers"
-                               id="show_address_to_customers"
-                               value="1"
-                            <?php checked( $show_address, '1' ); ?>>
-                        <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
-                    </label>
+                <div id="oy-show-address-row" style="display:<?php echo $show_address_row ? 'flex' : 'none'; ?>; align-items:center; gap:8px; margin-left:24px;">
+                    <input type="checkbox"
+                           name="show_address_to_customers"
+                           id="show_address_to_customers"
+                           value="1"
+                        <?php checked( $show_address, '1' ); ?>>
+                    <?php _e( 'Mostrar la dirección de la empresa a los clientes', 'lealez' ); ?>
                 </div>
             </div>
 
@@ -662,10 +693,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     </p>
                 </div><!-- #oy-map-preview-col -->
 
-            </div><!-- #oy-address-map-layout ?>
+            </div><!-- #oy-address-map-layout -->
 
             <script type="text/javascript">
-                // Vars para AJAX del autocomplete
+                // Vars para AJAX del autocomplete (mismo action del CPT)
                 window.oyServiceAreasAjax = {
                     ajaxurl: (typeof ajaxurl !== 'undefined') ? ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>',
                     nonce: '<?php echo esc_js( $ajax_nonce ); ?>'
@@ -805,7 +836,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }, 250);
                     }
 
-                    // ✅ Expuesto para applyLocationToForm
+                    // ✅ Expuesto para applyLocationToForm y para el botón de sync de dirección
                     window.oy_service_areas_set = function(arr){
                         setAreas(Array.isArray(arr) ? arr : []);
                     };
@@ -939,6 +970,203 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }
                     })();
                 });
+
+                /**
+                 * ── Botón "Sincronizar dirección desde GMB" ──────────────────────────────
+                 *
+                 * Ejecuta solo el PASO 1 del pipeline (oy_get_gmb_location_details).
+                 * Compatible con class-oy-location-gmb-integration-metabox.php:
+                 *  - Reutiliza el mismo nonce action 'oy_location_gmb_ajax'
+                 *  - Llama al mismo AJAX handler que usa el pipeline completo (PASO 1)
+                 *  - Delega en applyLocationToForm(loc) del CPT JS para rellenar campos
+                 *  - Actualiza chips de "Áreas de servicio" vía window.oy_service_areas_set()
+                 *  - Emite evento oy:gmb:address:refreshed para extensibilidad futura
+                 *  - NO compite con #oy-full-sync-btn ni desactiva el pipeline completo
+                 */
+                (function(){
+                    var $ = jQuery;
+
+                    var ajaxUrl     = (typeof ajaxurl !== 'undefined') ? ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+                    var addrNonce   = '<?php echo esc_js( $ajax_nonce ); ?>';
+                    var syncRunning = false;
+
+                    /**
+                     * Extrae etiquetas legibles de serviceArea.places[] (respuesta GMB).
+                     * Misma lógica defensiva que extract_service_areas_from_gmb_raw() en PHP.
+                     *
+                     * @param {Object} loc  Objeto de ubicación GMB
+                     * @return {string[]}
+                     */
+                    function extractServiceAreas(loc) {
+                        if (!loc || !loc.serviceArea || !loc.serviceArea.places) {
+                            return [];
+                        }
+                        var places = loc.serviceArea.places;
+                        if (!Array.isArray(places)) { return []; }
+
+                        var out  = [];
+                        var seen = {};
+
+                        places.forEach(function(p) {
+                            var label = '';
+                            if (typeof p === 'string') {
+                                label = p.trim();
+                            } else if (p && typeof p === 'object') {
+                                var candidates = [
+                                    p.displayName || '',
+                                    p.title       || '',
+                                    p.name        || '',
+                                    p.placeName   || '',
+                                    p.placeId     || '',
+                                ];
+                                candidates.forEach(function(c) {
+                                    if (!label && typeof c === 'string' && c.trim()) {
+                                        label = c.trim();
+                                    }
+                                });
+                                if (!label && p.address) {
+                                    if (typeof p.address === 'string') {
+                                        label = p.address.trim();
+                                    } else if (typeof p.address === 'object') {
+                                        var parts = [];
+                                        if (p.address.locality)           { parts.push(p.address.locality); }
+                                        if (p.address.administrativeArea) { parts.push(p.address.administrativeArea); }
+                                        if (parts.length) { label = parts.join(', '); }
+                                    }
+                                }
+                            }
+                            label = (label || '').trim();
+                            if (!label) { return; }
+                            var k = label.toLowerCase();
+                            if (seen[k]) { return; }
+                            seen[k] = true;
+                            out.push(label);
+                        });
+
+                        return out;
+                    }
+
+                    /**
+                     * Muestra mensaje en la barra de sync de dirección.
+                     *
+                     * @param {string} msg
+                     * @param {string} type  'info' | 'success' | 'error'
+                     */
+                    function setAddrMsg(msg, type) {
+                        var colors = { info: '#555', success: '#46b450', error: '#dc3232' };
+                        $('#oy-address-sync-msg')
+                            .text(msg)
+                            .css('color', colors[type] || '#555');
+                    }
+
+                    // ── CSS animación para ícono giratorio ────────────────────────
+                    if (!$('#oy-address-sync-style').length) {
+                        $('head').append(
+                            '<style id="oy-address-sync-style">' +
+                            '@keyframes oy-addr-spin { to { transform: rotate(360deg); } }' +
+                            '#oy-address-sync-btn .dashicons.spin { animation: oy-addr-spin 1s linear infinite; display:inline-block; }' +
+                            '</style>'
+                        );
+                    }
+
+                    // ── Click handler ─────────────────────────────────────────────
+                    $(document).on('click', '#oy-address-sync-btn', function(e) {
+                        e.preventDefault();
+                        if (syncRunning) { return; }
+
+                        // Leer dinámicamente desde el DOM (el CPT principal ya los renderiza)
+                        var businessId   = $.trim($('#parent_business_id').val()        || '');
+                        var locationName = $.trim($('#gmb_location_name').val()         || '');
+                        var accountName  = $.trim($('#gmb_location_account_name').val() || '');
+
+                        if (!businessId || !locationName) {
+                            setAddrMsg('<?php echo esc_js( __( 'Vincula primero una empresa y ubicación GMB.', 'lealez' ) ); ?>', 'error');
+                            return;
+                        }
+
+                        syncRunning = true;
+                        var $btn = $('#oy-address-sync-btn');
+                        $btn.prop('disabled', true);
+                        $btn.find('.dashicons').addClass('spin');
+                        setAddrMsg('<?php echo esc_js( __( 'Consultando Google...', 'lealez' ) ); ?>', 'info');
+
+                        $.post(ajaxUrl, {
+                            action:        'oy_get_gmb_location_details',
+                            nonce:         addrNonce,
+                            business_id:   businessId,
+                            location_name: locationName,
+                            account_name:  accountName,
+                        })
+                        .done(function(resp) {
+                            if (!resp || !resp.success) {
+                                var errMsg = (resp && resp.data && resp.data.message)
+                                    ? resp.data.message
+                                    : '<?php echo esc_js( __( 'No se pudo importar la dirección.', 'lealez' ) ); ?>';
+                                setAddrMsg(errMsg, 'error');
+                                return;
+                            }
+
+                            var loc = (resp.data && resp.data.location) ? resp.data.location : null;
+                            if (!loc) {
+                                setAddrMsg('<?php echo esc_js( __( 'Respuesta vacía de GMB.', 'lealez' ) ); ?>', 'error');
+                                return;
+                            }
+
+                            // ── 1. Aplicar todos los campos al formulario ──────────
+                            // applyLocationToForm está en window (CPT JS) y actualiza:
+                            // dirección, coords, mapa, horarios, categorías, descripción, etc.
+                            if (typeof window.applyLocationToForm === 'function') {
+                                window.applyLocationToForm(loc);
+                            } else {
+                                // Fallback manual si el CPT JS aún no cargó
+                                if (loc.storefrontAddress) {
+                                    var a = loc.storefrontAddress;
+                                    if (a.addressLines && a.addressLines[0]) { $('#location_address_line1').val(a.addressLines[0]); }
+                                    if (a.addressLines && a.addressLines[1]) { $('#location_address_line2').val(a.addressLines[1]); }
+                                    if (a.sublocality)         { $('#location_neighborhood').val(a.sublocality); }
+                                    if (a.locality)            { $('#location_city').val(a.locality); }
+                                    if (a.administrativeArea)  { $('#location_state').val(a.administrativeArea); }
+                                    if (a.postalCode)          { $('#location_postal_code').val(a.postalCode); }
+                                    if (a.regionCode)          { $('#location_country').val(a.regionCode); }
+                                }
+                                if (loc.latlng) {
+                                    if (loc.latlng.latitude)  { $('#location_latitude').val(loc.latlng.latitude); }
+                                    if (loc.latlng.longitude) { $('#location_longitude').val(loc.latlng.longitude); }
+                                }
+                                if (typeof window.oy_update_map_preview === 'function') {
+                                    window.oy_update_map_preview();
+                                }
+                            }
+
+                            // ── 2. Áreas de servicio ────────────────────────────────
+                            // Solo actualiza chips si la API devuelve áreas.
+                            // No borra las existentes si GMB no devuelve ninguna.
+                            if (typeof window.oy_service_areas_set === 'function') {
+                                var areas = extractServiceAreas(loc);
+                                if (areas.length) {
+                                    window.oy_service_areas_set(areas);
+                                }
+                            }
+
+                            // ── 3. Éxito ────────────────────────────────────────────
+                            setAddrMsg('<?php echo esc_js( __( '✅ Dirección importada. Guarda el post para persistir.', 'lealez' ) ); ?>', 'success');
+
+                            // ── 4. Evento para extensibilidad ──────────────────────
+                            $(document).trigger('oy:gmb:address:refreshed', [{ location: loc }]);
+                        })
+                        .fail(function() {
+                            setAddrMsg('<?php echo esc_js( __( 'Error de red al sincronizar.', 'lealez' ) ); ?>', 'error');
+                        })
+                        .always(function() {
+                            syncRunning = false;
+                            var $b = $('#oy-address-sync-btn');
+                            $b.prop('disabled', false);
+                            $b.find('.dashicons').removeClass('spin');
+                        });
+                    });
+
+                })(); // end address sync IIFE
+
             </script>
             <?php
         }
