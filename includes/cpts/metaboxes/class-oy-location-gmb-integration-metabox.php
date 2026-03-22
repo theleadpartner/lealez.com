@@ -519,10 +519,12 @@ class OY_Location_GMB_Integration_Metabox {
                 account_name:  accountName,
             };
 
-            // ── Función principal de sync secuencial ─────────────────────────
+// ── Función principal de sync secuencial ─────────────────────────
             function runFullSync() {
                 if (syncRunning) return;
                 syncRunning  = true;
+                // ── Flag global: bloquea el botón de sync de dirección ────────
+                window.oyIntegrationSyncRunning = true;
                 stepResults  = {};
                 var doneCount = 0;
 
@@ -534,7 +536,7 @@ class OY_Location_GMB_Integration_Metabox {
                 $('#oy-sync-global-msg').text('<?php echo esc_js( __( 'Iniciando sincronización...', 'lealez' ) ); ?>').css('color','#555');
                 setProgress(0);
 
-// Resetear todos los pasos
+                // Resetear todos los pasos
                 ['import','hours','more','perf','keywords','reviews','posts','menus','services','busyhours'].forEach(function(id){
                     setStep(id, 'pending', '');
                 });
@@ -553,6 +555,55 @@ class OY_Location_GMB_Integration_Metabox {
                         setStep('import', ok ? 'ok' : 'error',
                             ok ? '<?php echo esc_js( __( 'importado', 'lealez' ) ); ?>'
                                : errMsg(r));
+
+                        // ── Integración con el log y formulario de Dirección ──────
+                        // Cuando el pipeline completo corre, PASO 1 también actualiza
+                        // el formulario de dirección en tiempo real y registra en el
+                        // log de "Dirección y Geolocalización" (window.oyAddrLogAPI).
+                        if (ok && r.data && r.data.location) {
+                            try {
+                                var loc = r.data.location;
+
+                                // Capturar snapshot ANTES de aplicar (si el API está disponible)
+                                var snapBefore = (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.captureSnapshot === 'function')
+                                    ? window.oyAddrLogAPI.captureSnapshot()
+                                    : null;
+
+                                // Aplicar datos al formulario de dirección (misma lógica
+                                // que el botón individual de "Sincronizar dirección desde GMB")
+                                if (typeof window.applyLocationToForm === 'function') {
+                                    try { window.applyLocationToForm(loc); } catch(e) {
+                                        if (window.console && window.console.error) {
+                                            console.error('[OY Pipeline PASO 1] applyLocationToForm error:', e);
+                                        }
+                                    }
+                                }
+
+                                // Registrar en el log de dirección si el API está disponible
+                                if (window.oyAddrLogAPI && snapBefore) {
+                                    try {
+                                        var snapAfter = window.oyAddrLogAPI.captureSnapshot();
+                                        var diff      = window.oyAddrLogAPI.buildDiff(snapBefore, snapAfter);
+                                        window.oyAddrLogAPI.addLogEntry(loc, diff);
+                                    } catch(logErr) {
+                                        if (window.console && window.console.error) {
+                                            console.error('[OY Pipeline PASO 1] addr log error:', logErr);
+                                        }
+                                    }
+                                }
+
+                                // Emitir evento de compatibilidad
+                                try {
+                                    $(document).trigger('oy:gmb:address:refreshed', [{ location: loc, source: 'pipeline' }]);
+                                } catch(trigErr) {}
+
+                            } catch(paso1Err) {
+                                if (window.console && window.console.error) {
+                                    console.error('[OY Pipeline PASO 1] integración addr error:', paso1Err);
+                                }
+                            }
+                        }
+
                         doneCount++; setProgress(doneCount);
                         def.resolve();
                     })
@@ -598,7 +649,6 @@ class OY_Location_GMB_Integration_Metabox {
                     var perfData = $.extend({}, baseData, { period: '30', force_refresh: '1' });
                     doAjax('oy_gmb_perf_fetch', perfData, 'nonce', nonces.performance)
                     .then(function(){
-                        // Si el fetch fue bien, guardar en post meta
                         setStep('perf', 'running', '<?php echo esc_js( __( 'guardando métricas...', 'lealez' ) ); ?>');
                         return doAjax('oy_gmb_perf_sync', baseData, 'nonce', nonces.performance);
                     })
@@ -629,7 +679,6 @@ class OY_Location_GMB_Integration_Metabox {
                             var kwSaveData = $.extend({}, baseData, { keywords: kwJson });
                             return doAjax('oy_gmb_kw_save', kwSaveData, 'nonce', nonces.keywords);
                         }
-                        // Sin keywords en el rango — registrar como ok (vacío)
                         return $.Deferred().resolve(r1).promise();
                     })
                     .done(function(r){
@@ -646,7 +695,6 @@ class OY_Location_GMB_Integration_Metabox {
                 });
 
                 // ── PASO 6: Reseñas ────────────────────────────────────────────
-                // Reviews solo hace fetch (no guarda en meta, muestra en UI)
                 chain = chain.then(function(){
                     setStep('reviews', 'running', '<?php echo esc_js( __( 'cargando reseñas...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
@@ -655,14 +703,12 @@ class OY_Location_GMB_Integration_Metabox {
                         order_by:      'updateTime desc',
                         force_refresh: '1',
                     });
-                    // Reviews usa 'security' como campo de nonce
                     doAjax('oy_gmb_reviews_fetch', revData, 'security', nonces.reviews)
                     .done(function(r){
                         var ok = r && r.success;
                         stepResults.reviews = ok ? 'ok' : 'error';
                         var msg = ok ? '<?php echo esc_js( __( 'cargadas', 'lealez' ) ); ?>' : errMsg(r);
                         setStep('reviews', ok ? 'ok' : 'error', msg);
-                        // Notificar al metabox de reseñas para que re-renderice
                         if ( ok ) { $(document).trigger('oy:gmb:reviews:refreshed'); }
                         doneCount++; setProgress(doneCount); def.resolve();
                     })
@@ -689,7 +735,6 @@ class OY_Location_GMB_Integration_Metabox {
                                 : '<?php echo esc_js( __( 'sincronizadas', 'lealez' ) ); ?>')
                             : errMsg(r);
                         setStep('posts', ok ? 'ok' : 'error', msg);
-                        // Notificar al metabox de publicaciones para que re-renderice
                         if ( ok ) { $(document).trigger('oy:gmb:posts:refreshed'); }
                         doneCount++; setProgress(doneCount); def.resolve();
                     })
@@ -715,7 +760,7 @@ class OY_Location_GMB_Integration_Metabox {
                     return def.promise();
                 });
 
-// ── PASO 9: Catálogo de servicios ─────────────────────────────────
+                // ── PASO 9: Catálogo de servicios ─────────────────────────────
                 chain = chain.then(function(){
                     setStep('services', 'running', '<?php echo esc_js( __( 'sincronizando...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
@@ -727,7 +772,6 @@ class OY_Location_GMB_Integration_Metabox {
                             ? (r.data && r.data.message ? r.data.message : '<?php echo esc_js( __( 'sincronizados', 'lealez' ) ); ?>')
                             : errMsg(r);
                         setStep('services', ok ? 'ok' : 'error', msg);
-                        // Notificar al metabox de servicios para que actualice su UI
                         if ( ok ) { $(document).trigger('oy:gmb:services:refreshed', [r.data || {}]); }
                         doneCount++; setProgress(doneCount); def.resolve();
                     })
@@ -739,7 +783,7 @@ class OY_Location_GMB_Integration_Metabox {
                     return def.promise();
                 });
 
-// ── PASO 10: Horario de mayor interés (compute → save) ─────────
+                // ── PASO 10: Horario de mayor interés (compute → save) ─────────
                 chain = chain.then(function(){
                     setStep('busyhours', 'running', '<?php echo esc_js( __( 'calculando...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
@@ -747,14 +791,6 @@ class OY_Location_GMB_Integration_Metabox {
                     .then(function(r1){
                         if (r1 && r1.success && r1.data) {
                             setStep('busyhours', 'running', '<?php echo esc_js( __( 'guardando...', 'lealez' ) ); ?>');
-                            // Construir el payload exacto que espera ajax_save_peak_hours:
-                            // - hours           ← r1.data.hours
-                            // - day_weights     ← r1.data.day_weights
-                            // - metric_breakdown ← r1.data.group_breakdown  (distinto nombre)
-                            // - auto_template   ← r1.data.auto_template
-                            // - period          ← r1.data.period
-                            // - metrics_used    ← r1.data.metrics_used
-                            // - last_computed   ← r1.data.computed_at       (distinto nombre)
                             var peakPayload = {
                                 hours:             r1.data.hours             || {},
                                 day_weights:       r1.data.day_weights       || {},
@@ -766,11 +802,9 @@ class OY_Location_GMB_Integration_Metabox {
                                 avg_stay_min:      45,
                                 avg_stay_max:      90,
                             };
-                            // El campo POST debe llamarse 'peak_data' (no 'peak_hours')
                             var saveData = $.extend({}, baseData, { peak_data: JSON.stringify(peakPayload) });
                             return doAjax('oy_gmb_busy_save', saveData, 'nonce', nonces.busyhours);
                         }
-                        // Si compute falló, propagar el error
                         return $.Deferred().resolve(r1).promise();
                     })
                     .done(function(r){
@@ -817,7 +851,6 @@ class OY_Location_GMB_Integration_Metabox {
                         results:  JSON.stringify(stepResults),
                         trigger:  'button',
                     }, function(resp){
-                        // Actualizar badge del contador
                         if (resp && resp.success && resp.data) {
                             var count   = resp.data.count_today;
                             var max     = resp.data.max_per_day;
@@ -838,7 +871,7 @@ class OY_Location_GMB_Integration_Metabox {
                             }
                         }
 
-                        // Recargar log
+                        // Recargar log del metabox de integración
                         $.post(ajaxUrl, {
                             action:  'oy_gmb_sync_log_get',
                             nonce:   nonces.integration,
@@ -850,6 +883,8 @@ class OY_Location_GMB_Integration_Metabox {
                         });
                     });
 
+                    // ── Liberar flag global de sync ────────────────────────────
+                    window.oyIntegrationSyncRunning = false;
                     syncRunning = false;
                 }); // end chain.done
             } // end runFullSync
