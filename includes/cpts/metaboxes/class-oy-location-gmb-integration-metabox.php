@@ -316,6 +316,10 @@ class OY_Location_GMB_Integration_Metabox {
                         <em class="oy-step-icon">⏳</em>
                         <span class="oy-step-label"><?php _e( 'Importar datos base', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
                     </li>
+                    <li id="oy-step-address" style="padding-left:18px; border-left:2px solid #e0e7ef; margin-left:10px;">
+                        <em class="oy-step-icon">⏳</em>
+                        <span class="oy-step-label"><?php _e( 'Dirección y Geolocalización', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
+                    </li>
                     <li id="oy-step-hours">
                         <em class="oy-step-icon">⏳</em>
                         <span class="oy-step-label"><?php _e( 'Horarios de atención', 'lealez' ); ?><br><small class="oy-step-msg"></small></span>
@@ -467,7 +471,7 @@ class OY_Location_GMB_Integration_Metabox {
 
             // ── Definición de los 8 pasos ──────────────────────────────────────
             // Cada paso puede ser 'single' (una llamada) o 'multi' (lógica propia)
-           var TOTAL_STEPS = 10;
+           var TOTAL_STEPS = 11;
 
             // ── Helper: actualizar estado visual de un paso ───────────────────
             function setStep(id, state, msg) {
@@ -537,14 +541,14 @@ class OY_Location_GMB_Integration_Metabox {
                 setProgress(0);
 
                 // Resetear todos los pasos
-                ['import','hours','more','perf','keywords','reviews','posts','menus','services','busyhours'].forEach(function(id){
+ ['import','address','hours','more','perf','keywords','reviews','posts','menus','services','busyhours'].forEach(function(id){
                     setStep(id, 'pending', '');
                 });
 
                 // ── Cadena secuencial de promesas ──────────────────────────────
                 var chain = $.Deferred().resolve();
 
-                // ── PASO 1: Importar datos base ────────────────────────────────
+// ── PASO 1: Importar datos base ────────────────────────────────
                 chain = chain.then(function(){
                     setStep('import', 'running', '<?php echo esc_js( __( 'consultando API...', 'lealez' ) ); ?>');
                     var def = $.Deferred();
@@ -556,41 +560,53 @@ class OY_Location_GMB_Integration_Metabox {
                             ok ? '<?php echo esc_js( __( 'importado', 'lealez' ) ); ?>'
                                : errMsg(r));
 
-                        // ── Integración con el log y formulario de Dirección ──────
-                        // Cuando el pipeline completo corre, PASO 1 también actualiza
-                        // el formulario de dirección en tiempo real y registra en el
-                        // log de "Dirección y Geolocalización" (window.oyAddrLogAPI).
+                        // ── Sub-paso: Dirección y Geolocalización ──────────────
+                        // Se ejecuta sincrónicamente dentro del .done() de PASO 1.
+                        // Actualiza el formulario de dirección, genera el diff y
+                        // registra en el log del metabox de Dirección. También
+                        // actualiza #oy-step-address en la UI del pipeline.
                         if (ok && r.data && r.data.location) {
                             try {
                                 var loc = r.data.location;
 
-                                // Capturar snapshot ANTES de aplicar (si el API está disponible)
+                                // Capturar snapshot ANTES
                                 var snapBefore = (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.captureSnapshot === 'function')
                                     ? window.oyAddrLogAPI.captureSnapshot()
                                     : null;
 
-                                // Aplicar datos al formulario de dirección (misma lógica
-                                // que el botón individual de "Sincronizar dirección desde GMB")
+                                // Aplicar al formulario
                                 if (typeof window.applyLocationToForm === 'function') {
-                                    try { window.applyLocationToForm(loc); } catch(e) {
+                                    try { window.applyLocationToForm(loc); } catch(applyErr) {
                                         if (window.console && window.console.error) {
-                                            console.error('[OY Pipeline PASO 1] applyLocationToForm error:', e);
+                                            console.error('[OY Pipeline PASO 1] applyLocationToForm error:', applyErr);
                                         }
                                     }
                                 }
 
-                                // Registrar en el log de dirección si el API está disponible
+                                // Registrar en log de dirección + calcular diff
+                                var addrChangedCount = 0;
                                 if (window.oyAddrLogAPI && snapBefore) {
                                     try {
                                         var snapAfter = window.oyAddrLogAPI.captureSnapshot();
                                         var diff      = window.oyAddrLogAPI.buildDiff(snapBefore, snapAfter);
-                                        window.oyAddrLogAPI.addLogEntry(loc, diff);
+                                        addrChangedCount = diff.filter(function(row) {
+                                            return row.status === 'changed' || row.status === 'new';
+                                        }).length;
+                                        window.oyAddrLogAPI.addLogEntry(loc, diff, 'pipeline');
                                     } catch(logErr) {
                                         if (window.console && window.console.error) {
                                             console.error('[OY Pipeline PASO 1] addr log error:', logErr);
                                         }
                                     }
                                 }
+
+                                // Actualizar indicador visual del sub-paso
+                                var addrMsg = addrChangedCount > 0
+                                    ? addrChangedCount + ' <?php echo esc_js( __( 'campo(s) actualizado(s)', 'lealez' ) ); ?>'
+                                    : '<?php echo esc_js( __( 'sin cambios', 'lealez' ) ); ?>';
+                                stepResults.address = 'ok';
+                                setStep('address', 'ok', addrMsg);
+                                doneCount++; setProgress(doneCount);
 
                                 // Emitir evento de compatibilidad
                                 try {
@@ -601,13 +617,33 @@ class OY_Location_GMB_Integration_Metabox {
                                 if (window.console && window.console.error) {
                                     console.error('[OY Pipeline PASO 1] integración addr error:', paso1Err);
                                 }
+                                // Si el bloque de dirección falla internamente, marcarlo como skip
+                                // para no bloquear el pipeline
+                                stepResults.address = 'skip';
+                                setStep('address', 'skip', '<?php echo esc_js( __( 'error interno', 'lealez' ) ); ?>');
+                                doneCount++; setProgress(doneCount);
                             }
+                        } else {
+                            // PASO 1 falló o no trajo location: el sub-paso de dirección no corre
+                            stepResults.address = ok ? 'skip' : 'error';
+                            setStep('address', ok ? 'skip' : 'error',
+                                ok ? '<?php echo esc_js( __( 'sin datos de ubicación', 'lealez' ) ); ?>'
+                                   : '<?php echo esc_js( __( 'n/a (importación falló)', 'lealez' ) ); ?>');
+                            doneCount++; setProgress(doneCount);
                         }
 
                         doneCount++; setProgress(doneCount);
                         def.resolve();
                     })
-                    .fail(function(){ stepResults.import='error'; setStep('import','error','<?php echo esc_js( __( 'error de red', 'lealez' ) ); ?>'); doneCount++; setProgress(doneCount); def.resolve(); });
+                    .fail(function(){
+                        stepResults.import  = 'error';
+                        stepResults.address = 'error';
+                        setStep('import',  'error', '<?php echo esc_js( __( 'error de red', 'lealez' ) ); ?>');
+                        setStep('address', 'error', '<?php echo esc_js( __( 'n/a (importación falló)', 'lealez' ) ); ?>');
+                        doneCount++; setProgress(doneCount); // import
+                        doneCount++; setProgress(doneCount); // address
+                        def.resolve();
+                    });
                     return def.promise();
                 });
 
@@ -980,6 +1016,7 @@ class OY_Location_GMB_Integration_Metabox {
 
 $step_labels = array(
             'import'    => __( 'Base', 'lealez' ),
+            'address'   => __( 'Dirección', 'lealez' ),
             'hours'     => __( 'Horarios', 'lealez' ),
             'more'      => __( 'Atributos', 'lealez' ),
             'perf'      => __( 'Métricas', 'lealez' ),
@@ -1193,6 +1230,11 @@ $step_labels = array(
         } catch ( Exception $e ) {
             $results['import'] = 'error';
         }
+
+// ── Sub-paso: Dirección y Geolocalización ────────────────────────────
+        // La sincronización de dirección en cron ocurre dentro de sync_location_data.
+        // Como no hay JS activo en cron, el sub-paso hereda el estado de 'import'.
+        $results['address'] = $results['import'];
 
         // ── Paso 2: Sync horarios ────────────────────────────────────────────
         // Los horarios se actualizan junto con sync_location_data arriba
