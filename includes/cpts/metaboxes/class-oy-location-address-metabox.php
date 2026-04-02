@@ -113,119 +113,130 @@ public function __construct() {
             update_post_meta( $post_id, 'location_service_areas', $clean );
         }
 
-        /**
-         * AJAX: Envía la dirección guardada en Lealez hacia Google Business Profile (push).
-         *
-         * Acción:   oy_push_address_to_gmb
-         * Nonce:    oy_push_address_gmb_{post_id}
-         *
-         * Lee los campos de dirección desde post_meta (ya guardados en WP) y ejecuta
-         * un PATCH a Business Information API v1 actualizando storefrontAddress + latlng.
-         *
-         * IMPORTANTE: serviceArea NO se envía. Las áreas de servicio en Lealez son texto libre,
-         * pero la API de GMB requiere resource names de Places (ej: places/ChIJ...).
-         * Para actualizar serviceArea en GMB debe hacerse directamente en el panel de Google.
-         *
-         * @return void Responde con wp_send_json_success() o wp_send_json_error().
-         */
-        public function ajax_push_address_to_gmb() {
-            $nonce   = isset( $_POST['nonce'] )   ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
-            $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) )             : 0;
+/**
+ * AJAX: Envía la dirección guardada en Lealez hacia Google Business Profile (push).
+ *
+ * Acción:   oy_push_address_to_gmb
+ * Nonce:    oy_push_address_gmb_{post_id}
+ *
+ * Lee los campos de dirección desde post_meta (ya guardados en WP) y ejecuta
+ * un PATCH a Business Information API v1 actualizando únicamente storefrontAddress.
+ *
+ * IMPORTANTE:
+ * - latlng NO se envía. Las coordenadas son calculadas automáticamente por Google
+ *   al cambiar la dirección. Enviar latlng causa HTTP 400 en ubicaciones verificadas.
+ * - serviceArea NO se envía. Las áreas de servicio en Lealez son texto libre,
+ *   pero la API de GMB requiere resource names de Places (ej: places/ChIJ...).
+ *   Para actualizar serviceArea en GMB debe hacerse directamente en el panel de Google.
+ *
+ * @return void Responde con wp_send_json_success() o wp_send_json_error().
+ */
+public function ajax_push_address_to_gmb() {
+    $nonce   = isset( $_POST['nonce'] )   ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) )             : 0;
 
-            if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_push_address_gmb_' . $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
-            }
+    if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_push_address_gmb_' . $post_id ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
+    }
 
-            if ( ! current_user_can( 'edit_post', $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
-            }
+    if ( ! current_user_can( 'edit_post', $post_id ) ) {
+        wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
+    }
 
-            $post = get_post( $post_id );
-            if ( ! $post || 'oy_location' !== $post->post_type ) {
-                wp_send_json_error( array( 'message' => __( 'Post no válido o no es una oy_location.', 'lealez' ) ) );
-            }
+    $post = get_post( $post_id );
+    if ( ! $post || 'oy_location' !== $post->post_type ) {
+        wp_send_json_error( array( 'message' => __( 'Post no válido o no es una oy_location.', 'lealez' ) ) );
+    }
 
-            // ── Obtener business_id y location_name ───────────────────────────────
-            $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
-            $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+    // ── Obtener business_id y location_name ───────────────────────────────
+    $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+    $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
 
-            if ( ! $business_id || '' === $location_name ) {
-                wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada. Vincula primero en el metabox de Integración GMB.', 'lealez' ) ) );
-            }
+    if ( ! $business_id || '' === $location_name ) {
+        wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada. Vincula primero en el metabox de Integración GMB.', 'lealez' ) ) );
+    }
 
-            if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-                wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
-            }
+    if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+    }
 
-            if ( ! method_exists( 'Lealez_GMB_API', 'update_location_address' ) ) {
-                wp_send_json_error( array( 'message' => __( 'El método update_location_address no existe en Lealez_GMB_API. Actualiza el plugin.', 'lealez' ) ) );
-            }
+    if ( ! method_exists( 'Lealez_GMB_API', 'update_location_address' ) ) {
+        wp_send_json_error( array( 'message' => __( 'El método update_location_address no existe en Lealez_GMB_API. Actualiza el plugin.', 'lealez' ) ) );
+    }
 
-            // ── Leer campos desde post_meta (ya guardados por WP) ────────────────
-            $address_line1 = (string) get_post_meta( $post_id, 'location_address_line1', true );
-            $address_line2 = (string) get_post_meta( $post_id, 'location_address_line2', true );
-            $city          = (string) get_post_meta( $post_id, 'location_city', true );
-            $state         = (string) get_post_meta( $post_id, 'location_state', true );
-            $country       = (string) get_post_meta( $post_id, 'location_country', true );
-            $postal_code   = (string) get_post_meta( $post_id, 'location_postal_code', true );
-            $latitude      = get_post_meta( $post_id, 'location_latitude', true );
-            $longitude     = get_post_meta( $post_id, 'location_longitude', true );
+    // ── Leer campos de dirección desde post_meta (ya guardados por WP) ────────────────
+    // NOTA: latitude y longitude NO se incluyen en el payload a GMB.
+    // La API de Google rechaza latlng en ubicaciones verificadas (HTTP 400).
+    // Google recalcula las coordenadas automáticamente al actualizar storefrontAddress.
+    $address_line1 = (string) get_post_meta( $post_id, 'location_address_line1', true );
+    $address_line2 = (string) get_post_meta( $post_id, 'location_address_line2', true );
+    $city          = (string) get_post_meta( $post_id, 'location_city', true );
+    $state         = (string) get_post_meta( $post_id, 'location_state', true );
+    $country       = (string) get_post_meta( $post_id, 'location_country', true );
+    $postal_code   = (string) get_post_meta( $post_id, 'location_postal_code', true );
 
-            // regionCode es obligatorio en la API de GMB
-            if ( '' === trim( $country ) ) {
-                wp_send_json_error( array(
-                    'message' => __( 'El campo "País (ISO 2)" es obligatorio para enviar a GMB. Guarda primero el post con el código del país (ej: CO, MX, US).', 'lealez' ),
-                ) );
-            }
+    // regionCode es obligatorio en la API de GMB
+    if ( '' === trim( $country ) ) {
+        wp_send_json_error( array(
+            'message' => __( 'El campo "País (ISO 2)" es obligatorio para enviar a GMB. Guarda primero el post con el código del país (ej: CO, MX, US).', 'lealez' ),
+        ) );
+    }
 
-            // ── Construir payload ─────────────────────────────────────────────────
-            $address_lines = array_values( array_filter(
-                array( trim( $address_line1 ), trim( $address_line2 ) ),
-                function ( $l ) { return '' !== $l; }
-            ) );
+    // ── Construir payload (solo storefrontAddress, sin latlng) ────────────────────────
+    $address_lines = array_values( array_filter(
+        array( trim( $address_line1 ), trim( $address_line2 ) ),
+        function ( $l ) { return '' !== $l; }
+    ) );
 
-            $address_data = array(
-                'regionCode'         => strtoupper( trim( $country ) ),
-                'addressLines'       => $address_lines,
-                'locality'           => trim( $city ),
-                'administrativeArea' => trim( $state ),
-                'postalCode'         => trim( $postal_code ),
-            );
+    $address_data = array(
+        'regionCode'         => strtoupper( trim( $country ) ),
+        'addressLines'       => $address_lines,
+        'locality'           => trim( $city ),
+        'administrativeArea' => trim( $state ),
+        'postalCode'         => trim( $postal_code ),
+    );
 
-            // Agregar latlng solo si ambos son numéricos
-            if ( '' !== (string) $latitude && '' !== (string) $longitude
-                && is_numeric( $latitude ) && is_numeric( $longitude ) ) {
-                $address_data['latitude']  = (float) $latitude;
-                $address_data['longitude'] = (float) $longitude;
-            }
+    // ── Llamar a la API ───────────────────────────────────────────────────
+    $result = Lealez_GMB_API::update_location_address( $business_id, $location_name, $address_data );
 
-            // ── Llamar a la API ───────────────────────────────────────────────────
-            $result = Lealez_GMB_API::update_location_address( $business_id, $location_name, $address_data );
+    if ( is_wp_error( $result ) ) {
+        $err_msg  = $result->get_error_message();
+        $err_code = $result->get_error_code();
+        $err_data = $result->get_error_data();
 
-            if ( is_wp_error( $result ) ) {
-                wp_send_json_error( array(
-                    'message' => $result->get_error_message(),
-                    'code'    => $result->get_error_code(),
-                ) );
-            }
-
-            // ── Éxito ─────────────────────────────────────────────────────────────
-            $pushed_fields = array(
-                'regionCode'         => $address_data['regionCode'],
-                'addressLines'       => $address_data['addressLines'],
-                'locality'           => $address_data['locality'],
-                'administrativeArea' => $address_data['administrativeArea'],
-                'postalCode'         => $address_data['postalCode'],
-                'latitude'           => isset( $address_data['latitude'] )  ? $address_data['latitude']  : null,
-                'longitude'          => isset( $address_data['longitude'] ) ? $address_data['longitude'] : null,
-            );
-
-            wp_send_json_success( array(
-                'message'       => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
-                'pushed_fields' => $pushed_fields,
-                'gmb_response'  => $result,
-            ) );
+        // Exponer raw body de Google en modo debug para facilitar diagnóstico
+        $raw_body_preview = '';
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG && is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
+            $raw_body_preview = substr( (string) $err_data['raw_body'], 0, 500 );
         }
+
+        $response = array(
+            'message' => $err_msg,
+            'code'    => $err_code,
+        );
+
+        if ( '' !== $raw_body_preview ) {
+            $response['debug_raw'] = $raw_body_preview;
+        }
+
+        wp_send_json_error( $response );
+    }
+
+    // ── Éxito ─────────────────────────────────────────────────────────────
+    $pushed_fields = array(
+        'regionCode'         => $address_data['regionCode'],
+        'addressLines'       => $address_data['addressLines'],
+        'locality'           => $address_data['locality'],
+        'administrativeArea' => $address_data['administrativeArea'],
+        'postalCode'         => $address_data['postalCode'],
+    );
+
+    wp_send_json_success( array(
+        'message'       => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
+        'pushed_fields' => $pushed_fields,
+        'gmb_response'  => $result,
+    ) );
+}
 
         /**
          * ✅ Extrae "Áreas de servicio" desde RAW de GMB y devuelve array de strings "humanos"
