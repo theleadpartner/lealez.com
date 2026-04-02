@@ -28,12 +28,15 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
         /**
          * Constructor
          */
-        public function __construct() {
+public function __construct() {
             add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
 
             // ✅ Guardado autocontenido del campo "Áreas de servicio" (JSON → array)
             // Sin tocar el CPT principal.
             add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 19, 2 );
+
+            // ✅ AJAX: Enviar dirección desde Lealez hacia GMB (push inverso)
+            add_action( 'wp_ajax_oy_push_address_to_gmb', array( $this, 'ajax_push_address_to_gmb' ) );
         }
 
         /**
@@ -108,6 +111,120 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             }
 
             update_post_meta( $post_id, 'location_service_areas', $clean );
+        }
+
+        /**
+         * AJAX: Envía la dirección guardada en Lealez hacia Google Business Profile (push).
+         *
+         * Acción:   oy_push_address_to_gmb
+         * Nonce:    oy_push_address_gmb_{post_id}
+         *
+         * Lee los campos de dirección desde post_meta (ya guardados en WP) y ejecuta
+         * un PATCH a Business Information API v1 actualizando storefrontAddress + latlng.
+         *
+         * IMPORTANTE: serviceArea NO se envía. Las áreas de servicio en Lealez son texto libre,
+         * pero la API de GMB requiere resource names de Places (ej: places/ChIJ...).
+         * Para actualizar serviceArea en GMB debe hacerse directamente en el panel de Google.
+         *
+         * @return void Responde con wp_send_json_success() o wp_send_json_error().
+         */
+        public function ajax_push_address_to_gmb() {
+            $nonce   = isset( $_POST['nonce'] )   ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+            $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) )             : 0;
+
+            if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_push_address_gmb_' . $post_id ) ) {
+                wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
+            }
+
+            if ( ! current_user_can( 'edit_post', $post_id ) ) {
+                wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
+            }
+
+            $post = get_post( $post_id );
+            if ( ! $post || 'oy_location' !== $post->post_type ) {
+                wp_send_json_error( array( 'message' => __( 'Post no válido o no es una oy_location.', 'lealez' ) ) );
+            }
+
+            // ── Obtener business_id y location_name ───────────────────────────────
+            $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+            $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+
+            if ( ! $business_id || '' === $location_name ) {
+                wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada. Vincula primero en el metabox de Integración GMB.', 'lealez' ) ) );
+            }
+
+            if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
+            }
+
+            if ( ! method_exists( 'Lealez_GMB_API', 'update_location_address' ) ) {
+                wp_send_json_error( array( 'message' => __( 'El método update_location_address no existe en Lealez_GMB_API. Actualiza el plugin.', 'lealez' ) ) );
+            }
+
+            // ── Leer campos desde post_meta (ya guardados por WP) ────────────────
+            $address_line1 = (string) get_post_meta( $post_id, 'location_address_line1', true );
+            $address_line2 = (string) get_post_meta( $post_id, 'location_address_line2', true );
+            $city          = (string) get_post_meta( $post_id, 'location_city', true );
+            $state         = (string) get_post_meta( $post_id, 'location_state', true );
+            $country       = (string) get_post_meta( $post_id, 'location_country', true );
+            $postal_code   = (string) get_post_meta( $post_id, 'location_postal_code', true );
+            $latitude      = get_post_meta( $post_id, 'location_latitude', true );
+            $longitude     = get_post_meta( $post_id, 'location_longitude', true );
+
+            // regionCode es obligatorio en la API de GMB
+            if ( '' === trim( $country ) ) {
+                wp_send_json_error( array(
+                    'message' => __( 'El campo "País (ISO 2)" es obligatorio para enviar a GMB. Guarda primero el post con el código del país (ej: CO, MX, US).', 'lealez' ),
+                ) );
+            }
+
+            // ── Construir payload ─────────────────────────────────────────────────
+            $address_lines = array_values( array_filter(
+                array( trim( $address_line1 ), trim( $address_line2 ) ),
+                function ( $l ) { return '' !== $l; }
+            ) );
+
+            $address_data = array(
+                'regionCode'         => strtoupper( trim( $country ) ),
+                'addressLines'       => $address_lines,
+                'locality'           => trim( $city ),
+                'administrativeArea' => trim( $state ),
+                'postalCode'         => trim( $postal_code ),
+            );
+
+            // Agregar latlng solo si ambos son numéricos
+            if ( '' !== (string) $latitude && '' !== (string) $longitude
+                && is_numeric( $latitude ) && is_numeric( $longitude ) ) {
+                $address_data['latitude']  = (float) $latitude;
+                $address_data['longitude'] = (float) $longitude;
+            }
+
+            // ── Llamar a la API ───────────────────────────────────────────────────
+            $result = Lealez_GMB_API::update_location_address( $business_id, $location_name, $address_data );
+
+            if ( is_wp_error( $result ) ) {
+                wp_send_json_error( array(
+                    'message' => $result->get_error_message(),
+                    'code'    => $result->get_error_code(),
+                ) );
+            }
+
+            // ── Éxito ─────────────────────────────────────────────────────────────
+            $pushed_fields = array(
+                'regionCode'         => $address_data['regionCode'],
+                'addressLines'       => $address_data['addressLines'],
+                'locality'           => $address_data['locality'],
+                'administrativeArea' => $address_data['administrativeArea'],
+                'postalCode'         => $address_data['postalCode'],
+                'latitude'           => isset( $address_data['latitude'] )  ? $address_data['latitude']  : null,
+                'longitude'          => isset( $address_data['longitude'] ) ? $address_data['longitude'] : null,
+            );
+
+            wp_send_json_success( array(
+                'message'       => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
+                'pushed_fields' => $pushed_fields,
+                'gmb_response'  => $result,
+            ) );
         }
 
         /**
@@ -340,6 +457,11 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $addr_gmb_connected = ! empty( $addr_business_id ) && ! empty( $addr_location_name );
             ?>
 
+<?php
+            // Nonce dedicado para el push (distinto del pull para mayor seguridad)
+            $push_nonce = wp_create_nonce( 'oy_push_address_gmb_' . $post->ID );
+            ?>
+
             <?php /* ── Barra de sincronización de dirección ── */ ?>
             <div id="oy-address-sync-bar" style="
                 display:flex;
@@ -352,18 +474,38 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 margin-bottom:16px;
                 flex-wrap:wrap;
             ">
+                <?php /* ── Sección: Importar desde GMB ── */ ?>
                 <button type="button"
                         id="oy-address-sync-btn"
                         class="button button-secondary"
                         <?php echo $addr_gmb_connected ? '' : 'disabled'; ?>
                         style="display:inline-flex; align-items:center; gap:6px;">
-                    <span class="dashicons dashicons-update" style="margin-top:3px;"></span>
-                    <?php _e( 'Sincronizar dirección desde GMB', 'lealez' ); ?>
+                    <span class="dashicons dashicons-download" style="margin-top:3px;"></span>
+                    <?php _e( '← Importar desde GMB', 'lealez' ); ?>
                 </button>
                 <span id="oy-address-sync-msg" style="font-size:12px; color:#555;"></span>
+
+                <?php /* ── Separador visual ── */ ?>
+                <span style="color:#dadce0; font-size:18px; line-height:1; user-select:none;">|</span>
+
+                <?php /* ── Sección: Enviar a GMB ── */ ?>
+                <button type="button"
+                        id="oy-address-push-btn"
+                        class="button"
+                        <?php echo $addr_gmb_connected ? '' : 'disabled'; ?>
+                        style="display:inline-flex; align-items:center; gap:6px; background:#1a73e8; color:#fff; border-color:#1558b0;">
+                    <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
+                    <?php _e( 'Publicar en GMB →', 'lealez' ); ?>
+                </button>
+                <span id="oy-address-push-msg" style="font-size:12px; color:#555;"></span>
+
                 <?php if ( ! $addr_gmb_connected ) : ?>
-                    <span style="font-size:11px; color:#999; font-style:italic;">
+                    <span style="font-size:11px; color:#999; font-style:italic; width:100%;">
                         <?php _e( '(Requiere empresa y ubicación GMB vinculadas)', 'lealez' ); ?>
+                    </span>
+                <?php else : ?>
+                    <span style="font-size:11px; color:#888; font-style:italic; width:100%;">
+                        <?php _e( '⚠️ Para <strong>Publicar en GMB</strong>: primero guarda el post (Actualizar), luego presiona el botón. No se envían las Áreas de Servicio (requieren Place IDs de Google).', 'lealez' ); ?>
                     </span>
                 <?php endif; ?>
             </div>
@@ -1177,7 +1319,8 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                     $('<p/>').css({
                                         padding: '12px 16px', margin: 0,
                                         fontSize: '12px', color: '#888', fontStyle: 'italic'
-                                    }).text('Aún no hay sincronizaciones registradas. Usa el botón "Sincronizar dirección desde GMB" o ejecuta la Sync completa.')
+                                    }).text('Aún no hay entradas registradas. Usa "← Importar desde GMB" para traer datos, "Publicar en GMB →" para enviar los guardados, o ejecuta la Sync completa.')
+
                                 );
                                 return;
                             }
@@ -1194,8 +1337,17 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 var bgHeader = isFirst ? '#f0f7ff' : '#fff';
 
                                 // Origen del registro (botón individual vs pipeline completo)
-                                var srcIcon  = (entry.source === 'pipeline') ? '⚙️' : '🔵';
-                                var srcLabel = (entry.source === 'pipeline') ? ' · Sync completa' : ' · Botón dirección';
+var srcIcon, srcLabel;
+                                if (entry.source === 'pipeline') {
+                                    srcIcon  = '⚙️';
+                                    srcLabel = ' · Sync completa';
+                                } else if (entry.source === 'push') {
+                                    srcIcon  = '📤';
+                                    srcLabel = ' · Publicado en GMB';
+                                } else {
+                                    srcIcon  = '🔵';
+                                    srcLabel = ' · Importado desde GMB';
+                                }
 
                                 var $entry = $('<div/>').css({
                                     borderBottom: '1px solid ' + (isFirst ? '#c3d4e6' : '#f0f0f0'),
@@ -1208,11 +1360,14 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                     background: bgHeader, gap: '10px',
                                 });
 
-                                var statusLabel, statusColor;
+var statusLabel, statusColor;
                                 var hasError = entry.raw && (entry.raw.error || entry.raw._serializeError);
                                 if (hasError) {
-                                    statusLabel = '❌ Error';
+                                    statusLabel = (entry.source === 'push') ? '❌ Error al publicar' : '❌ Error';
                                     statusColor = '#dc3232';
+                                } else if (entry.source === 'push') {
+                                    statusLabel = '📤 Publicado en GMB';
+                                    statusColor = '#1a73e8';
                                 } else if (!diff.length) {
                                     statusLabel = '⚠️ Sin datos de diff';
                                     statusColor = '#999';
@@ -1343,9 +1498,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     // ── CSS animación para ícono giratorio ────────────────────────────────
                     if (!$('#oy-address-sync-style').length) {
                         $('head').append(
-                            '<style id="oy-address-sync-style">' +
+'<style id="oy-address-sync-style">' +
                             '@keyframes oy-addr-spin { to { transform: rotate(360deg); } }' +
-                            '#oy-address-sync-btn .dashicons.spin { animation: oy-addr-spin 1s linear infinite; display:inline-block; }' +
+                            '#oy-address-sync-btn .dashicons.spin,' +
+                            '#oy-address-push-btn .dashicons.spin { animation: oy-addr-spin 1s linear infinite; display:inline-block; }' +
                             '</style>'
                         );
                     }
@@ -1589,6 +1745,174 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                 })(); // end address sync IIFE
 
+(function(){
+                    var $ = jQuery;
+                    var ajaxUrl    = (typeof ajaxurl !== 'undefined') ? ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+                    var pushNonce  = '<?php echo esc_js( $push_nonce ); ?>';
+                    var postId     = '<?php echo esc_js( (string) $post->ID ); ?>';
+                    var pushRunning = false;
+
+                    // ── Helpers de UI ─────────────────────────────────────────────────────
+                    function setPushMsg( msg, type ) {
+                        var colors = { info: '#555', success: '#46b450', error: '#dc3232', blue: '#1a73e8' };
+                        $('#oy-address-push-msg').text( msg ).css( 'color', colors[type] || '#555' );
+                    }
+
+                    function resetPushBtn() {
+                        pushRunning = false;
+                        var $b = $('#oy-address-push-btn');
+                        $b.prop( 'disabled', false );
+                        $b.find('.dashicons').removeClass('spin');
+                    }
+
+                    // ── Click handler del botón "Publicar en GMB →" ───────────────────────
+                    $(document).on('click', '#oy-address-push-btn', function(e) {
+                        e.preventDefault();
+                        if (pushRunning) { return; }
+
+                        // Guardia: no disparar si el pipeline completo está corriendo
+                        if (window.oyIntegrationSyncRunning) {
+                            setPushMsg('<?php echo esc_js( __( '⚙️ Sincronización completa en progreso. Espera que termine.', 'lealez' ) ); ?>', 'error');
+                            return;
+                        }
+
+                        var businessId   = $.trim( $('#parent_business_id').val()  || '' );
+                        var locationName = $.trim( $('#gmb_location_name').val()   || '' );
+
+                        if ( !businessId || !locationName ) {
+                            setPushMsg('<?php echo esc_js( __( 'Vincula primero una empresa y ubicación GMB.', 'lealez' ) ); ?>', 'error');
+                            return;
+                        }
+
+                        // Confirmar antes de sobrescribir datos en GMB
+                        if ( !confirm('<?php echo esc_js( __( '¿Enviar la dirección guardada en Lealez a Google Business Profile? Esto sobreescribirá los datos de dirección actuales en GMB.', 'lealez' ) ); ?>') ) {
+                            return;
+                        }
+
+                        pushRunning = true;
+                        var $btn = $('#oy-address-push-btn');
+                        $btn.prop('disabled', true);
+                        $btn.find('.dashicons').addClass('spin');
+                        setPushMsg('<?php echo esc_js( __( 'Enviando a Google...', 'lealez' ) ); ?>', 'info');
+
+                        if (window.console && window.console.log) {
+                            console.log('[OY Address Push] Iniciando push → postId:', postId, '| location:', locationName);
+                        }
+
+                        $.ajax({
+                            url:     ajaxUrl,
+                            type:    'POST',
+                            timeout: 45000,
+                            data: {
+                                action:  'oy_push_address_to_gmb',
+                                nonce:   pushNonce,
+                                post_id: postId,
+                            },
+                        })
+                        .done(function(resp) {
+                            resetPushBtn();
+
+                            try {
+                                if (window.console && window.console.log) {
+                                    console.log('[OY Address Push] Respuesta recibida → success:', resp && resp.success);
+                                }
+
+                                if (!resp || !resp.success) {
+                                    var errMsg = (resp && resp.data && resp.data.message)
+                                        ? resp.data.message
+                                        : '<?php echo esc_js( __( 'No se pudo enviar la dirección a GMB.', 'lealez' ) ); ?>';
+                                    setPushMsg(errMsg, 'error');
+
+                                    // Registrar error en log
+                                    if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
+                                        window.oyAddrLogAPI.addLogEntry(
+                                            { error: errMsg, rawResp: resp || null },
+                                            [],
+                                            'push'
+                                        );
+                                    }
+                                    return;
+                                }
+
+                                var pushed = (resp.data && resp.data.pushed_fields) ? resp.data.pushed_fields : {};
+                                setPushMsg('<?php echo esc_js( __( '✅ Publicado en GMB correctamente. Los cambios pueden tardar unos minutos en aparecer.', 'lealez' ) ); ?>', 'success');
+
+                                if (window.console && window.console.log) {
+                                    console.log('[OY Address Push] Éxito. Campos enviados:', pushed);
+                                }
+
+                                // Registrar éxito en log (reutiliza el sistema del pull)
+                                if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
+                                    var logRaw = {
+                                        pushed_fields: pushed,
+                                        gmb_response:  resp.data.gmb_response || null,
+                                    };
+                                    window.oyAddrLogAPI.addLogEntry( logRaw, [], 'push' );
+                                }
+
+                                // Emitir evento para extensibilidad futura
+                                try {
+                                    $(document).trigger('oy:gmb:address:pushed', [{ pushed_fields: pushed, response: resp.data }]);
+                                } catch(triggerErr) {
+                                    if (window.console && window.console.error) {
+                                        console.error('[OY Address Push] trigger error:', triggerErr);
+                                    }
+                                }
+
+                            } catch(doneErr) {
+                                if (window.console && window.console.error) {
+                                    console.error('[OY Address Push] Error en .done():', doneErr);
+                                }
+                                setPushMsg('Error inesperado al procesar respuesta. Revisa la consola.', 'error');
+                            }
+                        })
+                        .fail(function(xhr, status, error) {
+                            resetPushBtn();
+
+                            var isTimeout  = status === 'timeout';
+                            var httpStatus = xhr && xhr.status ? xhr.status : 0;
+                            var errDetail  = isTimeout
+                                ? 'Timeout: el servidor tardó más de 45 s'
+                                : ('HTTP ' + httpStatus + ' — ' + (error || status || 'desconocido'));
+
+                            if (window.console && window.console.error) {
+                                console.error('[OY Address Push] AJAX fail →', status, '| HTTP:', httpStatus, '| error:', error);
+                                if (xhr && xhr.responseText) {
+                                    console.error('[OY Address Push] Respuesta cruda:', xhr.responseText.substring(0, 500));
+                                }
+                            }
+
+                            var userMsg = isTimeout
+                                ? '<?php echo esc_js( __( 'Timeout: Google tardó demasiado. Intenta de nuevo.', 'lealez' ) ); ?>'
+                                : '<?php echo esc_js( __( 'Error de red al enviar. Revisa la consola.', 'lealez' ) ); ?>';
+
+                            setPushMsg(userMsg, 'error');
+
+                            try {
+                                if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
+                                    window.oyAddrLogAPI.addLogEntry({
+                                        error:           errDetail,
+                                        xhr_status:      httpStatus,
+                                        ajax_status:     status,
+                                        responsePreview: xhr && xhr.responseText
+                                            ? xhr.responseText.substring(0, 300)
+                                            : null,
+                                    }, [], 'push');
+                                }
+                            } catch(logErr) {
+                                if (window.console && window.console.error) {
+                                    console.error('[OY Address Push] Error al registrar en log:', logErr);
+                                }
+                            }
+                        })
+                        .always(function() {
+                            // Seguridad final: resetea si .done()/.fail() no lo hicieron
+                            if (pushRunning) { resetPushBtn(); }
+                        });
+                    });
+
+                })(); // end address push IIFE
+                
             </script>
             <?php
         }
