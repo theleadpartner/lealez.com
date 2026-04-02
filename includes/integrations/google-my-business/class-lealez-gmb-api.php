@@ -2641,177 +2641,187 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
     }
 
 
-    /**
-     * Actualiza (PATCH) la dirección y coordenadas de una ubicación en Google Business Profile.
-     *
-     * Endpoint:
-     * PATCH https://mybusinessbusinessinformation.googleapis.com/v1/{locationName}?updateMask=storefrontAddress,latlng
-     *
-     * Solo se actualizan los campos declarados en updateMask; el resto del perfil no se toca.
-     * Se envía storefrontAddress siempre. latlng solo se incluye si se proveen latitud y longitud válidas.
-     *
-     * NOTA: serviceArea NO se incluye en este método. El campo en Lealez es texto libre,
-     * pero la API de GMB requiere resource names de Places (ej: places/ChIJ...), por lo que
-     * no es posible una conversión directa desde texto.
-     *
-     * Documentación oficial:
-     * https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/patch
-     *
-     * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
-     * @param string $location_name Resource name de la ubicación (cualquier formato aceptado).
-     * @param array  $address_data  Array con los campos a actualizar:
-     *                              [
-     *                                'regionCode'         => 'CO',              // ISO 2 (requerido)
-     *                                'addressLines'       => ['Calle 10 # 5'],  // Líneas de dirección
-     *                                'locality'           => 'Barranquilla',    // Ciudad
-     *                                'administrativeArea' => 'Atlántico',       // Estado/Dpto
-     *                                'postalCode'         => '080010',          // Código postal
-     *                                'latitude'           => 11.0041,           // Latitud (opcional)
-     *                                'longitude'          => -74.8070,          // Longitud (opcional)
-     *                              ]
-     *
-     * @return array|WP_Error Respuesta de la API (Location resource actualizado), o WP_Error.
-     */
-    public static function update_location_address( $business_id, $location_name, $address_data ) {
-        $business_id   = absint( $business_id );
-        $location_name = trim( (string) $location_name );
+/**
+ * Actualiza (PATCH) la dirección de una ubicación en Google Business Profile.
+ *
+ * Endpoint:
+ * PATCH https://mybusinessbusinessinformation.googleapis.com/v1/{locationName}?updateMask=storefrontAddress
+ *
+ * Solo se actualiza storefrontAddress. Las coordenadas (latlng) se excluyen
+ * intencionalmente del updateMask porque la Business Information API v1 rechaza
+ * cambios de coordenadas en ubicaciones verificadas con HTTP 400 INVALID_ARGUMENT.
+ * Google recalcula el pin de mapa automáticamente cuando se actualiza storefrontAddress.
+ *
+ * NOTA: serviceArea NO se incluye en este método. El campo en Lealez es texto libre,
+ * pero la API de GMB requiere resource names de Places (ej: places/ChIJ...), por lo que
+ * no es posible una conversión directa desde texto.
+ *
+ * Documentación oficial:
+ * https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/patch
+ *
+ * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
+ * @param string $location_name Resource name de la ubicación (cualquier formato aceptado).
+ * @param array  $address_data  Array con los campos a actualizar:
+ *                              [
+ *                                'regionCode'         => 'CO',              // ISO 2 (requerido)
+ *                                'addressLines'       => ['Calle 10 # 5'],  // Líneas de dirección
+ *                                'locality'           => 'Barranquilla',    // Ciudad
+ *                                'administrativeArea' => 'Atlántico',       // Estado/Dpto
+ *                                'postalCode'         => '080010',          // Código postal (opcional)
+ *                              ]
+ *                              Nota: latitude/longitude se ignoran — latlng es calculado por Google.
+ *
+ * @return array|WP_Error Respuesta de la API (Location resource actualizado), o WP_Error.
+ */
+public static function update_location_address( $business_id, $location_name, $address_data ) {
+    $business_id   = absint( $business_id );
+    $location_name = trim( (string) $location_name );
 
-        if ( ! $business_id || '' === $location_name ) {
-            return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_address.', 'lealez' ) );
+    if ( ! $business_id || '' === $location_name ) {
+        return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_address.', 'lealez' ) );
+    }
+
+    if ( empty( $address_data ) || ! is_array( $address_data ) ) {
+        return new WP_Error( 'empty_payload', __( 'No address data provided to update.', 'lealez' ) );
+    }
+
+    // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
+    $normalized_location = $location_name;
+    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+        $parts = explode( '/locations/', $location_name, 2 );
+        if ( ! empty( $parts[1] ) ) {
+            $normalized_location = 'locations/' . trim( $parts[1], '/' );
         }
+    }
 
-        if ( empty( $address_data ) || ! is_array( $address_data ) ) {
-            return new WP_Error( 'empty_payload', __( 'No address data provided to update.', 'lealez' ) );
-        }
+    // ── Construir storefrontAddress ──────────────────────────────────────────
+    $storefront_address = array();
 
-        // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
-        $normalized_location = $location_name;
-        if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-            $parts = explode( '/locations/', $location_name, 2 );
-            if ( ! empty( $parts[1] ) ) {
-                $normalized_location = 'locations/' . trim( $parts[1], '/' );
+    if ( ! empty( $address_data['regionCode'] ) ) {
+        $storefront_address['regionCode'] = strtoupper( trim( (string) $address_data['regionCode'] ) );
+    }
+
+    // addressLines: line1 + line2 — solo las que no estén vacías
+    if ( ! empty( $address_data['addressLines'] ) && is_array( $address_data['addressLines'] ) ) {
+        $clean_lines = array();
+        foreach ( $address_data['addressLines'] as $line ) {
+            $line = trim( (string) $line );
+            if ( '' !== $line ) {
+                $clean_lines[] = $line;
             }
         }
-
-        // ── Construir storefrontAddress ──────────────────────────────────────────
-        $storefront_address = array();
-
-        if ( ! empty( $address_data['regionCode'] ) ) {
-            $storefront_address['regionCode'] = strtoupper( trim( (string) $address_data['regionCode'] ) );
+        if ( ! empty( $clean_lines ) ) {
+            $storefront_address['addressLines'] = $clean_lines;
         }
+    }
 
-        // addressLines: line1 + line2 — solo las que no estén vacías
-        if ( ! empty( $address_data['addressLines'] ) && is_array( $address_data['addressLines'] ) ) {
-            $clean_lines = array();
-            foreach ( $address_data['addressLines'] as $line ) {
-                $line = trim( (string) $line );
-                if ( '' !== $line ) {
-                    $clean_lines[] = $line;
-                }
-            }
-            if ( ! empty( $clean_lines ) ) {
-                $storefront_address['addressLines'] = $clean_lines;
-            }
-        }
+    if ( isset( $address_data['locality'] ) && '' !== trim( (string) $address_data['locality'] ) ) {
+        $storefront_address['locality'] = trim( (string) $address_data['locality'] );
+    }
 
-        if ( isset( $address_data['locality'] ) && '' !== trim( (string) $address_data['locality'] ) ) {
-            $storefront_address['locality'] = trim( (string) $address_data['locality'] );
-        }
+    if ( isset( $address_data['administrativeArea'] ) && '' !== trim( (string) $address_data['administrativeArea'] ) ) {
+        $storefront_address['administrativeArea'] = trim( (string) $address_data['administrativeArea'] );
+    }
 
-        if ( isset( $address_data['administrativeArea'] ) && '' !== trim( (string) $address_data['administrativeArea'] ) ) {
-            $storefront_address['administrativeArea'] = trim( (string) $address_data['administrativeArea'] );
-        }
+    if ( isset( $address_data['postalCode'] ) && '' !== trim( (string) $address_data['postalCode'] ) ) {
+        $storefront_address['postalCode'] = trim( (string) $address_data['postalCode'] );
+    }
 
-        if ( isset( $address_data['postalCode'] ) && '' !== trim( (string) $address_data['postalCode'] ) ) {
-            $storefront_address['postalCode'] = trim( (string) $address_data['postalCode'] );
-        }
+    if ( empty( $storefront_address ) || empty( $storefront_address['regionCode'] ) ) {
+        return new WP_Error( 'empty_address', __( 'storefrontAddress requiere al menos regionCode (código ISO del país, ej: CO).', 'lealez' ) );
+    }
 
-        if ( empty( $storefront_address ) || empty( $storefront_address['regionCode'] ) ) {
-            return new WP_Error( 'empty_address', __( 'storefrontAddress requiere al menos regionCode (código ISO del país, ej: CO).', 'lealez' ) );
-        }
+    // ── Endpoint y updateMask ─────────────────────────────────────────────────
+    // IMPORTANTE: latlng se excluye del updateMask intencionalmente.
+    // La Business Information API v1 rechaza (HTTP 400 INVALID_ARGUMENT) la actualización
+    // de coordenadas en ubicaciones verificadas. Google recalcula el pin automáticamente
+    // cuando cambia storefrontAddress. No incluir latlng en ubicaciones con verificación
+    // completada evita el error "Request contains an invalid argument."
+    $endpoint    = '/' . rtrim( $normalized_location, '/' );
+    $update_mask = 'storefrontAddress';
 
-        // ── Detectar si tenemos coordenadas válidas ───────────────────────────────
-        $has_latlng = isset( $address_data['latitude'], $address_data['longitude'] )
-            && is_numeric( $address_data['latitude'] )
-            && is_numeric( $address_data['longitude'] );
+    // ── Body del PATCH ────────────────────────────────────────────────────────
+    // Solo storefrontAddress. latlng excluido (ver nota arriba).
+    $body = array(
+        'name'              => $normalized_location,
+        'storefrontAddress' => $storefront_address,
+    );
 
-        // ── Endpoint y updateMask ─────────────────────────────────────────────────
-        $endpoint    = '/' . rtrim( $normalized_location, '/' );
-        $update_mask = $has_latlng ? 'storefrontAddress,latlng' : 'storefrontAddress';
-
-        // ── Body del PATCH ────────────────────────────────────────────────────────
-        $body = array(
-            'name'              => $normalized_location,
-            'storefrontAddress' => $storefront_address,
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            sprintf( 'Pushing address to GMB. updateMask: %s', $update_mask ),
+            array(
+                'location'   => $normalized_location,
+                'endpoint'   => $endpoint,
+                'updateMask' => $update_mask,
+                'address'    => $storefront_address,
+            )
         );
+    }
 
-        if ( $has_latlng ) {
-            $body['latlng'] = array(
-                'latitude'  => (float) $address_data['latitude'],
-                'longitude' => (float) $address_data['longitude'],
-            );
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$business_api_base,
+        'PATCH',
+        $body,
+        false, // No caché en PATCH
+        array( 'updateMask' => $update_mask )
+    );
+
+    if ( is_wp_error( $result ) ) {
+        // ── Logging mejorado: incluir raw body de Google para diagnóstico ───
+        $err_msg  = $result->get_error_message();
+        $err_data = $result->get_error_data();
+        $raw_body = '';
+
+        if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
+            $raw_body = ' | Google raw: ' . substr( (string) $err_data['raw_body'], 0, 800 );
         }
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
-                'info',
-                sprintf( 'Pushing address to GMB. updateMask: %s', $update_mask ),
+                'error',
+                'update_location_address failed: ' . $err_msg . $raw_body,
                 array(
                     'location'   => $normalized_location,
-                    'endpoint'   => $endpoint,
                     'updateMask' => $update_mask,
                     'address'    => $storefront_address,
                 )
             );
         }
 
-        $result = self::make_request(
-            $business_id,
-            $endpoint,
-            self::$business_api_base,
-            'PATCH',
-            $body,
-            false, // No caché en PATCH
-            array( 'updateMask' => $update_mask )
-        );
-
-        if ( is_wp_error( $result ) ) {
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'error',
-                    'update_location_address failed: ' . $result->get_error_message(),
-                    array( 'location' => $normalized_location )
-                );
-            }
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB Address] update_location_address error: ' . $result->get_error_message() );
-            }
-            return $result;
-        }
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'success',
-                sprintf( 'Address pushed successfully to GMB for location: %s (updateMask: %s)', $normalized_location, $update_mask ),
-                array(
-                    'location'   => $normalized_location,
-                    'updateMask' => $update_mask,
-                )
-            );
-        }
-
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log(
-                '[OY GMB Address] update_location_address: OK for ' . $normalized_location .
-                ' (updateMask: ' . $update_mask . ')'
-            );
+            error_log( '[OY GMB Address] update_location_address error: ' . $err_msg . $raw_body );
         }
 
         return $result;
     }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            sprintf( 'Address pushed successfully to GMB for location: %s (updateMask: %s)', $normalized_location, $update_mask ),
+            array(
+                'location'   => $normalized_location,
+                'updateMask' => $update_mask,
+            )
+        );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log(
+            '[OY GMB Address] update_location_address: OK for ' . $normalized_location .
+            ' (updateMask: ' . $update_mask . ')'
+        );
+    }
+
+    return $result;
+}
 
 
 
