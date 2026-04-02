@@ -4512,7 +4512,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
             update_post_meta( $post_id, 'gmb_more_hours_raw', $more );
         }
 
-        // ── Detección de "Sin ubicación física" (service_area_only) ──────────────
+// ── Detección de "Sin ubicación física" (service_area_only) ──────────────
         // Se evalúa SIEMPRE, independiente de si openInfo viene en la respuesta.
         // Espeja la lógica de GMB "Ubicación de la empresa":
         //   - Sin storefrontAddress con datos reales → negocio de servicio a domicilio/online
@@ -4524,20 +4524,49 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
             ! empty( $addr_raw['regionCode'] )
         );
 
-        if ( ! $has_storefront ) {
-            // Sin dirección física: marcar como solo-servicio
-            update_post_meta( $post_id, 'service_area_only', '1' );
-            // Aseguramos que "mostrar dirección" quede en false para no confundir la UI
-            update_post_meta( $post_id, 'show_address_to_customers', '0' );
-        } else {
-            // Con dirección física: siempre actualizar (override valores anteriores)
-            update_post_meta( $post_id, 'service_area_only', '0' );
-        }
+        // ✅ GUARD — Proteger ediciones manuales del usuario durante import-on-save.
+        //
+        // PROBLEMA ORIGINAL: cuando gmb_import_on_save = 1 está activo, esta función
+        // corre DESPUÉS de que save_meta_boxes() ya procesó el POST del usuario. Si GMB
+        // aún no tiene storefrontAddress (el push a GMB todavía no se ejecutó), el bloque
+        // sobreescribía service_area_only = '1', deshaciendo la edición del usuario.
+        //
+        // REGLA: si la solicitud es un guardado de formulario (nonce del CPT en POST) Y el
+        // usuario NO marcó "Sin ubicación física" (checkbox ausente en POST = unchecked) Y
+        // proporcionó al menos un código de país, respetar su elección y no sobrescribir.
+        //
+        // NOTA: esta función SOLO se llama desde save_meta_boxes(), que ya verificó el nonce
+        // antes de ejecutarse. Por eso basta con detectar su presencia en $_POST.
+        $is_form_save = isset( $_POST[ $this->nonce_name ] ) && '' !== $_POST[ $this->nonce_name ];
 
-        // serviceArea RAW — para negocios sin local físico (área de cobertura)
-        if ( ! empty( $data['serviceArea'] ) && is_array( $data['serviceArea'] ) ) {
-            update_post_meta( $post_id, 'gmb_service_area_raw', $data['serviceArea'] );
-            update_post_meta( $post_id, 'service_area_enabled', '1' );
+        // Usuario desmarcó el checkbox: $_POST['service_area_only'] está ausente
+        $user_unchecked_sao = $is_form_save && ! isset( $_POST['service_area_only'] );
+
+        // Usuario proporcionó un código de país (campo obligatorio para tener dirección física)
+        $user_provided_country = $is_form_save && '' !== trim(
+            sanitize_text_field( wp_unslash( isset( $_POST['location_country'] ) ? (string) $_POST['location_country'] : '' ) )
+        );
+
+        // Activamos la protección solo si ambas condiciones se cumplen
+        $user_overrides_import = $user_unchecked_sao && $user_provided_country;
+
+        if ( ! $has_storefront ) {
+
+            if ( ! $user_overrides_import ) {
+                // GMB no tiene dirección física y el usuario no está sobreescribiendo
+                // manualmente → aplicar la detección de GMB normalmente.
+                update_post_meta( $post_id, 'service_area_only', '1' );
+                // Aseguramos que "mostrar dirección" quede en false para no confundir la UI
+                update_post_meta( $post_id, 'show_address_to_customers', '0' );
+            }
+            // Si $user_overrides_import === true:
+            // El usuario editó manualmente → respetar lo que save_meta_boxes() ya procesó.
+            // Para service_area_only: delete_post_meta() ya fue llamado (unchecked).
+            // Para show_address_to_customers: save_meta_boxes() lo procesó desde el POST.
+
+        } else {
+            // Con storefrontAddress en GMB: siempre actualizar a '0' (sin conflicto posible)
+            update_post_meta( $post_id, 'service_area_only', '0' );
         }
         // ── Fin bloque service_area_only ─────────────────────────────────────────
         
