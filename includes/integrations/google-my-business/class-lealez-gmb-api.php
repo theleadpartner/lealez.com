@@ -2656,22 +2656,32 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
  * pero la API de GMB requiere resource names de Places (ej: places/ChIJ...), por lo que
  * no es posible una conversión directa desde texto.
  *
- * Documentación oficial:
- * https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/patch
+ * NOTA DIAGNÓSTICO: Para negocios de tipo CUSTOMER_LOCATION_ONLY (Área de Servicio),
+ * Google acepta el PATCH (HTTP 200) pero puede poner los cambios en revisión
+ * (hasPendingEdits: true). La dirección se guarda internamente pero puede no mostrarse
+ * en el perfil público si el toggle "Mostrar dirección" está desactivado.
  *
  * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
  * @param string $location_name Resource name de la ubicación (cualquier formato aceptado).
  * @param array  $address_data  Array con los campos a actualizar:
  *                              [
- *                                'regionCode'         => 'CO',              // ISO 2 (requerido)
- *                                'addressLines'       => ['Calle 10 # 5'],  // Líneas de dirección
- *                                'locality'           => 'Barranquilla',    // Ciudad
- *                                'administrativeArea' => 'Atlántico',       // Estado/Dpto
- *                                'postalCode'         => '080010',          // Código postal (opcional)
+ *                                'regionCode'         => 'CO',
+ *                                'addressLines'       => ['Calle 10 # 5'],
+ *                                'locality'           => 'Barranquilla',
+ *                                'administrativeArea' => 'Atlántico',
+ *                                'postalCode'         => '080010',
  *                              ]
- *                              Nota: latitude/longitude se ignoran — latlng es calculado por Google.
  *
- * @return array|WP_Error Respuesta de la API (Location resource actualizado), o WP_Error.
+ * @return array|WP_Error En éxito: array enriquecido con:
+ *                          - patch_result       : respuesta bruta del PATCH
+ *                          - has_pending_edits  : bool — Google tiene la edición en revisión
+ *                          - has_voice_merchant : bool
+ *                          - business_type      : string (CUSTOMER_LOCATION_ONLY, etc.)
+ *                          - is_sab             : bool — es un negocio de área de servicio
+ *                          - verify_result      : respuesta del GET de verificación (o null)
+ *                          - verify_address     : storefrontAddress del GET (o null)
+ *                          - address_matched    : bool — locality coincide entre PATCH y GET
+ *                        En error: WP_Error.
  */
 public static function update_location_address( $business_id, $location_name, $address_data ) {
     $business_id   = absint( $business_id );
@@ -2735,17 +2745,24 @@ public static function update_location_address( $business_id, $location_name, $a
     // IMPORTANTE: latlng se excluye del updateMask intencionalmente.
     // La Business Information API v1 rechaza (HTTP 400 INVALID_ARGUMENT) la actualización
     // de coordenadas en ubicaciones verificadas. Google recalcula el pin automáticamente
-    // cuando cambia storefrontAddress. No incluir latlng en ubicaciones con verificación
-    // completada evita el error "Request contains an invalid argument."
+    // cuando cambia storefrontAddress.
     $endpoint    = '/' . rtrim( $normalized_location, '/' );
     $update_mask = 'storefrontAddress';
 
     // ── Body del PATCH ────────────────────────────────────────────────────────
-    // Solo storefrontAddress. latlng excluido (ver nota arriba).
     $body = array(
         'name'              => $normalized_location,
         'storefrontAddress' => $storefront_address,
     );
+
+    // ── Debug: URL completa + body antes de enviar ────────────────────────────
+    $full_debug_url = self::$business_api_base . $endpoint . '?updateMask=' . rawurlencode( $update_mask );
+    $body_json      = wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( '[OY GMB Address] update_location_address ── REQUEST URL: ' . $full_debug_url );
+        error_log( '[OY GMB Address] update_location_address ── REQUEST BODY: ' . $body_json );
+    }
 
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log(
@@ -2753,10 +2770,10 @@ public static function update_location_address( $business_id, $location_name, $a
             'info',
             sprintf( 'Pushing address to GMB. updateMask: %s', $update_mask ),
             array(
-                'location'   => $normalized_location,
-                'endpoint'   => $endpoint,
-                'updateMask' => $update_mask,
-                'address'    => $storefront_address,
+                'location'        => $normalized_location,
+                'full_url'        => $full_debug_url,
+                'updateMask'      => $update_mask,
+                'storefront_body' => $storefront_address,
             )
         );
     }
@@ -2795,20 +2812,52 @@ public static function update_location_address( $business_id, $location_name, $a
         }
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY GMB Address] update_location_address error: ' . $err_msg . $raw_body );
+            error_log( '[OY GMB Address] update_location_address ── PATCH ERROR: ' . $err_msg . $raw_body );
         }
 
         return $result;
+    }
+
+    // ── Leer flags diagnóstico de la respuesta PATCH ──────────────────────────
+    $has_pending_edits     = ! empty( $result['metadata']['hasPendingEdits'] );
+    $has_voice_of_merchant = ! empty( $result['metadata']['hasVoiceOfMerchant'] );
+    $business_type         = isset( $result['serviceArea']['businessType'] ) ? (string) $result['serviceArea']['businessType'] : '';
+    $is_sab                = in_array( $business_type, array( 'CUSTOMER_LOCATION_ONLY', 'CUSTOMER_AND_BUSINESS_LOCATION' ), true );
+    $storefront_in_resp    = isset( $result['storefrontAddress'] );
+
+    // ── Debug: respuesta completa del PATCH ───────────────────────────────────
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        $resp_json = wp_json_encode( $result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+        error_log( '[OY GMB Address] update_location_address ── PATCH RESPONSE (full): ' . $resp_json );
+        error_log( sprintf(
+            '[OY GMB Address] update_location_address ── FLAGS: hasPendingEdits=%s | hasVoiceOfMerchant=%s | businessType="%s" | isSAB=%s | storefrontAddress_in_response=%s',
+            $has_pending_edits ? 'true' : 'false',
+            $has_voice_of_merchant ? 'true' : 'false',
+            $business_type ?: '(absent)',
+            $is_sab ? 'true' : 'false',
+            $storefront_in_resp ? 'YES' : 'NO — campo ausente de la respuesta (posible indicio de no aplicación)'
+        ) );
     }
 
     if ( class_exists( 'Lealez_GMB_Logger' ) ) {
         Lealez_GMB_Logger::log(
             $business_id,
             'success',
-            sprintf( 'Address pushed successfully to GMB for location: %s (updateMask: %s)', $normalized_location, $update_mask ),
+            sprintf(
+                'PATCH address OK for %s | hasPendingEdits=%s | businessType=%s | storefrontAddress_in_response=%s',
+                $normalized_location,
+                $has_pending_edits ? 'true' : 'false',
+                $business_type ?: 'n/a',
+                $storefront_in_resp ? 'YES' : 'NO'
+            ),
             array(
-                'location'   => $normalized_location,
-                'updateMask' => $update_mask,
+                'location'                 => $normalized_location,
+                'updateMask'               => $update_mask,
+                'hasPendingEdits'          => $has_pending_edits,
+                'hasVoiceOfMerchant'       => $has_voice_of_merchant,
+                'businessType'             => $business_type,
+                'isSAB'                    => $is_sab,
+                'storefrontAddress_absent' => ! $storefront_in_resp,
             )
         );
     }
@@ -2820,7 +2869,102 @@ public static function update_location_address( $business_id, $location_name, $a
         );
     }
 
-    return $result;
+    // ── Verificación POST-PATCH: GET con readMask=storefrontAddress,metadata,serviceArea ──
+    // Confirmamos si Google realmente guardó la dirección enviada.
+    // Diagnóstico clave: si storefrontAddress no aparece aquí, no fue aplicado.
+    $verify_result   = null;
+    $verify_address  = null;
+    $address_matched = false;
+
+    $verify_query = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$business_api_base,
+        'GET',
+        array(),
+        false, // Sin caché — queremos el estado real post-PATCH
+        array( 'readMask' => 'name,storefrontAddress,metadata,serviceArea' )
+    );
+
+    if ( ! is_wp_error( $verify_query ) && is_array( $verify_query ) ) {
+        $verify_result  = $verify_query;
+        $verify_address = isset( $verify_query['storefrontAddress'] ) && is_array( $verify_query['storefrontAddress'] )
+            ? $verify_query['storefrontAddress']
+            : null;
+
+        // Comparar locality entre lo enviado y lo leído
+        $sent_locality = isset( $storefront_address['locality'] )
+            ? strtolower( trim( $storefront_address['locality'] ) )
+            : '';
+        $got_locality  = isset( $verify_address['locality'] )
+            ? strtolower( trim( (string) $verify_address['locality'] ) )
+            : '';
+
+        $address_matched = ( '' !== $sent_locality && $sent_locality === $got_locality );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            $verify_json = wp_json_encode( $verify_query, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+            error_log( '[OY GMB Address] update_location_address ── VERIFY GET RESPONSE: ' . $verify_json );
+            error_log( sprintf(
+                '[OY GMB Address] update_location_address ── VERIFY: storefrontAddress_present=%s | address_matched=%s | sent_locality="%s" | got_locality="%s"',
+                ( null !== $verify_address ) ? 'YES' : 'NO — la dirección NO está en el GET post-PATCH (no fue aplicada)',
+                $address_matched ? 'true' : 'false (diferencia detectada)',
+                $sent_locality,
+                $got_locality
+            ) );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                $address_matched ? 'success' : 'warning',
+                sprintf(
+                    'Verification GET: storefrontAddress=%s | address_matched=%s | sent_locality="%s" | got_locality="%s"',
+                    ( null !== $verify_address ) ? 'PRESENT' : 'ABSENT',
+                    $address_matched ? 'true' : 'false',
+                    $sent_locality,
+                    $got_locality
+                ),
+                array(
+                    'location'        => $normalized_location,
+                    'verify_address'  => $verify_address,
+                    'address_matched' => $address_matched,
+                    'hasPendingEdits' => isset( $verify_query['metadata']['hasPendingEdits'] )
+                        ? (bool) $verify_query['metadata']['hasPendingEdits']
+                        : null,
+                )
+            );
+        }
+
+    } else {
+        // El GET de verificación falló — no es error crítico, logueamos y seguimos
+        $verify_err = is_wp_error( $verify_query ) ? $verify_query->get_error_message() : 'Respuesta no válida';
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY GMB Address] update_location_address ── VERIFY GET failed: ' . $verify_err );
+        }
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'warning',
+                'Verification GET after PATCH failed: ' . $verify_err,
+                array( 'location' => $normalized_location )
+            );
+        }
+    }
+
+    // ── Return enriquecido ────────────────────────────────────────────────────
+    // Incluye resultado del PATCH + flags diagnóstico + resultado de verificación.
+    // El caller (ajax_push_address_to_gmb) usa este array para construir la respuesta JSON.
+    return array(
+        'patch_result'       => $result,
+        'has_pending_edits'  => $has_pending_edits,
+        'has_voice_merchant' => $has_voice_of_merchant,
+        'business_type'      => $business_type,
+        'is_sab'             => $is_sab,
+        'verify_result'      => $verify_result,
+        'verify_address'     => $verify_address,
+        'address_matched'    => $address_matched,
+    );
 }
 
 
