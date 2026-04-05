@@ -121,13 +121,18 @@ public function __construct() {
  *
  * Lee los campos de dirección desde post_meta (ya guardados en WP) y ejecuta
  * un PATCH a Business Information API v1 actualizando únicamente storefrontAddress.
+ * Tras el PATCH, realiza un GET de verificación para confirmar si los cambios fueron
+ * realmente aplicados por Google. Informa al frontend sobre hasPendingEdits y el tipo
+ * de negocio para mostrar mensajes apropiados.
  *
  * IMPORTANTE:
  * - latlng NO se envía. Las coordenadas son calculadas automáticamente por Google
  *   al cambiar la dirección. Enviar latlng causa HTTP 400 en ubicaciones verificadas.
  * - serviceArea NO se envía. Las áreas de servicio en Lealez son texto libre,
  *   pero la API de GMB requiere resource names de Places (ej: places/ChIJ...).
- *   Para actualizar serviceArea en GMB debe hacerse directamente en el panel de Google.
+ * - Para negocios CUSTOMER_LOCATION_ONLY (SAB): Google puede aceptar el PATCH con
+ *   hasPendingEdits: true y la dirección NO aparecer en el perfil público si el
+ *   toggle "Mostrar dirección" está desactivado en el panel de GBP.
  *
  * @return void Responde con wp_send_json_success() o wp_send_json_error().
  */
@@ -164,7 +169,7 @@ public function ajax_push_address_to_gmb() {
         wp_send_json_error( array( 'message' => __( 'El método update_location_address no existe en Lealez_GMB_API. Actualiza el plugin.', 'lealez' ) ) );
     }
 
-    // ── Leer campos de dirección desde post_meta (ya guardados por WP) ────────────────
+    // ── Leer campos de dirección desde post_meta (ya guardados por WP) ───
     // NOTA: latitude y longitude NO se incluyen en el payload a GMB.
     // La API de Google rechaza latlng en ubicaciones verificadas (HTTP 400).
     // Google recalcula las coordenadas automáticamente al actualizar storefrontAddress.
@@ -182,7 +187,7 @@ public function ajax_push_address_to_gmb() {
         ) );
     }
 
-    // ── Construir payload (solo storefrontAddress, sin latlng) ────────────────────────
+    // ── Construir payload (solo storefrontAddress, sin latlng) ───────────
     $address_lines = array_values( array_filter(
         array( trim( $address_line1 ), trim( $address_line2 ) ),
         function ( $l ) { return '' !== $l; }
@@ -195,6 +200,16 @@ public function ajax_push_address_to_gmb() {
         'administrativeArea' => trim( $state ),
         'postalCode'         => trim( $postal_code ),
     );
+
+    // ── Debug: log payload antes de enviar ────────────────────────────────
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[OY GMB Address] ajax_push_address_to_gmb ── post_id=%d | location=%s | payload=%s',
+            $post_id,
+            $location_name,
+            wp_json_encode( $address_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+        ) );
+    }
 
     // ── Llamar a la API ───────────────────────────────────────────────────
     $result = Lealez_GMB_API::update_location_address( $business_id, $location_name, $address_data );
@@ -210,6 +225,11 @@ public function ajax_push_address_to_gmb() {
             $raw_body_preview = substr( (string) $err_data['raw_body'], 0, 500 );
         }
 
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[OY GMB Address] ajax_push_address_to_gmb ── WP_Error: ' . $err_msg
+                . ( $raw_body_preview ? ' | raw: ' . $raw_body_preview : '' ) );
+        }
+
         $response = array(
             'message' => $err_msg,
             'code'    => $err_code,
@@ -222,7 +242,29 @@ public function ajax_push_address_to_gmb() {
         wp_send_json_error( $response );
     }
 
-    // ── Éxito ─────────────────────────────────────────────────────────────
+    // ── Desempaquetar el array enriquecido devuelto por update_location_address ──
+    // update_location_address devuelve un array (no el raw response) para transportar
+    // flags de diagnóstico (hasPendingEdits, verificación, etc.).
+    $patch_result      = isset( $result['patch_result'] )      ? $result['patch_result']      : $result;
+    $has_pending_edits = ! empty( $result['has_pending_edits'] );
+    $is_sab            = ! empty( $result['is_sab'] );
+    $address_matched   = ! empty( $result['address_matched'] );
+    $verify_address    = isset( $result['verify_address'] )    ? $result['verify_address']    : null;
+    $business_type     = isset( $result['business_type'] )     ? (string) $result['business_type'] : '';
+
+    // ── Debug: resumen del resultado ──────────────────────────────────────
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( sprintf(
+            '[OY GMB Address] ajax_push_address_to_gmb ── RESULT: hasPendingEdits=%s | isSAB=%s | businessType="%s" | addressMatched=%s | verifyAddress=%s',
+            $has_pending_edits ? 'true' : 'false',
+            $is_sab            ? 'true' : 'false',
+            $business_type     ?: '(absent)',
+            $address_matched   ? 'true' : 'false',
+            wp_json_encode( $verify_address, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+        ) );
+    }
+
+    // ── Éxito — construir pushed_fields para el log del frontend ─────────
     $pushed_fields = array(
         'regionCode'         => $address_data['regionCode'],
         'addressLines'       => $address_data['addressLines'],
@@ -232,9 +274,14 @@ public function ajax_push_address_to_gmb() {
     );
 
     wp_send_json_success( array(
-        'message'       => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
-        'pushed_fields' => $pushed_fields,
-        'gmb_response'  => $result,
+        'message'           => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
+        'pushed_fields'     => $pushed_fields,
+        'gmb_response'      => $patch_result,
+        'has_pending_edits' => $has_pending_edits,
+        'is_sab'            => $is_sab,
+        'address_matched'   => $address_matched,
+        'verify_address'    => $verify_address,
+        'business_type'     => $business_type,
     ) );
 }
 
@@ -1820,12 +1867,12 @@ var statusLabel, statusColor;
                                 post_id: postId,
                             },
                         })
-                        .done(function(resp) {
+.done(function(resp) {
                             resetPushBtn();
 
                             try {
                                 if (window.console && window.console.log) {
-                                    console.log('[OY Address Push] Respuesta recibida → success:', resp && resp.success);
+                                    console.log('[OY Address Push] Respuesta recibida → success:', resp && resp.success, '| data:', resp && resp.data);
                                 }
 
                                 if (!resp || !resp.success) {
@@ -1845,18 +1892,50 @@ var statusLabel, statusColor;
                                     return;
                                 }
 
-                                var pushed = (resp.data && resp.data.pushed_fields) ? resp.data.pushed_fields : {};
-                                setPushMsg('<?php echo esc_js( __( '✅ Publicado en GMB correctamente. Los cambios pueden tardar unos minutos en aparecer.', 'lealez' ) ); ?>', 'success');
+                                var pushed         = (resp.data && resp.data.pushed_fields)    ? resp.data.pushed_fields    : {};
+                                var hasPending     = !!(resp.data && resp.data.has_pending_edits);
+                                var isSab          = !!(resp.data && resp.data.is_sab);
+                                var addressMatched = !!(resp.data && resp.data.address_matched);
+                                var verifyAddr     = (resp.data && resp.data.verify_address)   ? resp.data.verify_address   : null;
+                                var businessType   = (resp.data && resp.data.business_type)    ? resp.data.business_type    : '';
+                                var verifyRan      = (resp.data && typeof resp.data.address_matched !== 'undefined');
 
                                 if (window.console && window.console.log) {
-                                    console.log('[OY Address Push] Éxito. Campos enviados:', pushed);
+                                    console.log('[OY Address Push] Diagnóstico → hasPendingEdits:', hasPending, '| isSAB:', isSab, '| businessType:', businessType, '| addressMatched:', addressMatched, '| verifyAddress:', verifyAddr);
                                 }
 
-                                // Registrar éxito en log (reutiliza el sistema del pull)
+                                // ── Mensaje de resultado según estado real ────────────────────
+                                var successMsg, msgType;
+
+                                if (hasPending) {
+                                    successMsg = '<?php echo esc_js( __( '⚠️ Solicitud enviada a GMB, pero Google tiene cambios pendientes de revisión (hasPendingEdits). Los datos pueden tardar horas en aparecer o estar en cola de moderación. Verifica directamente en el panel de Google Business Profile.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else if (isSab && null === verifyAddr) {
+                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado a GMB. Este es un negocio de tipo "Área de Servicio" — Google almacena la dirección internamente pero puede no mostrarla en el perfil público si el toggle "Mostrar dirección" está desactivado en GBP.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else if (verifyRan && !addressMatched && null === verifyAddr) {
+                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado a GMB, pero la verificación no encontró storefrontAddress en el perfil. Google puede estar procesando el cambio o rechazarlo silenciosamente. Revisa en Google Business Profile en unos minutos.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else if (verifyRan && !addressMatched && null !== verifyAddr) {
+                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado a GMB, pero la verificación detectó diferencias entre lo enviado y lo guardado. Los cambios pueden tardar unos minutos. Revisa en Google Business Profile.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else {
+                                    successMsg = '<?php echo esc_js( __( '✅ Dirección publicada en GMB y verificada correctamente.', 'lealez' ) ); ?>';
+                                    msgType    = 'success';
+                                }
+
+                                setPushMsg(successMsg, msgType);
+
+                                // Registrar en log (reutiliza el sistema del pull)
                                 if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
                                     var logRaw = {
-                                        pushed_fields: pushed,
-                                        gmb_response:  resp.data.gmb_response || null,
+                                        pushed_fields:    pushed,
+                                        gmb_response:     resp.data.gmb_response    || null,
+                                        has_pending_edits: hasPending,
+                                        is_sab:           isSab,
+                                        address_matched:  addressMatched,
+                                        verify_address:   verifyAddr,
+                                        business_type:    businessType,
                                     };
                                     window.oyAddrLogAPI.addLogEntry( logRaw, [], 'push' );
                                 }
