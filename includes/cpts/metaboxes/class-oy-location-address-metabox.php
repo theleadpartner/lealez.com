@@ -29,15 +29,20 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
          * Constructor
          */
 public function __construct() {
-            add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
+    add_action( 'add_meta_boxes', array( $this, 'register_metabox' ) );
 
-            // ✅ Guardado autocontenido del campo "Áreas de servicio" (JSON → array)
-            // Sin tocar el CPT principal.
-            add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 19, 2 );
+    // ✅ Guardado autocontenido del campo "Áreas de servicio" (JSON → array)
+    add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 19, 2 );
 
-            // ✅ AJAX: Enviar dirección desde Lealez hacia GMB (push inverso)
-            add_action( 'wp_ajax_oy_push_address_to_gmb', array( $this, 'ajax_push_address_to_gmb' ) );
-        }
+    // ✅ AJAX: Push dirección Lealez → GMB
+    add_action( 'wp_ajax_oy_push_address_to_gmb', array( $this, 'ajax_push_address_to_gmb' ) );
+
+    // ✅ AJAX: Verificar estado del último push en GMB (polling manual)
+    add_action( 'wp_ajax_oy_check_address_push_status', array( $this, 'ajax_check_address_push_status' ) );
+
+    // ✅ AJAX: Cancelar seguimiento de un push pendiente
+    add_action( 'wp_ajax_oy_cancel_address_push', array( $this, 'ajax_cancel_address_push' ) );
+}
 
         /**
          * Register metabox
@@ -114,27 +119,13 @@ public function __construct() {
         }
 
 /**
- * AJAX: Envía la dirección guardada en Lealez hacia Google Business Profile (push).
+ * AJAX: Envía la dirección guardada en Lealez hacia GMB (push) y persiste el estado del cambio.
  *
- * Acción:   oy_push_address_to_gmb
- * Nonce:    oy_push_address_gmb_{post_id}
+ * Tras el PATCH, ejecuta un GET de verificación. Con los flags de diagnóstico determina el
+ * estado del cambio (pending / approved / not_applicable / google_updated / inconclusive) y
+ * lo guarda en post_meta 'gmb_address_push_state' para tracking posterior.
  *
- * Lee los campos de dirección desde post_meta (ya guardados en WP) y ejecuta
- * un PATCH a Business Information API v1 actualizando únicamente storefrontAddress.
- * Tras el PATCH, realiza un GET de verificación para confirmar si los cambios fueron
- * realmente aplicados por Google. Informa al frontend sobre hasPendingEdits y el tipo
- * de negocio para mostrar mensajes apropiados.
- *
- * IMPORTANTE:
- * - latlng NO se envía. Las coordenadas son calculadas automáticamente por Google
- *   al cambiar la dirección. Enviar latlng causa HTTP 400 en ubicaciones verificadas.
- * - serviceArea NO se envía. Las áreas de servicio en Lealez son texto libre,
- *   pero la API de GMB requiere resource names de Places (ej: places/ChIJ...).
- * - Para negocios CUSTOMER_LOCATION_ONLY (SAB): Google puede aceptar el PATCH con
- *   hasPendingEdits: true y la dirección NO aparecer en el perfil público si el
- *   toggle "Mostrar dirección" está desactivado en el panel de GBP.
- *
- * @return void Responde con wp_send_json_success() o wp_send_json_error().
+ * @return void
  */
 public function ajax_push_address_to_gmb() {
     $nonce   = isset( $_POST['nonce'] )   ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
@@ -143,7 +134,6 @@ public function ajax_push_address_to_gmb() {
     if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_push_address_gmb_' . $post_id ) ) {
         wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
     }
-
     if ( ! current_user_can( 'edit_post', $post_id ) ) {
         wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
     }
@@ -153,26 +143,20 @@ public function ajax_push_address_to_gmb() {
         wp_send_json_error( array( 'message' => __( 'Post no válido o no es una oy_location.', 'lealez' ) ) );
     }
 
-    // ── Obtener business_id y location_name ───────────────────────────────
     $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
     $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
 
     if ( ! $business_id || '' === $location_name ) {
         wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada. Vincula primero en el metabox de Integración GMB.', 'lealez' ) ) );
     }
-
     if ( ! class_exists( 'Lealez_GMB_API' ) ) {
         wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API no está disponible.', 'lealez' ) ) );
     }
-
     if ( ! method_exists( 'Lealez_GMB_API', 'update_location_address' ) ) {
-        wp_send_json_error( array( 'message' => __( 'El método update_location_address no existe en Lealez_GMB_API. Actualiza el plugin.', 'lealez' ) ) );
+        wp_send_json_error( array( 'message' => __( 'El método update_location_address no existe. Actualiza el plugin.', 'lealez' ) ) );
     }
 
-    // ── Leer campos de dirección desde post_meta (ya guardados por WP) ───
-    // NOTA: latitude y longitude NO se incluyen en el payload a GMB.
-    // La API de Google rechaza latlng en ubicaciones verificadas (HTTP 400).
-    // Google recalcula las coordenadas automáticamente al actualizar storefrontAddress.
+    // ── Leer campos de dirección desde post_meta ──────────────────────────
     $address_line1 = (string) get_post_meta( $post_id, 'location_address_line1', true );
     $address_line2 = (string) get_post_meta( $post_id, 'location_address_line2', true );
     $city          = (string) get_post_meta( $post_id, 'location_city', true );
@@ -180,14 +164,12 @@ public function ajax_push_address_to_gmb() {
     $country       = (string) get_post_meta( $post_id, 'location_country', true );
     $postal_code   = (string) get_post_meta( $post_id, 'location_postal_code', true );
 
-    // regionCode es obligatorio en la API de GMB
     if ( '' === trim( $country ) ) {
         wp_send_json_error( array(
-            'message' => __( 'El campo "País (ISO 2)" es obligatorio para enviar a GMB. Guarda primero el post con el código del país (ej: CO, MX, US).', 'lealez' ),
+            'message' => __( 'El campo "País (ISO 2)" es obligatorio. Guarda el post con el código de país (ej: CO, MX, US).', 'lealez' ),
         ) );
     }
 
-    // ── Construir payload (solo storefrontAddress, sin latlng) ───────────
     $address_lines = array_values( array_filter(
         array( trim( $address_line1 ), trim( $address_line2 ) ),
         function ( $l ) { return '' !== $l; }
@@ -201,12 +183,10 @@ public function ajax_push_address_to_gmb() {
         'postalCode'         => trim( $postal_code ),
     );
 
-    // ── Debug: log payload antes de enviar ────────────────────────────────
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
         error_log( sprintf(
             '[OY GMB Address] ajax_push_address_to_gmb ── post_id=%d | location=%s | payload=%s',
-            $post_id,
-            $location_name,
+            $post_id, $location_name,
             wp_json_encode( $address_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
         ) );
     }
@@ -219,52 +199,56 @@ public function ajax_push_address_to_gmb() {
         $err_code = $result->get_error_code();
         $err_data = $result->get_error_data();
 
-        // Exponer raw body de Google en modo debug para facilitar diagnóstico
         $raw_body_preview = '';
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG && is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
             $raw_body_preview = substr( (string) $err_data['raw_body'], 0, 500 );
         }
-
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( '[OY GMB Address] ajax_push_address_to_gmb ── WP_Error: ' . $err_msg
                 . ( $raw_body_preview ? ' | raw: ' . $raw_body_preview : '' ) );
         }
 
-        $response = array(
-            'message' => $err_msg,
-            'code'    => $err_code,
-        );
-
+        $response = array( 'message' => $err_msg, 'code' => $err_code );
         if ( '' !== $raw_body_preview ) {
             $response['debug_raw'] = $raw_body_preview;
         }
-
         wp_send_json_error( $response );
     }
 
-    // ── Desempaquetar el array enriquecido devuelto por update_location_address ──
-    // update_location_address devuelve un array (no el raw response) para transportar
-    // flags de diagnóstico (hasPendingEdits, verificación, etc.).
-    $patch_result      = isset( $result['patch_result'] )      ? $result['patch_result']      : $result;
-    $has_pending_edits = ! empty( $result['has_pending_edits'] );
-    $is_sab            = ! empty( $result['is_sab'] );
-    $address_matched   = ! empty( $result['address_matched'] );
-    $verify_address    = isset( $result['verify_address'] )    ? $result['verify_address']    : null;
-    $business_type     = isset( $result['business_type'] )     ? (string) $result['business_type'] : '';
+    // ── Desempaquetar array enriquecido de update_location_address ────────
+    $patch_result        = isset( $result['patch_result'] )   ? $result['patch_result']   : $result;
+    $has_pending_edits   = ! empty( $result['has_pending_edits'] );
+    $is_sab              = ! empty( $result['is_sab'] );
+    $address_matched     = ! empty( $result['address_matched'] );
+    $verify_address      = isset( $result['verify_address'] ) ? $result['verify_address'] : null;
+    $business_type       = isset( $result['business_type'] )  ? (string) $result['business_type'] : '';
+    // hasGoogleUpdated viene del GET de verificación post-PATCH
+    $has_google_updated  = ! empty( $result['verify_result']['metadata']['hasGoogleUpdated'] );
 
-    // ── Debug: resumen del resultado ──────────────────────────────────────
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
         error_log( sprintf(
-            '[OY GMB Address] ajax_push_address_to_gmb ── RESULT: hasPendingEdits=%s | isSAB=%s | businessType="%s" | addressMatched=%s | verifyAddress=%s',
-            $has_pending_edits ? 'true' : 'false',
-            $is_sab            ? 'true' : 'false',
-            $business_type     ?: '(absent)',
-            $address_matched   ? 'true' : 'false',
+            '[OY GMB Address] ajax_push_address_to_gmb ── RESULT: hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | businessType="%s" | addressMatched=%s | verifyAddress=%s',
+            $has_pending_edits  ? 'true' : 'false',
+            $has_google_updated ? 'true' : 'false',
+            $is_sab             ? 'true' : 'false',
+            $business_type      ?: '(absent)',
+            $address_matched    ? 'true' : 'false',
             wp_json_encode( $verify_address, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
         ) );
     }
 
-    // ── Éxito — construir pushed_fields para el log del frontend ─────────
+    // ── Determinar estado ─────────────────────────────────────────────────
+    $push_status = $this->determine_address_push_status(
+        $has_pending_edits, $is_sab, $verify_address, $address_matched, $has_google_updated
+    );
+
+    // ── Construir y persistir estado del push ─────────────────────────────
+    $current_user = wp_get_current_user();
+    $now_ts       = time();
+    $now_iso      = gmdate( 'Y-m-d\TH:i:s\Z', $now_ts );
+    $user_login   = ( $current_user instanceof WP_User && $current_user->user_login )
+        ? $current_user->user_login : 'system';
+
     $pushed_fields = array(
         'regionCode'         => $address_data['regionCode'],
         'addressLines'       => $address_data['addressLines'],
@@ -272,6 +256,59 @@ public function ajax_push_address_to_gmb() {
         'administrativeArea' => $address_data['administrativeArea'],
         'postalCode'         => $address_data['postalCode'],
     );
+
+    $history_detail = sprintf(
+        'PATCH enviado. hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | businessType=%s | storefrontAddress_en_respuesta=%s | address_matched=%s',
+        $has_pending_edits  ? 'true' : 'false',
+        $has_google_updated ? 'true' : 'false',
+        $is_sab             ? 'true' : 'false',
+        $business_type      ?: 'n/a',
+        ( null !== $verify_address ) ? 'SÍ' : 'NO',
+        $address_matched    ? 'true' : 'false'
+    );
+
+    $push_state = array(
+        'status'          => $push_status,
+        'pushed_at'       => $now_iso,
+        'pushed_at_ts'    => $now_ts,
+        'pushed_by'       => get_current_user_id(),
+        'pushed_by_login' => $user_login,
+        'pushed_value'    => $pushed_fields,
+        'gmb_flags'       => array(
+            'has_pending_edits'            => $has_pending_edits,
+            'has_google_updated'           => $has_google_updated,
+            'is_sab'                       => $is_sab,
+            'business_type'                => $business_type,
+            'storefront_in_patch_response' => isset( $patch_result['storefrontAddress'] ),
+        ),
+        'verify'          => array(
+            'ran'                      => true,
+            'address_matched'          => $address_matched,
+            'storefront'               => $verify_address,
+            'has_pending_edits_after'  => ! empty( $result['verify_result']['metadata']['hasPendingEdits'] ),
+            'has_google_updated_after' => $has_google_updated,
+        ),
+        'last_check'   => null,
+        'resolution'   => 'approved' === $push_status ? array(
+            'resolved_at'    => $now_iso,
+            'resolved_at_ts' => $now_ts,
+            'resolved_to'    => 'approved',
+            'confirm_value'  => $verify_address,
+        ) : null,
+        'cancellation' => null,
+        'history'      => array(
+            array(
+                'event'    => 'pushed',
+                'at'       => $now_iso,
+                'at_ts'    => $now_ts,
+                'by'       => get_current_user_id(),
+                'by_login' => $user_login,
+                'detail'   => $history_detail,
+            ),
+        ),
+    );
+
+    update_post_meta( $post_id, 'gmb_address_push_state', $push_state );
 
     wp_send_json_success( array(
         'message'           => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
@@ -282,7 +319,584 @@ public function ajax_push_address_to_gmb() {
         'address_matched'   => $address_matched,
         'verify_address'    => $verify_address,
         'business_type'     => $business_type,
+        'push_status'       => $push_status,
+        'state_html'        => $this->render_address_push_state_panel( $post_id, false ),
     ) );
+}
+
+        /**
+ * Determina el estado del último push de dirección basado en los flags de GMB.
+ *
+ * Estados posibles:
+ * - approved       : address_matched=true → dirección confirmada en GMB
+ * - not_applicable : SAB sin storefrontAddress → no aplica para este tipo de negocio
+ * - pending        : hasPendingEdits=true → Google tiene el cambio en revisión
+ * - google_updated : hasGoogleUpdated=true → Google sobrescribió con sus propios datos
+ * - inconclusive   : PATCH OK pero sin confirmación posible
+ *
+ * @param bool        $has_pending_edits
+ * @param bool        $is_sab
+ * @param array|null  $verify_address
+ * @param bool        $address_matched
+ * @param bool        $has_google_updated
+ * @return string Estado: 'approved' | 'not_applicable' | 'pending' | 'google_updated' | 'inconclusive'
+ */
+private function determine_address_push_status(
+    $has_pending_edits,
+    $is_sab,
+    $verify_address,
+    $address_matched,
+    $has_google_updated
+) {
+    if ( $address_matched ) {
+        return 'approved';
+    }
+    if ( $is_sab && null === $verify_address ) {
+        return 'not_applicable';
+    }
+    if ( $has_pending_edits ) {
+        return 'pending';
+    }
+    if ( $has_google_updated ) {
+        return 'google_updated';
+    }
+    return 'inconclusive';
+}
+
+/**
+ * AJAX: Verifica manualmente el estado actual del último push de dirección en GMB.
+ *
+ * Hace un GET a Business Information API con readMask=name,storefrontAddress,metadata,serviceArea
+ * y actualiza el estado guardado en post_meta 'gmb_address_push_state'.
+ * Devuelve el HTML actualizado del panel de estado.
+ *
+ * @return void
+ */
+public function ajax_check_address_push_status() {
+    $nonce   = isset( $_POST['nonce'] )   ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) )             : 0;
+
+    if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_check_push_status_' . $post_id ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+    }
+    if ( ! current_user_can( 'edit_post', $post_id ) ) {
+        wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
+    }
+
+    $push_state = get_post_meta( $post_id, 'gmb_address_push_state', true );
+    if ( empty( $push_state ) || ! is_array( $push_state ) ) {
+        wp_send_json_error( array( 'message' => __( 'No hay estado de publicación registrado.', 'lealez' ) ) );
+    }
+
+    // Si ya está resuelto, devolvemos el HTML actual sin consultar GMB
+    if ( in_array( $push_state['status'], array( 'cancelled', 'not_applicable', 'approved' ), true ) ) {
+        wp_send_json_success( array(
+            'message'    => __( 'El cambio ya está resuelto. No se requiere verificación adicional.', 'lealez' ),
+            'status'     => $push_state['status'],
+            'state_html' => $this->render_address_push_state_panel( $post_id, false ),
+        ) );
+    }
+
+    $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+    $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+
+    if ( ! $business_id || ! $location_name ) {
+        wp_send_json_error( array( 'message' => __( 'No hay empresa/ubicación GMB vinculada.', 'lealez' ) ) );
+    }
+    if ( ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'get_location_status' ) ) {
+        wp_send_json_error( array( 'message' => __( 'Método get_location_status no disponible. Actualiza el plugin.', 'lealez' ) ) );
+    }
+
+    $gmb_result = Lealez_GMB_API::get_location_status( $business_id, $location_name );
+
+    $now_ts       = time();
+    $now_iso      = gmdate( 'Y-m-d\TH:i:s\Z', $now_ts );
+    $current_user = wp_get_current_user();
+    $user_login   = ( $current_user instanceof WP_User && $current_user->user_login )
+        ? $current_user->user_login : 'system';
+
+    if ( is_wp_error( $gmb_result ) ) {
+        $err = $gmb_result->get_error_message();
+
+        $push_state['last_check'] = array(
+            'checked_at'    => $now_iso,
+            'checked_at_ts' => $now_ts,
+            'success'       => false,
+            'error'         => $err,
+        );
+        $push_state['history'][] = array(
+            'event'    => 'check_failed',
+            'at'       => $now_iso,
+            'at_ts'    => $now_ts,
+            'by'       => get_current_user_id(),
+            'by_login' => $user_login,
+            'detail'   => 'Verificación fallida: ' . $err,
+        );
+
+        update_post_meta( $post_id, 'gmb_address_push_state', $push_state );
+
+        wp_send_json_error( array(
+            'message'    => __( 'Error al consultar GMB: ', 'lealez' ) . $err,
+            'state_html' => $this->render_address_push_state_panel( $post_id, false ),
+        ) );
+    }
+
+    // ── Analizar resultado del GET ─────────────────────────────────────────
+    $verify_address     = ( isset( $gmb_result['storefrontAddress'] ) && is_array( $gmb_result['storefrontAddress'] ) )
+        ? $gmb_result['storefrontAddress'] : null;
+    $has_pending_edits  = ! empty( $gmb_result['metadata']['hasPendingEdits'] );
+    $has_google_updated = ! empty( $gmb_result['metadata']['hasGoogleUpdated'] );
+    $btype              = isset( $gmb_result['serviceArea']['businessType'] ) ? (string) $gmb_result['serviceArea']['businessType'] : '';
+    $is_sab             = in_array( $btype, array( 'CUSTOMER_LOCATION_ONLY', 'CUSTOMER_AND_BUSINESS_LOCATION' ), true );
+
+    // Comparar locality
+    $sent_locality = '';
+    if ( ! empty( $push_state['pushed_value']['locality'] ) ) {
+        $sent_locality = strtolower( trim( $push_state['pushed_value']['locality'] ) );
+    }
+    $got_locality = '';
+    if ( $verify_address && ! empty( $verify_address['locality'] ) ) {
+        $got_locality = strtolower( trim( (string) $verify_address['locality'] ) );
+    }
+    $address_matched = ( '' !== $sent_locality && $sent_locality === $got_locality );
+
+    $new_status = $this->determine_address_push_status(
+        $has_pending_edits, $is_sab, $verify_address, $address_matched, $has_google_updated
+    );
+
+    $check_detail = sprintf(
+        'hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | storefrontAddress=%s | locality_sent="%s" | locality_got="%s" | address_matched=%s | → estado: %s',
+        $has_pending_edits  ? 'true' : 'false',
+        $has_google_updated ? 'true' : 'false',
+        $is_sab             ? 'true' : 'false',
+        ( null !== $verify_address ) ? 'Presente' : 'Ausente',
+        $sent_locality,
+        $got_locality,
+        $address_matched ? 'true' : 'false',
+        $new_status
+    );
+
+    $push_state['last_check'] = array(
+        'checked_at'         => $now_iso,
+        'checked_at_ts'      => $now_ts,
+        'success'            => true,
+        'has_pending_edits'  => $has_pending_edits,
+        'has_google_updated' => $has_google_updated,
+        'storefront'         => $verify_address,
+        'address_matched'    => $address_matched,
+        'derived_status'     => $new_status,
+    );
+
+    $push_state['history'][] = array(
+        'event'    => 'checked',
+        'at'       => $now_iso,
+        'at_ts'    => $now_ts,
+        'by'       => get_current_user_id(),
+        'by_login' => $user_login,
+        'detail'   => 'Verificación manual GMB → ' . $check_detail,
+    );
+
+    // ── Actualizar estado si cambió a resuelto ─────────────────────────────
+    $non_terminal = array( 'pending', 'inconclusive', 'google_updated' );
+    if ( in_array( $push_state['status'], $non_terminal, true ) ) {
+        if ( 'approved' === $new_status ) {
+            $push_state['status']     = 'approved';
+            $push_state['resolution'] = array(
+                'resolved_at'    => $now_iso,
+                'resolved_at_ts' => $now_ts,
+                'resolved_to'    => 'approved',
+                'confirm_value'  => $verify_address,
+            );
+        } elseif ( in_array( $new_status, array( 'not_applicable', 'google_updated' ), true ) ) {
+            $push_state['status'] = $new_status;
+        } else {
+            // Sigue pendiente o inconclusive → mantener lo que teníamos
+            $push_state['status'] = $new_status;
+        }
+    }
+
+    update_post_meta( $post_id, 'gmb_address_push_state', $push_state );
+
+    wp_send_json_success( array(
+        'message'    => sprintf(
+            /* translators: %s: status name */
+            __( 'Verificación completada. Estado: %s', 'lealez' ),
+            $new_status
+        ),
+        'status'     => $push_state['status'],
+        'state_html' => $this->render_address_push_state_panel( $post_id, false ),
+    ) );
+}
+
+/**
+ * AJAX: Cancela el seguimiento del último push de dirección.
+ *
+ * NOTA: No deshace el cambio enviado a GMB. Solo marca el estado local
+ * como 'cancelled' en post_meta para cerrar el seguimiento en Lealez.
+ *
+ * @return void
+ */
+public function ajax_cancel_address_push() {
+    $nonce   = isset( $_POST['nonce'] )   ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) )             : 0;
+    $reason  = isset( $_POST['reason'] )  ? sanitize_text_field( wp_unslash( $_POST['reason'] ) ) : '';
+
+    if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_cancel_push_' . $post_id ) ) {
+        wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+    }
+    if ( ! current_user_can( 'edit_post', $post_id ) ) {
+        wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
+    }
+
+    $push_state = get_post_meta( $post_id, 'gmb_address_push_state', true );
+    if ( empty( $push_state ) || ! is_array( $push_state ) ) {
+        wp_send_json_error( array( 'message' => __( 'No hay estado de publicación registrado.', 'lealez' ) ) );
+    }
+    if ( 'cancelled' === $push_state['status'] ) {
+        wp_send_json_error( array( 'message' => __( 'El seguimiento ya estaba cancelado.', 'lealez' ) ) );
+    }
+
+    $now_ts       = time();
+    $now_iso      = gmdate( 'Y-m-d\TH:i:s\Z', $now_ts );
+    $current_user = wp_get_current_user();
+    $user_login   = ( $current_user instanceof WP_User && $current_user->user_login )
+        ? $current_user->user_login : 'system';
+    $cancel_reason = $reason ?: __( 'Cancelado manualmente por el usuario.', 'lealez' );
+
+    $push_state['status']       = 'cancelled';
+    $push_state['cancellation'] = array(
+        'cancelled_at'       => $now_iso,
+        'cancelled_at_ts'    => $now_ts,
+        'cancelled_by'       => get_current_user_id(),
+        'cancelled_by_login' => $user_login,
+        'reason'             => $cancel_reason,
+    );
+    $push_state['history'][] = array(
+        'event'    => 'cancelled',
+        'at'       => $now_iso,
+        'at_ts'    => $now_ts,
+        'by'       => get_current_user_id(),
+        'by_login' => $user_login,
+        'detail'   => 'Seguimiento cancelado. Razón: ' . $cancel_reason,
+    );
+
+    update_post_meta( $post_id, 'gmb_address_push_state', $push_state );
+
+    wp_send_json_success( array(
+        'message'    => __( 'Seguimiento cancelado.', 'lealez' ),
+        'status'     => 'cancelled',
+        'state_html' => $this->render_address_push_state_panel( $post_id, false ),
+    ) );
+}
+
+/**
+ * Renderiza el panel de estado del último push de dirección a GMB.
+ *
+ * Muestra el estado actual (pending / approved / not_applicable / google_updated / inconclusive /
+ * cancelled), los flags de GMB al momento del envío, el resultado de la verificación inmediata,
+ * el resultado de la última verificación manual, el historial completo de eventos y los botones
+ * de acción (Verificar, Cancelar).
+ *
+ * @param int  $post_id Post ID de la oy_location.
+ * @param bool $echo    true = hace echo; false = devuelve string (para AJAX).
+ * @return string|void
+ */
+private function render_address_push_state_panel( $post_id, $echo = true ) {
+    $post_id    = absint( $post_id );
+    $push_state = get_post_meta( $post_id, 'gmb_address_push_state', true );
+
+    // Sin estado → no mostrar nada
+    if ( empty( $push_state ) || ! is_array( $push_state ) ) {
+        if ( ! $echo ) return '';
+        return;
+    }
+
+    $status = isset( $push_state['status'] ) ? (string) $push_state['status'] : 'inconclusive';
+
+    // ── Configuración visual por estado ──────────────────────────────────
+    $state_cfg = array(
+        'pending'        => array(
+            'label'  => '⏳ ' . __( 'En revisión por Google', 'lealez' ),
+            'color'  => '#92400e',
+            'bg'     => '#fffbeb',
+            'border' => '#fcd34d',
+        ),
+        'approved'       => array(
+            'label'  => '✅ ' . __( 'Aprobado y aplicado', 'lealez' ),
+            'color'  => '#166534',
+            'bg'     => '#f0fdf4',
+            'border' => '#86efac',
+        ),
+        'not_applicable' => array(
+            'label'  => '⚠️ ' . __( 'No aplica (Negocio SAB)', 'lealez' ),
+            'color'  => '#78350f',
+            'bg'     => '#fff7ed',
+            'border' => '#fdba74',
+        ),
+        'google_updated' => array(
+            'label'  => '🔄 ' . __( 'Google actualizó con datos propios', 'lealez' ),
+            'color'  => '#7f1d1d',
+            'bg'     => '#fff1f2',
+            'border' => '#fca5a5',
+        ),
+        'inconclusive'   => array(
+            'label'  => '🔵 ' . __( 'Enviado — sin confirmar', 'lealez' ),
+            'color'  => '#1e3a8a',
+            'bg'     => '#eff6ff',
+            'border' => '#93c5fd',
+        ),
+        'cancelled'      => array(
+            'label'  => '⛔ ' . __( 'Cancelado', 'lealez' ),
+            'color'  => '#374151',
+            'bg'     => '#f9fafb',
+            'border' => '#d1d5db',
+        ),
+    );
+
+    $cfg = isset( $state_cfg[ $status ] ) ? $state_cfg[ $status ] : $state_cfg['inconclusive'];
+
+    // ── Nonces frescos (necesario también cuando se llama desde AJAX) ─────
+    $check_nonce  = wp_create_nonce( 'oy_check_push_status_' . $post_id );
+    $cancel_nonce = wp_create_nonce( 'oy_cancel_push_' . $post_id );
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+    $fmt_ts = function( $ts ) {
+        return $ts ? esc_html( date_i18n( 'd M Y H:i', (int) $ts ) ) : '—';
+    };
+    $bool_badge = function( $val, $true_color = '#166534', $true_bg = '#dcfce7', $false_color = '#374151', $false_bg = '#f3f4f6' ) {
+        $c  = $val ? $true_color  : $false_color;
+        $bg = $val ? $true_bg     : $false_bg;
+        return sprintf(
+            '<span style="font-size:11px;color:%s;background:%s;border-radius:3px;padding:1px 6px;">%s</span>',
+            esc_attr( $c ), esc_attr( $bg ), $val ? 'true' : 'false'
+        );
+    };
+
+    // ── Campos del estado ─────────────────────────────────────────────────
+    $pushed_value = ( isset( $push_state['pushed_value'] ) && is_array( $push_state['pushed_value'] ) )
+        ? $push_state['pushed_value'] : array();
+    $gmb_flags    = ( isset( $push_state['gmb_flags'] ) && is_array( $push_state['gmb_flags'] ) )
+        ? $push_state['gmb_flags'] : array();
+    $verify       = ( isset( $push_state['verify'] ) && is_array( $push_state['verify'] ) )
+        ? $push_state['verify'] : array();
+    $last_check   = ( isset( $push_state['last_check'] ) && is_array( $push_state['last_check'] ) )
+        ? $push_state['last_check'] : null;
+    $resolution   = ( isset( $push_state['resolution'] ) && is_array( $push_state['resolution'] ) )
+        ? $push_state['resolution'] : null;
+    $cancellation = ( isset( $push_state['cancellation'] ) && is_array( $push_state['cancellation'] ) )
+        ? $push_state['cancellation'] : null;
+    $history      = ( isset( $push_state['history'] ) && is_array( $push_state['history'] ) )
+        ? $push_state['history'] : array();
+
+    ob_start();
+    ?>
+    <div id="oy-address-push-state-panel"
+         data-post-id="<?php echo esc_attr( $post_id ); ?>"
+         data-check-nonce="<?php echo esc_attr( $check_nonce ); ?>"
+         data-cancel-nonce="<?php echo esc_attr( $cancel_nonce ); ?>"
+         style="margin-bottom:16px;border:1px solid <?php echo esc_attr( $cfg['border'] ); ?>;border-radius:4px;background:<?php echo esc_attr( $cfg['bg'] ); ?>;overflow:hidden;font-size:12px;line-height:1.5;">
+
+        <?php /* ── Header ── */ ?>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid <?php echo esc_attr( $cfg['border'] ); ?>;gap:10px;flex-wrap:wrap;">
+            <span style="font-size:13px;font-weight:600;color:#1d2327;flex:1 1 auto;">
+                🏷️ <?php _e( 'Estado de Publicación en GMB — Dirección', 'lealez' ); ?>
+            </span>
+            <span style="font-size:12px;font-weight:700;color:<?php echo esc_attr( $cfg['color'] ); ?>;background:#fff;border:1.5px solid <?php echo esc_attr( $cfg['border'] ); ?>;border-radius:4px;padding:3px 10px;white-space:nowrap;">
+                <?php echo esc_html( $cfg['label'] ); ?>
+            </span>
+        </div>
+
+        <?php /* ── Body ── */ ?>
+        <div style="padding:12px 14px;color:#3c4043;">
+
+            <?php /* Enviado por / cuándo */ ?>
+            <div style="margin-bottom:10px;font-size:12px;">
+                <strong><?php _e( 'Enviado:', 'lealez' ); ?></strong>
+                <?php echo $fmt_ts( isset( $push_state['pushed_at_ts'] ) ? $push_state['pushed_at_ts'] : 0 ); ?>
+                <?php if ( ! empty( $push_state['pushed_by_login'] ) ) : ?>
+                    <?php _e( 'por', 'lealez' ); ?>
+                    <code style="background:rgba(0,0,0,.05);padding:0 4px;border-radius:2px;"><?php echo esc_html( $push_state['pushed_by_login'] ); ?></code>
+                <?php endif; ?>
+            </div>
+
+            <?php /* Dirección enviada */ ?>
+            <?php if ( ! empty( $pushed_value ) ) :
+                $parts = array();
+                if ( ! empty( $pushed_value['addressLines'] ) && is_array( $pushed_value['addressLines'] ) ) {
+                    $parts[] = implode( ', ', array_map( 'esc_html', $pushed_value['addressLines'] ) );
+                }
+                if ( ! empty( $pushed_value['locality'] ) )           $parts[] = esc_html( $pushed_value['locality'] );
+                if ( ! empty( $pushed_value['administrativeArea'] ) ) $parts[] = esc_html( $pushed_value['administrativeArea'] );
+                if ( ! empty( $pushed_value['postalCode'] ) )         $parts[] = esc_html( $pushed_value['postalCode'] );
+                if ( ! empty( $pushed_value['regionCode'] ) )         $parts[] = '<strong>' . esc_html( $pushed_value['regionCode'] ) . '</strong>';
+            ?>
+            <div style="margin-bottom:10px;background:rgba(0,0,0,.04);border-radius:3px;padding:7px 10px;">
+                <strong><?php _e( 'Dirección enviada:', 'lealez' ); ?></strong><br>
+                <?php echo implode( ' · ', $parts ); // phpcs:ignore WordPress.Security.EscapeOutput ?>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Flags GMB al enviar */ ?>
+            <div style="margin-bottom:10px;">
+                <strong><?php _e( 'Flags GMB al enviar:', 'lealez' ); ?></strong>
+                <span style="margin-left:6px;">hasPendingEdits: <?php echo $bool_badge( ! empty( $gmb_flags['has_pending_edits'] ), '#92400e', '#fef3c7', '#374151', '#f3f4f6' ); // phpcs:ignore ?></span>
+                <span style="margin-left:6px;">hasGoogleUpdated: <?php echo $bool_badge( ! empty( $gmb_flags['has_google_updated'] ), '#7f1d1d', '#fee2e2', '#374151', '#f3f4f6' ); // phpcs:ignore ?></span>
+                <span style="margin-left:6px;">isSAB:
+                    <span style="font-size:11px;color:#374151;background:#f3f4f6;border-radius:3px;padding:1px 6px;">
+                        <?php echo ! empty( $gmb_flags['is_sab'] ) ? 'true' : 'false'; ?>
+                        <?php if ( ! empty( $gmb_flags['business_type'] ) ) echo ' (' . esc_html( $gmb_flags['business_type'] ) . ')'; ?>
+                    </span>
+                </span>
+                <span style="margin-left:6px;">storefrontAddress_en_PATCH:
+                    <?php echo $bool_badge( ! empty( $gmb_flags['storefront_in_patch_response'] ) ); // phpcs:ignore ?>
+                </span>
+            </div>
+
+            <?php /* Verificación inmediata post-PATCH */ ?>
+            <div style="margin-bottom:10px;">
+                <strong><?php _e( 'Verificación inmediata post-PATCH:', 'lealez' ); ?></strong>
+                <?php if ( ! empty( $verify ) ) :
+                    $v_present = ( isset( $verify['storefront'] ) && null !== $verify['storefront'] );
+                    $v_match   = ! empty( $verify['address_matched'] );
+                    $v_gu      = ! empty( $verify['has_google_updated_after'] );
+                ?>
+                <span style="margin-left:6px;font-size:11px;color:<?php echo $v_present ? '#166534' : '#991b1b'; ?>;">
+                    storefrontAddress: <?php echo $v_present ? '✅ Presente' : '❌ Ausente en GET'; ?>
+                </span>
+                <span style="margin-left:6px;font-size:11px;color:<?php echo $v_match ? '#166534' : '#92400e'; ?>;">
+                    | locality: <?php echo $v_match ? '✅ Coincide' : '⚠️ No coincide'; ?>
+                </span>
+                <?php if ( $v_gu ) : ?>
+                <span style="margin-left:6px;font-size:11px;color:#7f1d1d;">| ⚠️ hasGoogleUpdated=true</span>
+                <?php endif; ?>
+                <?php else : ?>
+                <span style="font-size:11px;color:#888;margin-left:6px;"><?php _e( 'No ejecutada.', 'lealez' ); ?></span>
+                <?php endif; ?>
+            </div>
+
+            <?php /* Explicación estado not_applicable */ ?>
+            <?php if ( 'not_applicable' === $status ) : ?>
+            <div style="margin-bottom:10px;background:#fff7ed;border:1px solid #fdba74;border-radius:3px;padding:8px 10px;font-size:12px;color:#78350f;">
+                ℹ️ <strong><?php _e( '¿Por qué no aplica?', 'lealez' ); ?></strong>
+                <?php _e( 'Este negocio es de tipo <strong>Área de Servicio (SAB)</strong>: los clientes no visitan una ubicación física del negocio, sino que el negocio va donde el cliente. Google no gestiona <code>storefrontAddress</code> para este tipo, por lo que el campo está ausente del perfil público. Para que Google muestre una dirección, activa el toggle <em>"Mostrar la dirección de la empresa a los clientes"</em> directamente en el panel de Google Business Profile y cambia el tipo de negocio.', 'lealez' ); ?>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Explicación google_updated */ ?>
+            <?php if ( 'google_updated' === $status ) : ?>
+            <div style="margin-bottom:10px;background:#fff1f2;border:1px solid #fca5a5;border-radius:3px;padding:8px 10px;font-size:12px;color:#7f1d1d;">
+                ℹ️ <strong><?php _e( '¿Qué significa?', 'lealez' ); ?></strong>
+                <?php _e( '<code>hasGoogleUpdated: true</code> indica que Google actualizó este perfil con datos propios que difieren de los del propietario. Esto puede ocurrir porque usuarios de Maps sugirieron correcciones o porque Google tiene información propia. Los cambios enviados por Lealez pueden haber sido reemplazados. Revisa el panel de Google Business Profile → <em>Editar perfil</em> para ver los datos actuales.', 'lealez' ); ?>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Última verificación manual */ ?>
+            <?php if ( $last_check ) : ?>
+            <div style="margin-bottom:10px;background:rgba(0,0,0,.04);border-radius:3px;padding:8px 10px;">
+                <strong><?php _e( 'Última verificación manual:', 'lealez' ); ?></strong>
+                <?php echo $fmt_ts( isset( $last_check['checked_at_ts'] ) ? $last_check['checked_at_ts'] : 0 ); ?>
+                <?php if ( ! empty( $last_check['success'] ) ) : ?>
+                    | storefrontAddress: <span style="color:<?php echo ( isset( $last_check['storefront'] ) && null !== $last_check['storefront'] ) ? '#166534' : '#991b1b'; ?>;"><?php echo ( isset( $last_check['storefront'] ) && null !== $last_check['storefront'] ) ? '✅ Presente' : '❌ Ausente'; ?></span>
+                    | hasPendingEdits: <?php echo $bool_badge( ! empty( $last_check['has_pending_edits'] ), '#92400e', '#fef3c7', '#374151', '#f3f4f6' ); // phpcs:ignore ?>
+                    | hasGoogleUpdated: <?php echo $bool_badge( ! empty( $last_check['has_google_updated'] ), '#7f1d1d', '#fee2e2', '#374151', '#f3f4f6' ); // phpcs:ignore ?>
+                    | <?php _e( 'Estado derivado:', 'lealez' ); ?> <strong><?php echo esc_html( isset( $last_check['derived_status'] ) ? $last_check['derived_status'] : '—' ); ?></strong>
+                <?php else : ?>
+                    — <span style="color:#dc3232;"><?php _e( 'Error:', 'lealez' ); ?> <?php echo esc_html( isset( $last_check['error'] ) ? $last_check['error'] : '' ); ?></span>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Bloque aprobado */ ?>
+            <?php if ( 'approved' === $status && $resolution ) : ?>
+            <div style="margin-bottom:10px;background:#f0fdf4;border:1px solid #86efac;border-radius:3px;padding:8px 10px;">
+                ✅ <strong><?php _e( 'Confirmado en GMB:', 'lealez' ); ?></strong>
+                <?php echo $fmt_ts( isset( $resolution['resolved_at_ts'] ) ? $resolution['resolved_at_ts'] : 0 ); ?>
+                <?php if ( ! empty( $resolution['confirm_value'] ) && is_array( $resolution['confirm_value'] ) ) : ?>
+                — <code style="font-size:11px;"><?php echo esc_html( wp_json_encode( $resolution['confirm_value'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?></code>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Bloque cancelado */ ?>
+            <?php if ( 'cancelled' === $status && $cancellation ) : ?>
+            <div style="margin-bottom:10px;background:#f9fafb;border:1px solid #d1d5db;border-radius:3px;padding:8px 10px;">
+                ⛔ <strong><?php _e( 'Cancelado:', 'lealez' ); ?></strong>
+                <?php echo $fmt_ts( isset( $cancellation['cancelled_at_ts'] ) ? $cancellation['cancelled_at_ts'] : 0 ); ?>
+                <?php if ( ! empty( $cancellation['cancelled_by_login'] ) ) : ?>
+                <?php _e( 'por', 'lealez' ); ?> <code><?php echo esc_html( $cancellation['cancelled_by_login'] ); ?></code>
+                <?php endif; ?>
+                <?php if ( ! empty( $cancellation['reason'] ) ) : ?>
+                — <em><?php echo esc_html( $cancellation['reason'] ); ?></em>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Historial de eventos */ ?>
+            <?php if ( ! empty( $history ) ) : ?>
+            <div style="margin-bottom:10px;">
+                <strong><?php _e( 'Historial de eventos:', 'lealez' ); ?></strong>
+                <ol style="margin:6px 0 0 16px;padding:0;">
+                <?php
+                $evt_icons = array(
+                    'pushed'       => '📤',
+                    'checked'      => '🔍',
+                    'check_failed' => '❌',
+                    'approved'     => '✅',
+                    'cancelled'    => '⛔',
+                    'google_updated' => '🔄',
+                );
+                foreach ( array_reverse( $history ) as $evt ) :
+                    $icon     = isset( $evt_icons[ $evt['event'] ] ) ? $evt_icons[ $evt['event'] ] : '📌';
+                    $evt_time = isset( $evt['at_ts'] ) ? $fmt_ts( $evt['at_ts'] ) : '—';
+                    $evt_user = ! empty( $evt['by_login'] ) ? ' · <code style="font-size:10px;">' . esc_html( $evt['by_login'] ) . '</code>' : '';
+                    $detail   = isset( $evt['detail'] ) ? $evt['detail'] : $evt['event'];
+                ?>
+                <li style="margin-bottom:5px;font-size:11px;color:#374151;">
+                    <?php echo esc_html( $icon ); ?>
+                    <strong><?php echo $evt_time; ?></strong>
+                    <?php echo $evt_user; // phpcs:ignore WordPress.Security.EscapeOutput ?>
+                    — <?php echo esc_html( $detail ); ?>
+                </li>
+                <?php endforeach; ?>
+                </ol>
+            </div>
+            <?php endif; ?>
+
+            <?php /* Botones de acción */ ?>
+            <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center;">
+                <?php if ( in_array( $status, array( 'pending', 'inconclusive', 'google_updated' ), true ) ) : ?>
+                <button type="button"
+                        id="oy-check-push-status-btn"
+                        class="button button-small"
+                        style="display:inline-flex;align-items:center;gap:4px;">
+                    <span class="dashicons dashicons-update" style="margin-top:3px;font-size:14px;width:14px;height:14px;"></span>
+                    <?php _e( 'Verificar estado en GMB', 'lealez' ); ?>
+                </button>
+                <?php endif; ?>
+
+                <?php if ( ! in_array( $status, array( 'cancelled', 'approved', 'not_applicable' ), true ) ) : ?>
+                <button type="button"
+                        id="oy-cancel-push-state-btn"
+                        class="button button-small"
+                        style="display:inline-flex;align-items:center;gap:4px;color:#dc3232;border-color:#dc3232;">
+                    <span class="dashicons dashicons-no" style="margin-top:3px;font-size:14px;width:14px;height:14px;"></span>
+                    <?php _e( 'Cancelar seguimiento', 'lealez' ); ?>
+                </button>
+                <?php endif; ?>
+
+                <span id="oy-push-state-action-msg" style="font-size:11px;color:#555;align-self:center;"></span>
+            </div>
+
+        </div><!-- /body -->
+    </div><!-- /#oy-address-push-state-panel -->
+    <?php
+
+    $html = ob_get_clean();
+    if ( $echo ) {
+        echo $html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    } else {
+        return $html;
+    }
 }
 
         /**
@@ -566,8 +1180,10 @@ public function ajax_push_address_to_gmb() {
                         <?php _e( '⚠️ Para <strong>Publicar en GMB</strong>: primero guarda el post (Actualizar), luego presiona el botón. No se envían las Áreas de Servicio (requieren Place IDs de Google).', 'lealez' ); ?>
                     </span>
                 <?php endif; ?>
-            </div>
+</div>
 
+            <?php /* ── Panel de estado de publicación — Dirección en GMB ── */ ?>
+            <?php $this->render_address_push_state_panel( $post->ID ); ?>
 
 <?php /* ── Log de Sincronización ── */ ?>
             <div id="oy-address-log-panel" style="margin-bottom:16px; border:1px solid #dadce0; border-radius:4px; overflow:hidden; background:#fff;">
@@ -1868,7 +2484,7 @@ var statusLabel, statusColor;
                             },
                         })
 .done(function(resp) {
-                            resetPushBtn();
+                            
 
                             try {
                                 if (window.console && window.console.log) {
@@ -1880,14 +2496,8 @@ var statusLabel, statusColor;
                                         ? resp.data.message
                                         : '<?php echo esc_js( __( 'No se pudo enviar la dirección a GMB.', 'lealez' ) ); ?>';
                                     setPushMsg(errMsg, 'error');
-
-                                    // Registrar error en log
                                     if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
-                                        window.oyAddrLogAPI.addLogEntry(
-                                            { error: errMsg, rawResp: resp || null },
-                                            [],
-                                            'push'
-                                        );
+                                        window.oyAddrLogAPI.addLogEntry({ error: errMsg, rawResp: resp || null }, [], 'push');
                                     }
                                     return;
                                 }
@@ -1898,37 +2508,47 @@ var statusLabel, statusColor;
                                 var addressMatched = !!(resp.data && resp.data.address_matched);
                                 var verifyAddr     = (resp.data && resp.data.verify_address)   ? resp.data.verify_address   : null;
                                 var businessType   = (resp.data && resp.data.business_type)    ? resp.data.business_type    : '';
+                                var pushStatus     = (resp.data && resp.data.push_status)      ? resp.data.push_status      : '';
                                 var verifyRan      = (resp.data && typeof resp.data.address_matched !== 'undefined');
 
                                 if (window.console && window.console.log) {
-                                    console.log('[OY Address Push] Diagnóstico → hasPendingEdits:', hasPending, '| isSAB:', isSab, '| businessType:', businessType, '| addressMatched:', addressMatched, '| verifyAddress:', verifyAddr);
+                                    console.log('[OY Address Push] Diagnóstico → hasPendingEdits:', hasPending, '| isSAB:', isSab, '| businessType:', businessType, '| addressMatched:', addressMatched, '| pushStatus:', pushStatus);
                                 }
 
-                                // ── Mensaje de resultado según estado real ────────────────────
+                                // ── Mensaje de resultado según estado real ──────────────────────────
                                 var successMsg, msgType;
-
-                                if (hasPending) {
-                                    successMsg = '<?php echo esc_js( __( '⚠️ Solicitud enviada a GMB, pero Google tiene cambios pendientes de revisión (hasPendingEdits). Los datos pueden tardar horas en aparecer o estar en cola de moderación. Verifica directamente en el panel de Google Business Profile.', 'lealez' ) ); ?>';
-                                    msgType    = 'blue';
-                                } else if (isSab && null === verifyAddr) {
-                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado a GMB. Este es un negocio de tipo "Área de Servicio" — Google almacena la dirección internamente pero puede no mostrarla en el perfil público si el toggle "Mostrar dirección" está desactivado en GBP.', 'lealez' ) ); ?>';
-                                    msgType    = 'blue';
-                                } else if (verifyRan && !addressMatched && null === verifyAddr) {
-                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado a GMB, pero la verificación no encontró storefrontAddress en el perfil. Google puede estar procesando el cambio o rechazarlo silenciosamente. Revisa en Google Business Profile en unos minutos.', 'lealez' ) ); ?>';
-                                    msgType    = 'blue';
-                                } else if (verifyRan && !addressMatched && null !== verifyAddr) {
-                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado a GMB, pero la verificación detectó diferencias entre lo enviado y lo guardado. Los cambios pueden tardar unos minutos. Revisa en Google Business Profile.', 'lealez' ) ); ?>';
-                                    msgType    = 'blue';
-                                } else {
+                                if ('approved' === pushStatus) {
                                     successMsg = '<?php echo esc_js( __( '✅ Dirección publicada en GMB y verificada correctamente.', 'lealez' ) ); ?>';
                                     msgType    = 'success';
+                                } else if ('not_applicable' === pushStatus) {
+                                    successMsg = '<?php echo esc_js( __( '⚠️ Este negocio es SAB (Área de Servicio). Google no gestiona storefrontAddress para negocios sin ubicación física. Revisa el Panel de Estado abajo para más detalles.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else if ('pending' === pushStatus) {
+                                    successMsg = '<?php echo esc_js( __( '⏳ Enviado a GMB. Google tiene el cambio en revisión (hasPendingEdits=true). Usa "Verificar estado en GMB" en el Panel de Estado para comprobar si fue aprobado.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else if ('google_updated' === pushStatus) {
+                                    successMsg = '<?php echo esc_js( __( '⚠️ Enviado, pero Google tiene datos propios que difieren (hasGoogleUpdated=true). El cambio puede haber sido reemplazado. Revisa el Panel de Estado.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else {
+                                    successMsg = '<?php echo esc_js( __( '🔵 Enviado a GMB. No se pudo confirmar la aplicación inmediata. Usa "Verificar estado en GMB" en unos minutos.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
                                 }
 
                                 setPushMsg(successMsg, msgType);
 
-                                // Registrar en log (reutiliza el sistema del pull)
+                                // ── Actualizar / insertar panel de estado ──────────────────────────
+                                if (resp.data && resp.data.state_html) {
+                                    var $existingPanel = $('#oy-address-push-state-panel');
+                                    if ($existingPanel.length) {
+                                        $existingPanel.replaceWith(resp.data.state_html);
+                                    } else {
+                                        $('#oy-address-log-panel').before(resp.data.state_html);
+                                    }
+                                }
+
+                                // Registrar en log
                                 if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
-                                    var logRaw = {
+                                    window.oyAddrLogAPI.addLogEntry({
                                         pushed_fields:    pushed,
                                         gmb_response:     resp.data.gmb_response    || null,
                                         has_pending_edits: hasPending,
@@ -1936,11 +2556,11 @@ var statusLabel, statusColor;
                                         address_matched:  addressMatched,
                                         verify_address:   verifyAddr,
                                         business_type:    businessType,
-                                    };
-                                    window.oyAddrLogAPI.addLogEntry( logRaw, [], 'push' );
+                                        push_status:      pushStatus,
+                                    }, [], 'push');
                                 }
 
-                                // Emitir evento para extensibilidad futura
+                                // Emitir evento
                                 try {
                                     $(document).trigger('oy:gmb:address:pushed', [{ pushed_fields: pushed, response: resp.data }]);
                                 } catch(triggerErr) {
@@ -1957,7 +2577,7 @@ var statusLabel, statusColor;
                             }
                         })
                         .fail(function(xhr, status, error) {
-                            resetPushBtn();
+                            
 
                             var isTimeout  = status === 'timeout';
                             var httpStatus = xhr && xhr.status ? xhr.status : 0;
@@ -1997,11 +2617,125 @@ var statusLabel, statusColor;
                         })
                         .always(function() {
                             // Seguridad final: resetea si .done()/.fail() no lo hicieron
-                            if (pushRunning) { resetPushBtn(); }
+                            if (pushRunning) {  }
                         });
                     });
 
                 })(); // end address push IIFE
+
+// ── IIFE: Panel de Estado de Publicación — Dirección GMB ────────────────
+                (function($) {
+                    'use strict';
+
+                    var ajaxUrl = (typeof ajaxurl !== 'undefined') ? ajaxurl : '<?php echo esc_js( admin_url( 'admin-ajax.php' ) ); ?>';
+                    var postId  = '<?php echo esc_js( (string) $post->ID ); ?>';
+
+                    function setStateMsg(msg, type) {
+                        var colors = { info: '#555', success: '#166534', error: '#dc3232', loading: '#1a73e8' };
+                        $('#oy-push-state-action-msg').text(msg).css('color', colors[type] || '#555');
+                    }
+
+                    // ── Verificar estado en GMB ────────────────────────────────────────────
+                    $(document).on('click', '#oy-check-push-status-btn', function(e) {
+                        e.preventDefault();
+                        var $btn   = $(this);
+                        var $panel = $('#oy-address-push-state-panel');
+                        var nonce  = $panel.data('check-nonce');
+
+                        if (!nonce) {
+                            setStateMsg('Error: nonce no disponible. Recarga la página.', 'error');
+                            return;
+                        }
+
+                        $btn.prop('disabled', true);
+                        $btn.find('.dashicons').css('animation', 'oy-addr-spin 1s linear infinite').css('display', 'inline-block');
+                        setStateMsg('<?php echo esc_js( __( 'Consultando Google Business Profile...', 'lealez' ) ); ?>', 'loading');
+
+                        $.ajax({
+                            url:     ajaxUrl,
+                            type:    'POST',
+                            timeout: 45000,
+                            data: {
+                                action:  'oy_check_address_push_status',
+                                nonce:   nonce,
+                                post_id: postId,
+                            },
+                        })
+                        .done(function(resp) {
+                            if (window.console && window.console.log) {
+                                console.log('[OY State Check] Respuesta:', resp);
+                            }
+                            if (resp && resp.success && resp.data && resp.data.state_html) {
+                                $('#oy-address-push-state-panel').replaceWith(resp.data.state_html);
+                            } else {
+                                $btn.prop('disabled', false);
+                                $btn.find('.dashicons').css('animation', '');
+                                var errMsg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'Error desconocido.', 'lealez' ) ); ?>';
+                                setStateMsg(errMsg, 'error');
+                            }
+                        })
+                        .fail(function(xhr, status, error) {
+                            $btn.prop('disabled', false);
+                            $btn.find('.dashicons').css('animation', '');
+                            if (window.console && window.console.error) {
+                                console.error('[OY State Check] AJAX fail:', status, error);
+                            }
+                            setStateMsg('<?php echo esc_js( __( 'Error de red al consultar GMB. Intenta de nuevo.', 'lealez' ) ); ?>', 'error');
+                        });
+                    });
+
+                    // ── Cancelar seguimiento ───────────────────────────────────────────────
+                    $(document).on('click', '#oy-cancel-push-state-btn', function(e) {
+                        e.preventDefault();
+                        var confirmMsg = '<?php echo esc_js( __( '¿Cancelar el seguimiento de este cambio? NOTA: esto no deshace el cambio enviado a GMB — solo cierra el seguimiento local en Lealez.', 'lealez' ) ); ?>';
+                        if (!confirm(confirmMsg)) { return; }
+
+                        var $btn   = $(this);
+                        var $panel = $('#oy-address-push-state-panel');
+                        var nonce  = $panel.data('cancel-nonce');
+
+                        if (!nonce) {
+                            setStateMsg('Error: nonce no disponible. Recarga la página.', 'error');
+                            return;
+                        }
+
+                        $btn.prop('disabled', true);
+                        setStateMsg('<?php echo esc_js( __( 'Cancelando...', 'lealez' ) ); ?>', 'loading');
+
+                        $.ajax({
+                            url:     ajaxUrl,
+                            type:    'POST',
+                            timeout: 20000,
+                            data: {
+                                action:  'oy_cancel_address_push',
+                                nonce:   nonce,
+                                post_id: postId,
+                                reason:  '',
+                            },
+                        })
+                        .done(function(resp) {
+                            if (window.console && window.console.log) {
+                                console.log('[OY State Cancel] Respuesta:', resp);
+                            }
+                            if (resp && resp.success && resp.data && resp.data.state_html) {
+                                $('#oy-address-push-state-panel').replaceWith(resp.data.state_html);
+                            } else {
+                                $btn.prop('disabled', false);
+                                var errMsg = (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'Error desconocido.', 'lealez' ) ); ?>';
+                                setStateMsg(errMsg, 'error');
+                            }
+                        })
+                        .fail(function(xhr, status, error) {
+                            $btn.prop('disabled', false);
+                            if (window.console && window.console.error) {
+                                console.error('[OY State Cancel] AJAX fail:', status, error);
+                            }
+                            setStateMsg('<?php echo esc_js( __( 'Error de red. Intenta de nuevo.', 'lealez' ) ); ?>', 'error');
+                        });
+                    });
+
+                })(jQuery);
+                // ── FIN: Panel de Estado ──────────────────────────────────────────────────
                 
             </script>
             <?php
