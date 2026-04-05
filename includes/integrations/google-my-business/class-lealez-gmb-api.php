@@ -2968,6 +2968,58 @@ public static function update_location_address( $business_id, $location_name, $a
 }
 
 
+    /**
+ * Obtiene el estado actual de una ubicación en GMB para diagnóstico/verificación de dirección.
+ *
+ * Endpoint:
+ * GET https://mybusinessbusinessinformation.googleapis.com/v1/{location}
+ *     ?readMask=name,storefrontAddress,metadata,serviceArea
+ *
+ * Usado por el sistema de tracking de estado de publicación de dirección en Lealez.
+ * Devuelve los campos relevantes sin tocar post_meta (diferente a sync_location_data).
+ *
+ * @param int    $business_id   WP Post ID del oy_business.
+ * @param string $location_name Resource name de la ubicación (cualquier formato).
+ * @return array|WP_Error Array con storefrontAddress, metadata y serviceArea, o WP_Error.
+ */
+public static function get_location_status( $business_id, $location_name ) {
+    $business_id   = absint( $business_id );
+    $location_name = trim( (string) $location_name );
+
+    if ( ! $business_id || '' === $location_name ) {
+        return new WP_Error(
+            'invalid_params',
+            __( 'Invalid business_id or location_name for get_location_status.', 'lealez' )
+        );
+    }
+
+    // Normalizar a formato corto 'locations/{id}'
+    $normalized = $location_name;
+    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
+        $parts = explode( '/locations/', $location_name, 2 );
+        if ( ! empty( $parts[1] ) ) {
+            $normalized = 'locations/' . trim( $parts[1], '/' );
+        }
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log(
+            '[OY GMB Address] get_location_status ── GET ' .
+            self::$business_api_base . '/' . $normalized .
+            '?readMask=name,storefrontAddress,metadata,serviceArea'
+        );
+    }
+
+    return self::make_request(
+        $business_id,
+        '/' . rtrim( $normalized, '/' ),
+        self::$business_api_base,
+        'GET',
+        array(),
+        false, // Sin caché — siempre fresco
+        array( 'readMask' => 'name,storefrontAddress,metadata,serviceArea' )
+    );
+}
 
 
 /**
