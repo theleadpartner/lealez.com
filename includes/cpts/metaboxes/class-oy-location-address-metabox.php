@@ -163,7 +163,7 @@ public function ajax_push_address_to_gmb() {
     // ── Leer campos de dirección desde post_meta ──────────────────────────
     $address_line1 = (string) get_post_meta( $post_id, 'location_address_line1', true );
     $address_line2 = (string) get_post_meta( $post_id, 'location_address_line2', true );
-    $city          = (string) get_post_meta( $post_id, 'location_city', true );\
+    $city          = (string) get_post_meta( $post_id, 'location_city', true );
     $state         = (string) get_post_meta( $post_id, 'location_state', true );
     $country       = (string) get_post_meta( $post_id, 'location_country', true );
     $postal_code   = (string) get_post_meta( $post_id, 'location_postal_code', true );
