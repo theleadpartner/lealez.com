@@ -2867,7 +2867,7 @@ public static function update_location_address( $business_id, $location_name, $a
         );
     }
 
-    // ── AUTO-CORRECCIÓN SAB ───────────────────────────────────────────────────
+    // ── AUTO-CORRECCIÓN SAB — CASO 1: MOSTRAR ────────────────────────────────
     // Si el caller NO incluyó serviceArea.businessType (porque no sabía que era SAB)
     // pero la respuesta del PATCH revela businessType=CUSTOMER_LOCATION_ONLY
     // Y la intención es MOSTRAR la dirección → segundo PATCH de corrección.
@@ -2889,7 +2889,7 @@ public static function update_location_address( $business_id, $location_name, $a
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log( sprintf(
-                '[OY GMB Address] update_location_address ── AUTO-CORRECT: SAB detectado en respuesta. Segundo PATCH. mask=%s | businessType=%s',
+                '[OY GMB Address] update_location_address ── AUTO-CORRECT (CASO 1 MOSTRAR): SAB detectado en respuesta. Segundo PATCH. mask=%s | businessType=%s',
                 $second_mask,
                 $desired_business_type
             ) );
@@ -2899,7 +2899,7 @@ public static function update_location_address( $business_id, $location_name, $a
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                'Auto-corrección SAB: segundo PATCH con businessType=' . $desired_business_type,
+                'Auto-corrección SAB (MOSTRAR): segundo PATCH con businessType=' . $desired_business_type,
                 array(
                     'location'   => $normalized_location,
                     'updateMask' => $second_mask,
@@ -2928,7 +2928,7 @@ public static function update_location_address( $business_id, $location_name, $a
 
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                 error_log( sprintf(
-                    '[OY GMB Address] update_location_address ── AUTO-CORRECT segundo PATCH OK: businessType=%s | hasPendingEdits=%s | storefrontAddress=%s',
+                    '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 1 segundo PATCH OK: businessType=%s | hasPendingEdits=%s | storefrontAddress=%s',
                     $business_type ?: '(absent)',
                     $has_pending_edits ? 'true' : 'false',
                     $storefront_in_resp ? 'YES' : 'NO'
@@ -2940,7 +2940,7 @@ public static function update_location_address( $business_id, $location_name, $a
                     $business_id,
                     'success',
                     sprintf(
-                        'Auto-corrección segundo PATCH OK | businessType_ret=%s | hasPendingEdits=%s',
+                        'Auto-corrección CASO 1 segundo PATCH OK | businessType_ret=%s | hasPendingEdits=%s',
                         $business_type ?: 'n/a',
                         $has_pending_edits ? 'true' : 'false'
                     ),
@@ -2955,18 +2955,125 @@ public static function update_location_address( $business_id, $location_name, $a
         } else {
             $second_err = $second_result->get_error_message();
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB Address] update_location_address ── AUTO-CORRECT segundo PATCH FALLÓ: ' . $second_err );
+                error_log( '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 1 segundo PATCH FALLÓ: ' . $second_err );
             }
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
                 Lealez_GMB_Logger::log(
                     $business_id,
                     'error',
-                    'Auto-corrección segundo PATCH falló: ' . $second_err,
+                    'Auto-corrección CASO 1 segundo PATCH falló: ' . $second_err,
                     array( 'location' => $normalized_location )
                 );
             }
-            // No sobrescribir $result ni $desired_business_type con el error;
-            // devolvemos el resultado del primer PATCH y marcamos la corrección como fallida.
+            $desired_business_type = ''; // No se pudo aplicar
+        }
+    }
+
+    // ── AUTO-CORRECCIÓN SAB — CASO 2: OCULTAR ────────────────────────────────
+    // Si el caller NO incluyó serviceArea.businessType (porque el checkbox SAB estaba
+    // oculto/colapsado en la UI y form_is_sab llegó como '0') pero:
+    //   - La intención es OCULTAR la dirección (show_address_intent = false)
+    //   - La respuesta del PATCH revela que el negocio ES un SAB
+    //     (businessType = CUSTOMER_AND_BUSINESS_LOCATION)
+    //   - No enviamos businessType en el primer PATCH (desired_business_type = '')
+    //
+    // → Segundo PATCH con businessType=CUSTOMER_LOCATION_ONLY para aplicar el ocultado.
+    // Este es el bug principal: el PATCH de dirección llegó a GMB pero sin el cambio de
+    // businessType, por lo que Google mantuvo la dirección visible.
+    if (
+        ! $show_address_intent &&
+        in_array( $business_type, array( 'CUSTOMER_AND_BUSINESS_LOCATION', 'CUSTOMER_LOCATION_ONLY' ), true ) &&
+        '' === $desired_business_type // No lo incluimos en el primer PATCH
+    ) {
+        $desired_business_type = 'CUSTOMER_LOCATION_ONLY';
+        $second_body_hide = array(
+            'name'        => $normalized_location,
+            'serviceArea' => array( 'businessType' => $desired_business_type ),
+        );
+        // IMPORTANTE: solo actualizamos businessType, no storefrontAddress.
+        // Google requiere que la dirección siga existiendo en el recurso para SABs
+        // con tipo CUSTOMER_AND_BUSINESS_LOCATION convertidos a CUSTOMER_LOCATION_ONLY.
+        $second_mask_hide = 'serviceArea.businessType';
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[OY GMB Address] update_location_address ── AUTO-CORRECT (CASO 2 OCULTAR): SAB detectado en respuesta pero businessType no fue enviado. Segundo PATCH. mask=%s | businessType=%s',
+                $second_mask_hide,
+                $desired_business_type
+            ) );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Auto-corrección SAB (OCULTAR): segundo PATCH con businessType=' . $desired_business_type,
+                array(
+                    'location'   => $normalized_location,
+                    'updateMask' => $second_mask_hide,
+                    'reason'     => 'form_is_sab llegó como false pero GMB devolvió businessType de SAB; aplicando CUSTOMER_LOCATION_ONLY',
+                )
+            );
+        }
+
+        $second_result_hide = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$business_api_base,
+            'PATCH',
+            $second_body_hide,
+            false,
+            array( 'updateMask' => $second_mask_hide )
+        );
+
+        if ( ! is_wp_error( $second_result_hide ) ) {
+            $auto_corrected        = true;
+            $result                = $second_result_hide;
+            $has_pending_edits     = ! empty( $result['metadata']['hasPendingEdits'] );
+            $has_voice_of_merchant = ! empty( $result['metadata']['hasVoiceOfMerchant'] );
+            $business_type         = isset( $result['serviceArea']['businessType'] ) ? (string) $result['serviceArea']['businessType'] : $business_type;
+            $is_sab                = in_array( $business_type, array( 'CUSTOMER_LOCATION_ONLY', 'CUSTOMER_AND_BUSINESS_LOCATION' ), true );
+            $storefront_in_resp    = isset( $result['storefrontAddress'] );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( sprintf(
+                    '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 2 segundo PATCH OK: businessType=%s | hasPendingEdits=%s | storefrontAddress=%s',
+                    $business_type ?: '(absent)',
+                    $has_pending_edits ? 'true' : 'false',
+                    $storefront_in_resp ? 'YES' : 'NO'
+                ) );
+            }
+
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'success',
+                    sprintf(
+                        'Auto-corrección CASO 2 (OCULTAR) segundo PATCH OK | businessType_ret=%s | hasPendingEdits=%s',
+                        $business_type ?: 'n/a',
+                        $has_pending_edits ? 'true' : 'false'
+                    ),
+                    array(
+                        'location'          => $normalized_location,
+                        'businessType_sent' => $desired_business_type,
+                        'businessType_ret'  => $business_type,
+                        'hasPendingEdits'   => $has_pending_edits,
+                    )
+                );
+            }
+        } else {
+            $second_err_hide = $second_result_hide->get_error_message();
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 2 segundo PATCH FALLÓ: ' . $second_err_hide );
+            }
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'error',
+                    'Auto-corrección CASO 2 (OCULTAR) segundo PATCH falló: ' . $second_err_hide,
+                    array( 'location' => $normalized_location )
+                );
+            }
             $desired_business_type = ''; // No se pudo aplicar
         }
     }
