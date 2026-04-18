@@ -38,6 +38,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             // ── Guardado independiente del metabox de dirección ───────────────────────
             add_action( 'wp_ajax_oy_save_address_metabox', array( $this, 'ajax_save_address_metabox' ) );
 
+            // ── Autocomplete de Áreas de servicio (Places API New) ────────────────────
+            add_action( 'wp_ajax_oy_gmb_service_area_autocomplete', array( $this, 'ajax_service_area_autocomplete' ) );
+
             // ── Push de dirección hacia GMB (nueva arquitectura, Playbook v1) ─────────
             add_action( 'wp_ajax_oy_push_address_to_gmb',       array( $this, 'ajax_push_address_to_gmb' ) );
             add_action( 'wp_ajax_oy_check_address_push_status', array( $this, 'ajax_check_address_push_status' ) );
@@ -67,9 +70,255 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
         }
 
         /**
+         * Normaliza el payload de áreas de servicio para guardarlo y reutilizarlo.
+         *
+         * Salida:
+         * [
+         *   [
+         *     'placeName'   => 'Barranquilla, Atlántico, Colombia',
+         *     'placeId'     => 'ChIJ...',
+         *     'label'       => 'Barranquilla, Atlántico, Colombia',
+         *     'description' => 'Barranquilla, Atlántico, Colombia',
+         *   ],
+         * ]
+         *
+         * @param mixed $raw_value JSON string o array.
+         * @return array
+         */
+        private function normalize_service_area_places_payload( $raw_value ) {
+            if ( is_string( $raw_value ) ) {
+                $decoded = json_decode( trim( $raw_value ), true );
+                $raw_value = is_array( $decoded ) ? $decoded : array();
+            }
+
+            if ( ! is_array( $raw_value ) ) {
+                return array();
+            }
+
+            $normalized = array();
+            $seen       = array();
+
+            foreach ( $raw_value as $item ) {
+                $place_id    = '';
+                $place_name  = '';
+                $label       = '';
+                $description = '';
+
+                if ( is_string( $item ) ) {
+                    $label = trim( sanitize_text_field( $item ) );
+                } elseif ( is_array( $item ) ) {
+                    if ( ! empty( $item['placeId'] ) && is_string( $item['placeId'] ) ) {
+                        $place_id = trim( sanitize_text_field( $item['placeId'] ) );
+                    } elseif ( ! empty( $item['id'] ) && is_string( $item['id'] ) ) {
+                        $place_id = trim( sanitize_text_field( $item['id'] ) );
+                    } elseif ( ! empty( $item['place'] ) && is_string( $item['place'] ) ) {
+                        $place_resource = trim( sanitize_text_field( $item['place'] ) );
+                        if ( 0 === strpos( $place_resource, 'places/' ) ) {
+                            $place_id = trim( substr( $place_resource, strlen( 'places/' ) ) );
+                        } else {
+                            $place_id = $place_resource;
+                        }
+                    }
+
+                    $candidate_texts = array(
+                        $item['placeName']   ?? '',
+                        $item['label']       ?? '',
+                        $item['description'] ?? '',
+                        $item['name']        ?? '',
+                        $item['title']       ?? '',
+                        $item['displayName'] ?? '',
+                        $item['text']        ?? '',
+                    );
+
+                    foreach ( $candidate_texts as $candidate_text ) {
+                        if ( is_string( $candidate_text ) && '' !== trim( $candidate_text ) ) {
+                            $label = trim( sanitize_text_field( $candidate_text ) );
+                            break;
+                        }
+                    }
+
+                    if ( isset( $item['description'] ) && is_string( $item['description'] ) ) {
+                        $description = trim( sanitize_text_field( $item['description'] ) );
+                    }
+
+                    if ( isset( $item['label'] ) && is_string( $item['label'] ) ) {
+                        $label = trim( sanitize_text_field( $item['label'] ) );
+                    }
+                }
+
+                if ( '' === $label ) {
+                    continue;
+                }
+
+                if ( '' === $description ) {
+                    $description = $label;
+                }
+
+                $place_name = $label;
+
+                $dedupe_key = '' !== $place_id ? 'id:' . strtolower( $place_id ) : 'label:' . strtolower( $label );
+                if ( isset( $seen[ $dedupe_key ] ) ) {
+                    continue;
+                }
+                $seen[ $dedupe_key ] = true;
+
+                $normalized[] = array(
+                    'placeName'   => $place_name,
+                    'placeId'     => $place_id,
+                    'label'       => $label,
+                    'description' => $description,
+                );
+
+                if ( count( $normalized ) >= 20 ) {
+                    break;
+                }
+            }
+
+            return array_values( $normalized );
+        }
+
+        /**
+         * Devuelve el texto legible de un item estructurado de área de servicio.
+         *
+         * @param array $place
+         * @return string
+         */
+        private function service_area_place_to_label( array $place ) {
+            $candidates = array(
+                $place['label']       ?? '',
+                $place['description'] ?? '',
+                $place['placeName']   ?? '',
+            );
+
+            foreach ( $candidates as $candidate ) {
+                if ( is_string( $candidate ) && '' !== trim( $candidate ) ) {
+                    return trim( sanitize_text_field( $candidate ) );
+                }
+            }
+
+            return '';
+        }
+
+        /**
+         * Extrae áreas de servicio estructuradas desde RAW de GMB.
+         *
+         * @param int $post_id
+         * @return array
+         */
+        private function extract_service_area_places_from_gmb_raw( $post_id ) {
+            $post_id = absint( $post_id );
+            if ( ! $post_id ) {
+                return array();
+            }
+
+            $service_area_raw = get_post_meta( $post_id, 'gmb_service_area_raw', true );
+
+            if ( empty( $service_area_raw ) || ! is_array( $service_area_raw ) ) {
+                $loc_raw = get_post_meta( $post_id, 'gmb_location_raw', true );
+                if ( is_array( $loc_raw ) && isset( $loc_raw['serviceArea'] ) && is_array( $loc_raw['serviceArea'] ) ) {
+                    $service_area_raw = $loc_raw['serviceArea'];
+                }
+            }
+
+            if ( empty( $service_area_raw ) || ! is_array( $service_area_raw ) ) {
+                return array();
+            }
+
+            $places = array();
+
+            if ( isset( $service_area_raw['places']['placeInfos'] ) && is_array( $service_area_raw['places']['placeInfos'] ) ) {
+                $places = $service_area_raw['places']['placeInfos'];
+            } elseif ( isset( $service_area_raw['places'] ) && is_array( $service_area_raw['places'] ) ) {
+                $places = $service_area_raw['places'];
+            } elseif ( isset( $service_area_raw['placeInfos'] ) && is_array( $service_area_raw['placeInfos'] ) ) {
+                $places = $service_area_raw['placeInfos'];
+            }
+
+            $normalized = array();
+
+            foreach ( $places as $place ) {
+                if ( is_string( $place ) ) {
+                    $normalized[] = $place;
+                    continue;
+                }
+
+                if ( ! is_array( $place ) ) {
+                    continue;
+                }
+
+                $place_name  = '';
+                $place_id    = '';
+                $description = '';
+
+                $candidate_names = array(
+                    $place['placeName']   ?? '',
+                    $place['displayName'] ?? '',
+                    $place['title']       ?? '',
+                    $place['name']        ?? '',
+                    $place['label']       ?? '',
+                );
+
+                foreach ( $candidate_names as $candidate_name ) {
+                    if ( is_string( $candidate_name ) && '' !== trim( $candidate_name ) ) {
+                        $place_name = trim( sanitize_text_field( $candidate_name ) );
+                        break;
+                    }
+                }
+
+                if ( isset( $place['placeId'] ) && is_string( $place['placeId'] ) ) {
+                    $place_id = trim( sanitize_text_field( $place['placeId'] ) );
+                } elseif ( isset( $place['id'] ) && is_string( $place['id'] ) ) {
+                    $place_id = trim( sanitize_text_field( $place['id'] ) );
+                } elseif ( isset( $place['place'] ) && is_string( $place['place'] ) ) {
+                    $place_resource = trim( sanitize_text_field( $place['place'] ) );
+                    $place_id = 0 === strpos( $place_resource, 'places/' )
+                        ? trim( substr( $place_resource, strlen( 'places/' ) ) )
+                        : $place_resource;
+                }
+
+                if ( isset( $place['address'] ) ) {
+                    if ( is_string( $place['address'] ) ) {
+                        $description = trim( sanitize_text_field( $place['address'] ) );
+                    } elseif ( is_array( $place['address'] ) ) {
+                        $parts = array();
+
+                        if ( ! empty( $place['address']['addressLines'] ) && is_array( $place['address']['addressLines'] ) ) {
+                            foreach ( $place['address']['addressLines'] as $line ) {
+                                if ( is_string( $line ) && '' !== trim( $line ) ) {
+                                    $parts[] = trim( sanitize_text_field( $line ) );
+                                }
+                            }
+                        }
+
+                        $locality = isset( $place['address']['locality'] ) ? trim( sanitize_text_field( (string) $place['address']['locality'] ) ) : '';
+                        $admin    = isset( $place['address']['administrativeArea'] ) ? trim( sanitize_text_field( (string) $place['address']['administrativeArea'] ) ) : '';
+                        $region   = isset( $place['address']['regionCode'] ) ? trim( sanitize_text_field( (string) $place['address']['regionCode'] ) ) : '';
+
+                        $tail = implode( ', ', array_filter( array( $locality, $admin, $region ) ) );
+                        if ( '' !== $tail ) {
+                            $parts[] = $tail;
+                        }
+
+                        $description = trim( implode( ' — ', array_filter( $parts ) ) );
+                    }
+                }
+
+                $normalized[] = array(
+                    'placeName'   => $place_name,
+                    'placeId'     => $place_id,
+                    'label'       => '' !== $description ? $description : $place_name,
+                    'description' => '' !== $description ? $description : $place_name,
+                );
+            }
+
+            return $this->normalize_service_area_places_payload( $normalized );
+        }
+
+        /**
          * ✅ Save meta box data (solo lo de Áreas de servicio)
          * - Recibe JSON desde hidden input location_service_areas_json
-         * - Guarda array limpio en meta location_service_areas
+         * - Guarda labels legibles en meta location_service_areas
+         * - Guarda payload estructurado en meta location_service_areas_places
          *
          * @param int     $post_id
          * @param WP_Post $post
@@ -95,34 +344,19 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 return;
             }
 
-            $raw = wp_unslash( $_POST['location_service_areas_json'] );
-            $raw = is_string( $raw ) ? trim( $raw ) : '';
+            $raw            = wp_unslash( $_POST['location_service_areas_json'] );
+            $service_places = $this->normalize_service_area_places_payload( $raw );
+            $service_labels = array();
 
-            $arr = json_decode( $raw, true );
-            if ( ! is_array( $arr ) ) {
-                $arr = array();
+            foreach ( $service_places as $service_place ) {
+                $label = $this->service_area_place_to_label( $service_place );
+                if ( '' !== $label ) {
+                    $service_labels[] = $label;
+                }
             }
 
-            $clean = array();
-            $seen  = array();
-
-            foreach ( $arr as $v ) {
-                if ( ! is_string( $v ) ) {
-                    continue;
-                }
-                $s = trim( sanitize_text_field( $v ) );
-                if ( '' === $s ) {
-                    continue;
-                }
-                $k = strtolower( $s );
-                if ( isset( $seen[ $k ] ) ) {
-                    continue;
-                }
-                $seen[ $k ] = true;
-                $clean[]    = $s;
-            }
-
-            update_post_meta( $post_id, 'location_service_areas', $clean );
+            update_post_meta( $post_id, 'location_service_areas_places', array_values( $service_places ) );
+            update_post_meta( $post_id, 'location_service_areas', array_values( $service_labels ) );
         }
 
         /**
@@ -139,52 +373,37 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 ? wp_unslash( $_POST['location_service_areas_json'] )
                 : '[]';
 
-            $service_areas = json_decode( is_string( $service_areas_json ) ? trim( $service_areas_json ) : '[]', true );
-            if ( ! is_array( $service_areas ) ) {
-                $service_areas = array();
-            }
+            $service_area_places = $this->normalize_service_area_places_payload( $service_areas_json );
+            $service_area_labels = array();
 
-            $clean_service_areas = array();
-            $seen_service_areas  = array();
-
-            foreach ( $service_areas as $area ) {
-                if ( ! is_string( $area ) ) {
-                    continue;
+            foreach ( $service_area_places as $service_area_place ) {
+                $label = $this->service_area_place_to_label( $service_area_place );
+                if ( '' !== $label ) {
+                    $service_area_labels[] = $label;
                 }
-
-                $area = trim( sanitize_text_field( $area ) );
-                if ( '' === $area ) {
-                    continue;
-                }
-
-                $area_key = strtolower( $area );
-                if ( isset( $seen_service_areas[ $area_key ] ) ) {
-                    continue;
-                }
-
-                $seen_service_areas[ $area_key ] = true;
-                $clean_service_areas[]           = $area;
             }
 
             return array(
-                'service_area_only'         => ! empty( $_POST['service_area_only'] ) ? '1' : '0',
-                'show_address_to_customers' => ! empty( $_POST['show_address_to_customers'] ) ? '1' : '0',
-                'location_address_line1'    => isset( $_POST['location_address_line1'] ) ? sanitize_text_field( wp_unslash( $_POST['location_address_line1'] ) ) : '',
-                'location_address_line2'    => isset( $_POST['location_address_line2'] ) ? sanitize_text_field( wp_unslash( $_POST['location_address_line2'] ) ) : '',
-                'location_neighborhood'     => isset( $_POST['location_neighborhood'] ) ? sanitize_text_field( wp_unslash( $_POST['location_neighborhood'] ) ) : '',
-                'location_city'             => isset( $_POST['location_city'] ) ? sanitize_text_field( wp_unslash( $_POST['location_city'] ) ) : '',
-                'location_state'            => isset( $_POST['location_state'] ) ? sanitize_text_field( wp_unslash( $_POST['location_state'] ) ) : '',
-                'location_country'          => $country,
-                'location_postal_code'      => isset( $_POST['location_postal_code'] ) ? sanitize_text_field( wp_unslash( $_POST['location_postal_code'] ) ) : '',
-                'location_latitude'         => isset( $_POST['location_latitude'] ) ? sanitize_text_field( wp_unslash( $_POST['location_latitude'] ) ) : '',
-                'location_longitude'        => isset( $_POST['location_longitude'] ) ? sanitize_text_field( wp_unslash( $_POST['location_longitude'] ) ) : '',
-                'location_map_url'          => isset( $_POST['location_map_url'] ) ? esc_url_raw( wp_unslash( $_POST['location_map_url'] ) ) : '',
-                'location_service_areas'    => $clean_service_areas,
+                'service_area_only'           => ! empty( $_POST['service_area_only'] ) ? '1' : '0',
+                'show_address_to_customers'   => ! empty( $_POST['show_address_to_customers'] ) ? '1' : '0',
+                'location_address_line1'      => isset( $_POST['location_address_line1'] ) ? sanitize_text_field( wp_unslash( $_POST['location_address_line1'] ) ) : '',
+                'location_address_line2'      => isset( $_POST['location_address_line2'] ) ? sanitize_text_field( wp_unslash( $_POST['location_address_line2'] ) ) : '',
+                'location_neighborhood'       => isset( $_POST['location_neighborhood'] ) ? sanitize_text_field( wp_unslash( $_POST['location_neighborhood'] ) ) : '',
+                'location_city'               => isset( $_POST['location_city'] ) ? sanitize_text_field( wp_unslash( $_POST['location_city'] ) ) : '',
+                'location_state'              => isset( $_POST['location_state'] ) ? sanitize_text_field( wp_unslash( $_POST['location_state'] ) ) : '',
+                'location_country'            => $country,
+                'location_postal_code'        => isset( $_POST['location_postal_code'] ) ? sanitize_text_field( wp_unslash( $_POST['location_postal_code'] ) ) : '',
+                'location_latitude'           => isset( $_POST['location_latitude'] ) ? sanitize_text_field( wp_unslash( $_POST['location_latitude'] ) ) : '',
+                'location_longitude'          => isset( $_POST['location_longitude'] ) ? sanitize_text_field( wp_unslash( $_POST['location_longitude'] ) ) : '',
+                'location_map_url'            => isset( $_POST['location_map_url'] ) ? esc_url_raw( wp_unslash( $_POST['location_map_url'] ) ) : '',
+                'location_service_areas'      => array_values( $service_area_labels ),
+                'location_service_area_places' => array_values( $service_area_places ),
             );
         }
 
         /**
          * Persiste el payload del metabox de dirección directamente en post meta.
+
          *
          * @param int    $post_id
          * @param array  $payload
@@ -234,6 +453,14 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 'location_service_areas',
                 isset( $payload['location_service_areas'] ) && is_array( $payload['location_service_areas'] )
                     ? array_values( $payload['location_service_areas'] )
+                    : array()
+            );
+
+            update_post_meta(
+                $post_id,
+                'location_service_areas_places',
+                isset( $payload['location_service_area_places'] ) && is_array( $payload['location_service_area_places'] )
+                    ? array_values( $payload['location_service_area_places'] )
                     : array()
             );
 
@@ -481,6 +708,26 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         return JSON.stringify(a || {}) === JSON.stringify(b || {});
                     }
 
+                    function formatServiceAreaList(list) {
+                        if (!Array.isArray(list)) {
+                            return '';
+                        }
+
+                        return list.map(function(item) {
+                            if (typeof item === 'string') {
+                                return item;
+                            }
+
+                            if (!item || typeof item !== 'object') {
+                                return '';
+                            }
+
+                            return item.label || item.description || item.placeName || '';
+                        }).filter(function(item) {
+                            return !!item;
+                        }).join(', ');
+                    }
+
                     function buildDiff(before, after) {
                         var rows = [];
 
@@ -495,8 +742,8 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 beforeText = beforeVal === '1' ? 'Sí' : 'No';
                                 afterText  = afterVal === '1' ? 'Sí' : 'No';
                             } else if (field.type === 'json') {
-                                beforeText = Array.isArray(beforeVal) ? beforeVal.join(', ') : '';
-                                afterText  = Array.isArray(afterVal) ? afterVal.join(', ') : '';
+                                beforeText = formatServiceAreaList(beforeVal);
+                                afterText  = formatServiceAreaList(afterVal);
                             } else {
                                 beforeText = (beforeVal || '').toString();
                                 afterText  = (afterVal || '').toString();
@@ -903,125 +1150,149 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
         }
 
         /**
-         * ✅ Extrae "Áreas de servicio" desde RAW de GMB y devuelve array de strings "humanos"
-         *
-         * Fuentes:
-         * - gmb_service_area_raw (meta)
-         * - gmb_location_raw['serviceArea'] (meta)
-         *
-         * Estructuras que tolera (defensivo):
-         * - serviceArea.places[] como strings
-         * - serviceArea.places[] como objetos con: name / placeName / placeId / displayName / title / address
+         * ✅ Extrae "Áreas de servicio" desde RAW de GMB y devuelve array de strings "humanos".
          *
          * @param int $post_id
          * @return array
          */
         private function extract_service_areas_from_gmb_raw( $post_id ) {
-            $post_id = absint( $post_id );
-            if ( ! $post_id ) {
-                return array();
-            }
+            $service_area_places = $this->extract_service_area_places_from_gmb_raw( $post_id );
+            $labels              = array();
 
-            $service_area_raw = get_post_meta( $post_id, 'gmb_service_area_raw', true );
-
-            // Fallback: buscar dentro del Location RAW completo
-            if ( empty( $service_area_raw ) || ! is_array( $service_area_raw ) ) {
-                $loc_raw = get_post_meta( $post_id, 'gmb_location_raw', true );
-                if ( is_array( $loc_raw ) && isset( $loc_raw['serviceArea'] ) && is_array( $loc_raw['serviceArea'] ) ) {
-                    $service_area_raw = $loc_raw['serviceArea'];
+            foreach ( $service_area_places as $service_area_place ) {
+                $label = $this->service_area_place_to_label( $service_area_place );
+                if ( '' !== $label ) {
+                    $labels[] = $label;
                 }
             }
 
-            if ( empty( $service_area_raw ) || ! is_array( $service_area_raw ) ) {
-                return array();
+            return array_values( $labels );
+        }
+
+        /**
+         * AJAX: Autocomplete de áreas de servicio con Places API (New).
+         *
+         * Usa el endpoint público oficial `places:autocomplete`, restringiendo
+         * resultados a `(regions)` para que Google devuelva ciudades, barrios,
+         * códigos postales y divisiones administrativas compatibles con SAB.
+         *
+         * @return void
+         */
+        public function ajax_service_area_autocomplete() {
+            $nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+            if ( ! wp_verify_nonce( $nonce, 'oy_location_gmb_ajax' ) ) {
+                wp_send_json_error( array(
+                    'message' => __( 'Nonce inválido para autocomplete.', 'lealez' ),
+                ) );
             }
 
-            $places = array();
-
-            // Google suele usar serviceArea.places[]
-            if ( isset( $service_area_raw['places'] ) && is_array( $service_area_raw['places'] ) ) {
-                $places = $service_area_raw['places'];
+            if ( ! current_user_can( 'edit_posts' ) ) {
+                wp_send_json_error( array(
+                    'message' => __( 'No tienes permisos para usar el autocomplete.', 'lealez' ),
+                ) );
             }
 
-            if ( empty( $places ) ) {
-                return array();
+            $query   = isset( $_POST['q'] ) ? sanitize_text_field( wp_unslash( $_POST['q'] ) ) : '';
+            $country = isset( $_POST['country'] ) ? strtoupper( substr( sanitize_text_field( wp_unslash( $_POST['country'] ) ), 0, 2 ) ) : '';
+            $query   = trim( $query );
+
+            if ( mb_strlen( $query ) < 2 ) {
+                wp_send_json_success( array( 'suggestions' => array() ) );
             }
 
-            $out  = array();
-            $seen = array();
+            $places_api_key = trim( (string) get_option( 'lealez_places_api_key', '' ) );
+            if ( '' === $places_api_key ) {
+                wp_send_json_error( array(
+                    'message' => __( 'Falta configurar la API Key de Places API (New) en Lealez → GMB Settings.', 'lealez' ),
+                ) );
+            }
 
-            foreach ( $places as $p ) {
+            $request_body = array(
+                'input'                   => $query,
+                'includedPrimaryTypes'    => array( '(regions)' ),
+                'includeQueryPredictions' => false,
+                'languageCode'            => ( 0 === strpos( strtolower( get_locale() ), 'es' ) ) ? 'es' : 'en',
+            );
 
-                $label = '';
+            if ( '' !== $country ) {
+                $request_body['includedRegionCodes'] = array( strtolower( $country ) );
+                $request_body['regionCode']          = strtolower( $country );
+            }
 
-                // Caso 1: string directo
-                if ( is_string( $p ) ) {
-                    $label = trim( $p );
-                }
+            $response = wp_remote_post(
+                'https://places.googleapis.com/v1/places:autocomplete',
+                array(
+                    'timeout' => 20,
+                    'headers' => array(
+                        'Content-Type'      => 'application/json',
+                        'X-Goog-Api-Key'    => $places_api_key,
+                        'X-Goog-FieldMask'  => 'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text',
+                    ),
+                    'body' => wp_json_encode( $request_body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+                )
+            );
 
-                // Caso 2: objeto/array
-                if ( '' === $label && is_array( $p ) ) {
+            if ( is_wp_error( $response ) ) {
+                wp_send_json_error( array(
+                    'message' => sprintf( __( 'Error consultando Places API: %s', 'lealez' ), $response->get_error_message() ),
+                ) );
+            }
 
-                    // Prioridades "humanas"
-                    $candidates = array(
-                        $p['displayName'] ?? '',
-                        $p['title'] ?? '',
-                        $p['name'] ?? '',
-                        $p['placeName'] ?? '',
-                        $p['placeId'] ?? '',
+            $status_code = wp_remote_retrieve_response_code( $response );
+            $raw_body    = wp_remote_retrieve_body( $response );
+            $body        = json_decode( $raw_body, true );
+
+            if ( $status_code < 200 || $status_code >= 300 ) {
+                $error_message = isset( $body['error']['message'] ) ? (string) $body['error']['message'] : 'HTTP ' . $status_code;
+                wp_send_json_error( array(
+                    'message' => sprintf( __( 'Places API respondió con error: %s', 'lealez' ), sanitize_text_field( $error_message ) ),
+                ) );
+            }
+
+            $suggestions = array();
+            $seen        = array();
+
+            if ( ! empty( $body['suggestions'] ) && is_array( $body['suggestions'] ) ) {
+                foreach ( $body['suggestions'] as $suggestion ) {
+                    if ( empty( $suggestion['placePrediction'] ) || ! is_array( $suggestion['placePrediction'] ) ) {
+                        continue;
+                    }
+
+                    $prediction    = $suggestion['placePrediction'];
+                    $place_id      = isset( $prediction['placeId'] ) ? trim( sanitize_text_field( (string) $prediction['placeId'] ) ) : '';
+                    $main_text     = isset( $prediction['structuredFormat']['mainText']['text'] ) ? trim( sanitize_text_field( (string) $prediction['structuredFormat']['mainText']['text'] ) ) : '';
+                    $secondary     = isset( $prediction['structuredFormat']['secondaryText']['text'] ) ? trim( sanitize_text_field( (string) $prediction['structuredFormat']['secondaryText']['text'] ) ) : '';
+                    $full_text     = isset( $prediction['text']['text'] ) ? trim( sanitize_text_field( (string) $prediction['text']['text'] ) ) : '';
+                    $description   = '' !== $full_text ? $full_text : trim( implode( ', ', array_filter( array( $main_text, $secondary ) ) ) );
+                    $place_name    = '' !== trim( implode( ', ', array_filter( array( $main_text, $secondary ) ) ) ) ? trim( implode( ', ', array_filter( array( $main_text, $secondary ) ) ) ) : $description;
+                    $label         = '' !== $description ? $description : $place_name;
+
+                    if ( '' === $label ) {
+                        continue;
+                    }
+
+                    $dedupe_key = '' !== $place_id ? 'id:' . strtolower( $place_id ) : 'label:' . strtolower( $label );
+                    if ( isset( $seen[ $dedupe_key ] ) ) {
+                        continue;
+                    }
+                    $seen[ $dedupe_key ] = true;
+
+                    $suggestions[] = array(
+                        'placeName'   => $place_name,
+                        'placeId'     => $place_id,
+                        'label'       => $label,
+                        'description' => $description,
                     );
 
-                    foreach ( $candidates as $cand ) {
-                        if ( is_string( $cand ) && trim( $cand ) !== '' ) {
-                            $label = trim( $cand );
-                            break;
-                        }
-                    }
-
-                    // Si hay address formateado, lo preferimos como fallback "humano"
-                    if ( '' === $label && isset( $p['address'] ) ) {
-                        if ( is_string( $p['address'] ) ) {
-                            $label = trim( $p['address'] );
-                        } elseif ( is_array( $p['address'] ) ) {
-                            // addressLines + locality + administrativeArea + regionCode
-                            $lines = array();
-                            if ( ! empty( $p['address']['addressLines'] ) && is_array( $p['address']['addressLines'] ) ) {
-                                foreach ( $p['address']['addressLines'] as $ln ) {
-                                    if ( is_string( $ln ) && trim( $ln ) !== '' ) {
-                                        $lines[] = trim( $ln );
-                                    }
-                                }
-                            }
-                            $city  = isset( $p['address']['locality'] ) ? trim( (string) $p['address']['locality'] ) : '';
-                            $state = isset( $p['address']['administrativeArea'] ) ? trim( (string) $p['address']['administrativeArea'] ) : '';
-                            $cty   = trim( implode( ', ', array_filter( array( $city, $state ) ) ) );
-                            if ( $cty ) {
-                                $lines[] = $cty;
-                            }
-                            $label = trim( implode( ' — ', array_filter( $lines ) ) );
-                        }
+                    if ( count( $suggestions ) >= 10 ) {
+                        break;
                     }
                 }
-
-                $label = is_string( $label ) ? trim( $label ) : '';
-
-                // Limpieza final
-                if ( '' === $label ) {
-                    continue;
-                }
-
-                $label = sanitize_text_field( $label );
-
-                $k = strtolower( $label );
-                if ( isset( $seen[ $k ] ) ) {
-                    continue;
-                }
-
-                $seen[ $k ] = true;
-                $out[]      = $label;
             }
 
-            return array_values( $out );
+            wp_send_json_success( array(
+                'suggestions' => $suggestions,
+            ) );
         }
 
         // =====================================================================
@@ -1080,6 +1351,18 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 ? true
                 : ( '1' === (string) get_post_meta( $post_id, 'show_address_to_customers', true ) );
 
+            $service_area_places = $this->normalize_service_area_places_payload(
+                get_post_meta( $post_id, 'location_service_areas_places', true )
+            );
+
+            // Compatibilidad hacia atrás: si aún no existe meta estructurado, derivarlo del meta legacy.
+            if ( empty( $service_area_places ) ) {
+                $legacy_service_areas = get_post_meta( $post_id, 'location_service_areas', true );
+                $service_area_places  = $this->normalize_service_area_places_payload(
+                    is_array( $legacy_service_areas ) ? $legacy_service_areas : array()
+                );
+            }
+
             // País obligatorio salvo SAB puro (sin dirección)
             if ( '' === $country && ! ( $is_sab && ! $show_address ) ) {
                 wp_send_json_error( array( 'message' => __( 'El campo "País (ISO 2)" es obligatorio. Guarda el post primero con el código de país (ej: CO, MX, US).', 'lealez' ) ) );
@@ -1129,7 +1412,11 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 $business_id,
                 $location_name,
                 $address_data,
-                array( 'is_sab' => $is_sab, 'show_address' => $show_address )
+                array(
+                    'is_sab'             => $is_sab,
+                    'show_address'       => $show_address,
+                    'service_area_places' => $service_area_places,
+                )
             );
 
             if ( is_wp_error( $result ) ) {
@@ -1170,7 +1457,12 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 'show_address'    => $result['show_address'],
                 'submitted'       => array(
                     'storefrontAddress' => $address_data,
-                    'serviceArea'       => array( 'businessType' => $result['business_type'] ),
+                    'serviceArea'       => array(
+                        'businessType' => $result['business_type'],
+                        'places'       => array(
+                            'placeInfos' => array_values( $service_area_places ),
+                        ),
+                    ),
                 ),
                 'snapshot_before' => array(
                     'storefrontAddress' => $snapshot['storefrontAddress'] ?? null,
@@ -1445,41 +1737,88 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 return 'pending_review';
             }
 
-            $is_sab       = ! empty( $job['is_sab'] );
-            $show_address = ! empty( $job['show_address'] );
+            $extract_place_ids = static function( $service_area_payload ) {
+                $out = array();
 
-            // ── SAB puro (CUSTOMER_LOCATION_ONLY): comparar businessType ──────────
+                if ( ! is_array( $service_area_payload ) ) {
+                    return $out;
+                }
+
+                $place_infos = array();
+
+                if ( isset( $service_area_payload['places']['placeInfos'] ) && is_array( $service_area_payload['places']['placeInfos'] ) ) {
+                    $place_infos = $service_area_payload['places']['placeInfos'];
+                } elseif ( isset( $service_area_payload['places'] ) && is_array( $service_area_payload['places'] ) ) {
+                    $place_infos = $service_area_payload['places'];
+                } elseif ( isset( $service_area_payload['placeInfos'] ) && is_array( $service_area_payload['placeInfos'] ) ) {
+                    $place_infos = $service_area_payload['placeInfos'];
+                }
+
+                foreach ( $place_infos as $place_info ) {
+                    if ( ! is_array( $place_info ) ) {
+                        continue;
+                    }
+
+                    $place_id = isset( $place_info['placeId'] ) ? trim( (string) $place_info['placeId'] ) : '';
+                    if ( '' !== $place_id ) {
+                        $out[] = strtolower( $place_id );
+                    }
+                }
+
+                $out = array_values( array_unique( $out ) );
+                sort( $out );
+
+                return $out;
+            };
+
+            $is_sab              = ! empty( $job['is_sab'] );
+            $show_address        = ! empty( $job['show_address'] );
+            $submitted_place_ids = $extract_place_ids( $job['submitted']['serviceArea'] ?? array() );
+            $before_place_ids    = $extract_place_ids( $job['snapshot_before']['serviceArea'] ?? array() );
+            $current_place_ids   = $extract_place_ids( $current['serviceArea'] ?? array() );
+
+            // ── SAB puro (CUSTOMER_LOCATION_ONLY): comparar businessType + placeIds ───
             if ( $is_sab && ! $show_address ) {
                 $submitted_bt = $job['submitted']['serviceArea']['businessType'] ?? 'CUSTOMER_LOCATION_ONLY';
                 $before_bt    = $job['snapshot_before']['serviceArea']['businessType'] ?? '';
                 $current_bt   = $current['serviceArea']['businessType'] ?? '';
 
-                if ( strtolower( $current_bt ) === strtolower( $submitted_bt ) ) {
+                $places_match_submitted = empty( $submitted_place_ids ) || $current_place_ids === $submitted_place_ids;
+                $places_match_before    = ! empty( $before_place_ids ) && $current_place_ids === $before_place_ids;
+
+                if ( strtolower( $current_bt ) === strtolower( $submitted_bt ) && $places_match_submitted ) {
                     return 'applied';
                 }
-                if ( '' === $current_bt || strtolower( $current_bt ) === strtolower( $before_bt ) ) {
+                if ( '' === $current_bt || ( strtolower( $current_bt ) === strtolower( $before_bt ) && ( empty( $submitted_place_ids ) || $places_match_before ) ) ) {
                     return 'rejected';
                 }
                 return 'google_override';
             }
 
-            // ── Con dirección: comparar locality (city) ───────────────────────────
+            // ── Con dirección: comparar locality + línea 1 + serviceArea.places ───────
             $submitted_locality = strtolower( trim( (string) ( $job['submitted']['storefrontAddress']['locality'] ?? '' ) ) );
             $before_locality    = strtolower( trim( (string) ( $job['snapshot_before']['storefrontAddress']['locality'] ?? '' ) ) );
             $current_locality   = strtolower( trim( (string) ( $current['storefrontAddress']['locality'] ?? '' ) ) );
 
+            $submitted_line = strtolower( trim( (string) ( $job['submitted']['storefrontAddress']['addressLines'][0] ?? '' ) ) );
+            $before_line    = strtolower( trim( (string) ( $job['snapshot_before']['storefrontAddress']['addressLines'][0] ?? '' ) ) );
+            $current_line   = strtolower( trim( (string) ( $current['storefrontAddress']['addressLines'][0] ?? '' ) ) );
+
+            $places_match_submitted = empty( $submitted_place_ids ) || $current_place_ids === $submitted_place_ids;
+            $places_match_before    = ! empty( $before_place_ids ) && $current_place_ids === $before_place_ids;
+
             if ( '' !== $submitted_locality && $current_locality === $submitted_locality ) {
-                // Validación adicional: verificar primera línea de dirección si está disponible
-                $submitted_line = strtolower( trim( (string) ( $job['submitted']['storefrontAddress']['addressLines'][0] ?? '' ) ) );
-                $current_line   = strtolower( trim( (string) ( $current['storefrontAddress']['addressLines'][0] ?? '' ) ) );
-                // Si la línea de dirección también coincide (o no hay línea para comparar), es aplicado
-                if ( '' === $submitted_line || $current_line === $submitted_line ) {
+                $line_matches = ( '' === $submitted_line || $current_line === $submitted_line );
+                if ( $line_matches && $places_match_submitted ) {
                     return 'applied';
                 }
             }
 
             if ( '' !== $before_locality && $current_locality === $before_locality ) {
-                return 'rejected';
+                $line_matches_before = ( '' === $before_line || $current_line === $before_line );
+                if ( $line_matches_before && ( empty( $submitted_place_ids ) || $places_match_before ) ) {
+                    return 'rejected';
+                }
             }
 
             if ( '' === $current_locality ) {
@@ -1492,6 +1831,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
         /**
          * Renderiza el panel HTML del estado del último push de dirección.
+
          *
          * Muestra el estado actual del job con iconos y mensajes claros.
          * Es retornado como HTML en las respuestas AJAX para reemplazar el panel en la UI.
@@ -1688,23 +2028,48 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $service_area_only    = get_post_meta( $post->ID, 'service_area_only', true );
             $show_address         = get_post_meta( $post->ID, 'show_address_to_customers', true );
 
-            // ✅ Áreas de servicio (guardado como array)
+            // ✅ Áreas de servicio (labels legibles + payload estructurado)
             $service_areas = get_post_meta( $post->ID, 'location_service_areas', true );
             if ( ! is_array( $service_areas ) ) {
                 $service_areas = array();
             }
 
+            $service_area_places = $this->normalize_service_area_places_payload(
+                get_post_meta( $post->ID, 'location_service_areas_places', true )
+            );
+
             /**
-             * ✅ PULL AUTOMÁTICO DESDE GMB (sin predictivo)
-             * Si el post tiene RAW de GMB con serviceArea y el meta humano está vacío,
-             * lo calculamos y lo guardamos para que la UI muestre chips.
+             * ✅ Compatibilidad hacia atrás:
+             * Si aún existe solo el meta legacy de strings, lo convertimos a payload estructurado.
              */
-            if ( empty( $service_areas ) ) {
-                $derived = $this->extract_service_areas_from_gmb_raw( $post->ID );
-                if ( ! empty( $derived ) ) {
-                    $service_areas = $derived;
-                    update_post_meta( $post->ID, 'location_service_areas', $service_areas );
+            if ( empty( $service_area_places ) && ! empty( $service_areas ) ) {
+                $service_area_places = $this->normalize_service_area_places_payload( $service_areas );
+                if ( ! empty( $service_area_places ) ) {
+                    update_post_meta( $post->ID, 'location_service_areas_places', $service_area_places );
                 }
+            }
+
+            /**
+             * ✅ PULL AUTOMÁTICO DESDE GMB:
+             * Si no hay payload estructurado local pero sí existe RAW de GMB con serviceArea,
+             * lo calculamos y lo guardamos para que la UI muestre chips + placeIds.
+             */
+            if ( empty( $service_area_places ) ) {
+                $derived_places = $this->extract_service_area_places_from_gmb_raw( $post->ID );
+                if ( ! empty( $derived_places ) ) {
+                    $service_area_places = $derived_places;
+                    update_post_meta( $post->ID, 'location_service_areas_places', $service_area_places );
+                }
+            }
+
+            if ( empty( $service_areas ) && ! empty( $service_area_places ) ) {
+                foreach ( $service_area_places as $service_area_place ) {
+                    $label = $this->service_area_place_to_label( $service_area_place );
+                    if ( '' !== $label ) {
+                        $service_areas[] = $label;
+                    }
+                }
+                update_post_meta( $post->ID, 'location_service_areas', $service_areas );
             }
 
             // Default: show address to customers unless explicitly disabled
@@ -1752,7 +2117,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $has_coords = $has_embed;
 
             // Nonce para AJAX del autocomplete (mismo action del CPT)
-            $ajax_nonce = wp_create_nonce( 'oy_location_gmb_ajax' );
+            $ajax_nonce                    = wp_create_nonce( 'oy_location_gmb_ajax' );
+            $places_api_key                = trim( (string) get_option( 'lealez_places_api_key', '' ) );
+            $service_area_autocomplete_ok  = '' !== $places_api_key;
 
             // ── Variables para el botón de sync de dirección ──────────────────────────
             $addr_business_id   = (int) get_post_meta( $post->ID, 'parent_business_id', true );
@@ -1860,8 +2227,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     <input type="text"
                            id="oy-service-area-search"
                            class="large-text"
-                           placeholder="<?php esc_attr_e( 'Busca áreas (ej: Barranquilla, Atlántico, Colombia)', 'lealez' ); ?>"
-                           autocomplete="off">
+                           placeholder="<?php echo esc_attr( $service_area_autocomplete_ok ? __( 'Busca áreas (ej: Barranquilla, Atlántico, Colombia)', 'lealez' ) : __( 'Autocomplete pendiente de configurar Places API (New)', 'lealez' ) ); ?>"
+                           autocomplete="off"
+                           <?php echo $service_area_autocomplete_ok ? '' : 'disabled'; ?>>
 
                     <div id="oy-service-area-suggestions"
                          style="display:none; position:absolute; top:100%; left:0; right:0; z-index:9999; background:#fff; border:1px solid #dadce0; border-top:none; max-height:220px; overflow:auto;">
@@ -1875,11 +2243,21 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 <input type="hidden"
                        id="location_service_areas_json"
                        name="location_service_areas_json"
-                       value="<?php echo esc_attr( wp_json_encode( array_values( $service_areas ) ) ); ?>">
+                       value="<?php echo esc_attr( wp_json_encode( array_values( $service_area_places ) ) ); ?>">
 
                 <p class="description" style="margin-top:10px;">
-                    <?php _e( 'Importado desde GMB cuando exista. Guardado en meta: <code>location_service_areas</code>.', 'lealez' ); ?>
+                    <?php _e( 'Selecciona la sugerencia predictiva de Google; no escribas texto libre. Máximo 20 áreas. Se guardan los labels legibles en <code>location_service_areas</code> y el payload estructurado en <code>location_service_areas_places</code>.', 'lealez' ); ?>
                 </p>
+
+                <?php if ( $service_area_autocomplete_ok ) : ?>
+                    <p class="description" style="margin-top:4px;">
+                        <?php _e( 'Autocomplete activo con Places API (New), filtrado como <code>(regions)</code> para capturar ciudades, barrios, zonas y divisiones administrativas como las maneja Google.', 'lealez' ); ?>
+                    </p>
+                <?php else : ?>
+                    <p class="description" style="margin-top:4px; color:#b45309;">
+                        <?php _e( 'Para activar el predictivo debes habilitar Places API (New) y guardar la API Key en Lealez → GMB Settings.', 'lealez' ); ?>
+                    </p>
+                <?php endif; ?>
             </div>
 
             <?php /* ── Layout de dos columnas: Campos | Mapa ── */ ?>
@@ -2164,15 +2542,84 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         try { return JSON.parse(v); } catch(e){ return fallback; }
                     }
 
+                    function normalizeAreaItem(item){
+                        if (typeof item === 'string') {
+                            var text = item.trim();
+                            if (!text) {
+                                return null;
+                            }
+
+                            return {
+                                placeName: text,
+                                placeId: '',
+                                label: text,
+                                description: text
+                            };
+                        }
+
+                        if (!item || typeof item !== 'object') {
+                            return null;
+                        }
+
+                        var placeId = '';
+                        if (item.placeId) {
+                            placeId = String(item.placeId).trim();
+                        } else if (item.id) {
+                            placeId = String(item.id).trim();
+                        } else if (item.place) {
+                            var placeResource = String(item.place).trim();
+                            placeId = placeResource.indexOf('places/') === 0 ? placeResource.replace(/^places\//, '') : placeResource;
+                        }
+
+                        var label = '';
+                        [
+                            item.label,
+                            item.description,
+                            item.placeName,
+                            item.name,
+                            item.title,
+                            item.displayName,
+                            item.text
+                        ].forEach(function(candidate){
+                            if (!label && typeof candidate === 'string' && candidate.trim()) {
+                                label = candidate.trim();
+                            }
+                        });
+
+                        if (!label) {
+                            return null;
+                        }
+
+                        return {
+                            placeName: label,
+                            placeId: placeId,
+                            label: label,
+                            description: (typeof item.description === 'string' && item.description.trim()) ? item.description.trim() : label
+                        };
+                    }
+
+                    function getAreaKey(item){
+                        var normalized = normalizeAreaItem(item);
+                        if (!normalized) {
+                            return '';
+                        }
+                        return normalized.placeId ? ('id:' + normalized.placeId.toLowerCase()) : ('label:' + normalized.label.toLowerCase());
+                    }
+
+                    function getAreaLabel(item){
+                        var normalized = normalizeAreaItem(item);
+                        return normalized ? (normalized.label || normalized.description || normalized.placeName || '') : '';
+                    }
+
                     function getAreas(){
                         var raw = $('#location_service_areas_json').val() || '[]';
                         var arr = safeJsonParse(raw, []);
                         if (!Array.isArray(arr)) arr = [];
                         var out = [];
-                        arr.forEach(function(x){
-                            if (typeof x === 'string') {
-                                var s = x.trim();
-                                if (s) out.push(s);
+                        arr.forEach(function(item){
+                            var normalized = normalizeAreaItem(item);
+                            if (normalized) {
+                                out.push(normalized);
                             }
                         });
                         return out;
@@ -2182,15 +2629,25 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         if (!Array.isArray(arr)) arr = [];
                         var seen = {};
                         var out = [];
-                        arr.forEach(function(x){
-                            if (typeof x === 'string') {
-                                var s = x.trim();
-                                if (s && !seen[s.toLowerCase()]) {
-                                    seen[s.toLowerCase()] = true;
-                                    out.push(s);
-                                }
+                        arr.forEach(function(item){
+                            var normalized = normalizeAreaItem(item);
+                            if (!normalized) {
+                                return;
                             }
+
+                            var key = getAreaKey(normalized);
+                            if (!key || seen[key]) {
+                                return;
+                            }
+
+                            seen[key] = true;
+                            out.push(normalized);
                         });
+
+                        if (out.length > 20) {
+                            out = out.slice(0, 20);
+                        }
+
                         $('#location_service_areas_json').val(JSON.stringify(out));
                         renderChips(out);
                     }
@@ -2198,7 +2655,14 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     function renderChips(arr){
                         var $wrap = $('#oy-service-area-selected');
                         $wrap.empty();
-                        arr.forEach(function(label){
+                        arr.forEach(function(item){
+                            var label = getAreaLabel(item);
+                            var itemKey = getAreaKey(item);
+
+                            if (!label) {
+                                return;
+                            }
+
                             var chip = $('<span/>').css({
                                 display:'inline-flex',
                                 alignItems:'center',
@@ -2213,7 +2677,9 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             var btn = $('<button type="button" aria-label="remove">✕</button>').addClass('button-link')
                                 .css({color:'#dc3232', textDecoration:'none', border:'none', background:'transparent', cursor:'pointer', padding:0, margin:0});
                             btn.on('click', function(){
-                                var cur = getAreas().filter(function(x){ return x !== label; });
+                                var cur = getAreas().filter(function(existingItem){
+                                    return getAreaKey(existingItem) !== itemKey;
+                                });
                                 setAreas(cur);
                             });
                             chip.append(btn);
@@ -2235,21 +2701,25 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         }
 
                         list.forEach(function(item){
+                            var normalized = normalizeAreaItem(item);
+                            var label = normalized ? getAreaLabel(normalized) : '';
+
+                            if (!label) {
+                                return;
+                            }
+
                             var row = $('<div/>').css({
                                 padding:'10px 12px',
                                 cursor:'pointer',
                                 borderTop:'1px solid #f1f1f1'
-                            }).text(item.description || item.label || '');
+                            }).text(label);
 
                             row.on('mouseenter', function(){ $(this).css('background','#f6f7f7'); });
                             row.on('mouseleave', function(){ $(this).css('background','#fff'); });
 
                             row.on('click', function(){
-                                var label = (item.description || item.label || '').trim();
-                                if (!label) return;
-
                                 var cur = getAreas();
-                                cur.push(label);
+                                cur.push(normalized);
                                 setAreas(cur);
 
                                 $('#oy-service-area-search').val('');
@@ -2495,6 +2965,26 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                     }
 
                     // ── Diff entre dos snapshots ──────────────────────────────────────────
+                    function jsonAreaListToText(list) {
+                        if (!Array.isArray(list)) {
+                            return '';
+                        }
+
+                        return list.map(function(item) {
+                            if (typeof item === 'string') {
+                                return item;
+                            }
+
+                            if (!item || typeof item !== 'object') {
+                                return '';
+                            }
+
+                            return item.label || item.description || item.placeName || '';
+                        }).filter(function(item) {
+                            return !!item;
+                        }).join(', ');
+                    }
+
                     function buildDiff(before, after) {
                         var rows = [];
                         FIELD_MAP.forEach(function(f) {
@@ -2502,10 +2992,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                             var aVal = after[f.key];
 
                             var bStr = f.isJson
-                                ? (Array.isArray(bVal) ? bVal.join(', ') : JSON.stringify(bVal))
+                                ? jsonAreaListToText(bVal)
                                 : String(bVal == null ? '' : bVal);
                             var aStr = f.isJson
-                                ? (Array.isArray(aVal) ? aVal.join(', ') : JSON.stringify(aVal))
+                                ? jsonAreaListToText(aVal)
                                 : String(aVal == null ? '' : aVal);
 
                             var rawBefore = f.isJson ? JSON.stringify(bVal) : bStr;
@@ -2906,7 +3396,16 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                                 // ── 2. Áreas de servicio ──────────────────────────────────
                                 if (typeof window.oy_service_areas_set === 'function') {
                                     try {
-                                        var areas = extractServiceAreas(loc);
+                                        var areas = [];
+                                        if (loc.serviceArea) {
+                                            if (loc.serviceArea.places && Array.isArray(loc.serviceArea.places.placeInfos)) {
+                                                areas = loc.serviceArea.places.placeInfos;
+                                            } else if (Array.isArray(loc.serviceArea.places)) {
+                                                areas = loc.serviceArea.places;
+                                            } else if (Array.isArray(loc.serviceArea.placeInfos)) {
+                                                areas = loc.serviceArea.placeInfos;
+                                            }
+                                        }
                                         if (areas.length) { window.oy_service_areas_set(areas); }
                                     } catch(saErr) {
                                         if (window.console && window.console.error) {
