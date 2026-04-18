@@ -3622,7 +3622,7 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
      * @param array  $sab_options    ['is_sab' => bool, 'show_address' => bool]
      * @return array|WP_Error        Array con la respuesta de la API (valores confirmados) o WP_Error.
      */
-    public static function push_location_address( $business_id, $location_name, array $address_data, array $sab_options = array() ) {
+public static function push_location_address( $business_id, $location_name, array $address_data, array $sab_options = array() ) {
         $business_id   = absint( $business_id );
         $location_name = trim( (string) $location_name );
 
@@ -3652,9 +3652,9 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
             return new WP_Error( 'no_tokens', __( 'No se encontraron tokens válidos.', 'lealez' ) );
         }
 
-        $is_sab              = ! empty( $sab_options['is_sab'] );
-        $show_address        = isset( $sab_options['show_address'] ) ? (bool) $sab_options['show_address'] : true;
-        $raw_service_places  = isset( $sab_options['service_area_places'] ) && is_array( $sab_options['service_area_places'] )
+        $is_sab             = ! empty( $sab_options['is_sab'] );
+        $show_address       = isset( $sab_options['show_address'] ) ? (bool) $sab_options['show_address'] : true;
+        $raw_service_places = isset( $sab_options['service_area_places'] ) && is_array( $sab_options['service_area_places'] )
             ? $sab_options['service_area_places']
             : array();
 
@@ -3697,48 +3697,61 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
             }
         }
 
+        $has_service_area_places   = ! empty( $service_area_places );
+        $is_customer_location_only = ( $is_sab && ! $show_address );
+        $is_hybrid_service_area    = ( $is_sab && $show_address ) || ( ! $is_sab && $has_service_area_places );
+
         // ── Determinar business_type y construir updateMask ────────────────────────
-        // Playbook Sección 5: reglas asimétricas de SAB
+        // Casos soportados:
+        // 1) CUSTOMER_LOCATION_ONLY         → sin dirección visible, solo área de servicio
+        // 2) CUSTOMER_AND_BUSINESS_LOCATION → dirección física + áreas de servicio
+        // 3) Storefront puro                → solo storefrontAddress
         $body        = array();
         $update_mask = array();
 
-        if ( $is_sab ) {
-            if ( $show_address ) {
-                // Híbrido: tiene frente físico Y atiende en domicilio
-                $business_type              = 'CUSTOMER_AND_BUSINESS_LOCATION';
-                $body['storefrontAddress']  = $address_data;
-                $body['serviceArea']        = array( 'businessType' => $business_type );
-                $update_mask                = array( 'storefrontAddress', 'serviceArea.businessType' );
-            } else {
-                // SAB puro: solo atiende donde el cliente — storefrontAddress debe ir VACÍO
-                // Playbook: "storefrontAddress set to empty — otherwise the transition is inconsistent"
-                $business_type              = 'CUSTOMER_LOCATION_ONLY';
-                $body['storefrontAddress']  = new stdClass(); // objeto vacío → {} en JSON
-                $body['serviceArea']        = array(
-                    'businessType' => $business_type,
-                );
-                $update_mask                = array( 'serviceArea.businessType', 'storefrontAddress' );
+        if ( $is_customer_location_only ) {
+            // SAB puro: solo atiende donde el cliente — storefrontAddress debe ir vacío.
+            $business_type             = 'CUSTOMER_LOCATION_ONLY';
+            $body['storefrontAddress'] = new stdClass();
+            $body['serviceArea']       = array(
+                'businessType' => $business_type,
+            );
+            $update_mask               = array( 'serviceArea.businessType', 'storefrontAddress' );
 
-                if ( ! empty( $address_data['regionCode'] ) ) {
-                    $body['serviceArea']['regionCode'] = trim( sanitize_text_field( (string) $address_data['regionCode'] ) );
-                    $update_mask[]                     = 'serviceArea.regionCode';
-                }
+            if ( ! empty( $address_data['regionCode'] ) ) {
+                $body['serviceArea']['regionCode'] = trim( sanitize_text_field( (string) $address_data['regionCode'] ) );
+                $update_mask[]                     = 'serviceArea.regionCode';
             }
 
-            if ( ! empty( $service_area_places ) ) {
+            if ( $has_service_area_places ) {
+                $body['serviceArea']['places'] = array(
+                    'placeInfos' => array_values( $service_area_places ),
+                );
+                $update_mask[] = 'serviceArea.places';
+            }
+        } elseif ( $is_hybrid_service_area ) {
+            // Híbrido real: tiene dirección física y además áreas de servicio.
+            $business_type             = 'CUSTOMER_AND_BUSINESS_LOCATION';
+            $body['storefrontAddress'] = $address_data;
+            $body['serviceArea']       = array(
+                'businessType' => $business_type,
+            );
+            $update_mask               = array( 'storefrontAddress', 'serviceArea.businessType' );
+
+            if ( $has_service_area_places ) {
                 $body['serviceArea']['places'] = array(
                     'placeInfos' => array_values( $service_area_places ),
                 );
                 $update_mask[] = 'serviceArea.places';
             }
         } else {
-            // Negocio con frente de tienda puro — sin serviceArea en el mask
+            // Negocio con frente de tienda puro — sin serviceArea en el mask.
             $business_type             = '';
             $body['storefrontAddress'] = $address_data;
             $update_mask               = array( 'storefrontAddress' );
         }
 
-        $update_mask = array_values( array_unique( $update_mask ) );
+        $update_mask     = array_values( array_unique( $update_mask ) );
         $update_mask_str = implode( ',', $update_mask );
         $url             = self::$business_api_base . '/' . $location_name . '?updateMask=' . rawurlencode( $update_mask_str );
 
@@ -3795,12 +3808,12 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
                 'gmb_patch_error',
                 $msg,
                 array(
-                    'code'               => $code,
-                    'body'               => $body_data,
-                    'raw_body'           => $raw_body,
-                    'field_violations'   => $violations,
-                    'update_mask'        => $update_mask_str,
-                    'business_type'      => $business_type,
+                    'code'                => $code,
+                    'body'                => $body_data,
+                    'raw_body'            => $raw_body,
+                    'field_violations'    => $violations,
+                    'update_mask'         => $update_mask_str,
+                    'business_type'       => $business_type,
                     'service_area_places' => $service_area_places,
                 )
             );
@@ -3808,7 +3821,6 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
 
         // HTTP 200 = entró a la cola de moderación de Google.
         // NO significa que el cambio fue aplicado — requiere polling posterior.
-        // Playbook Sección 8: "HTTP 200 means queued, not published."
         return array(
             'patch_response'      => is_array( $body_data ) ? $body_data : array(),
             'update_mask'         => $update_mask_str,
