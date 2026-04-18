@@ -2641,593 +2641,6 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
     }
 
 
-/**
- * Actualiza (PATCH) la dirección de una ubicación en Google Business Profile.
- *
- * Endpoint:
- * PATCH https://mybusinessbusinessinformation.googleapis.com/v1/{locationName}?updateMask=storefrontAddress[,serviceArea.businessType]
- *
- * NOTA SAB (Service Area Business):
- * Cuando $options['is_sab'] = true, se incluye serviceArea.businessType en el PATCH:
- * - $options['show_address'] = true  → businessType: CUSTOMER_AND_BUSINESS_LOCATION
- * - $options['show_address'] = false → businessType: CUSTOMER_LOCATION_ONLY
- *
- * AUTO-CORRECCIÓN: Si $options['is_sab'] = false pero la respuesta del PATCH revela
- * businessType=CUSTOMER_LOCATION_ONLY y show_address=true, se ejecuta automáticamente
- * un segundo PATCH con serviceArea.businessType=CUSTOMER_AND_BUSINESS_LOCATION.
- * Esto cubre el caso en que el meta local no refleja el estado real del negocio en GMB.
- *
- * @param int    $business_id   WP Post ID del oy_business (para tokens OAuth).
- * @param string $location_name Resource name de la ubicación.
- * @param array  $address_data  [ regionCode, addressLines, locality, administrativeArea, postalCode ]
- * @param array  $options       [ is_sab => bool, show_address => bool (default true) ]
- *
- * @return array|WP_Error
- */
-public static function update_location_address( $business_id, $location_name, $address_data, $options = array() ) {
-    $business_id   = absint( $business_id );
-    $location_name = trim( (string) $location_name );
-
-    if ( ! $business_id || '' === $location_name ) {
-        return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_address.', 'lealez' ) );
-    }
-
-    if ( empty( $address_data ) || ! is_array( $address_data ) ) {
-        return new WP_Error( 'empty_payload', __( 'No address data provided to update.', 'lealez' ) );
-    }
-
-    // ── Opciones de contexto SAB ──────────────────────────────────────────────
-    $is_sab_intent       = ! empty( $options['is_sab'] );
-    $show_address_intent = isset( $options['show_address'] ) ? (bool) $options['show_address'] : true;
-
-    // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
-    $normalized_location = $location_name;
-    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-        $parts = explode( '/locations/', $location_name, 2 );
-        if ( ! empty( $parts[1] ) ) {
-            $normalized_location = 'locations/' . trim( $parts[1], '/' );
-        }
-    }
-
-    // ── Construir storefrontAddress ──────────────────────────────────────────
-    $storefront_address = array();
-
-    if ( ! empty( $address_data['regionCode'] ) ) {
-        $storefront_address['regionCode'] = strtoupper( trim( (string) $address_data['regionCode'] ) );
-    }
-
-    if ( ! empty( $address_data['addressLines'] ) && is_array( $address_data['addressLines'] ) ) {
-        $clean_lines = array();
-        foreach ( $address_data['addressLines'] as $line ) {
-            $line = trim( (string) $line );
-            if ( '' !== $line ) {
-                $clean_lines[] = $line;
-            }
-        }
-        if ( ! empty( $clean_lines ) ) {
-            $storefront_address['addressLines'] = $clean_lines;
-        }
-    }
-
-    if ( isset( $address_data['locality'] ) && '' !== trim( (string) $address_data['locality'] ) ) {
-        $storefront_address['locality'] = trim( (string) $address_data['locality'] );
-    }
-
-    if ( isset( $address_data['administrativeArea'] ) && '' !== trim( (string) $address_data['administrativeArea'] ) ) {
-        $storefront_address['administrativeArea'] = trim( (string) $address_data['administrativeArea'] );
-    }
-
-    if ( isset( $address_data['postalCode'] ) && '' !== trim( (string) $address_data['postalCode'] ) ) {
-        $storefront_address['postalCode'] = trim( (string) $address_data['postalCode'] );
-    }
-
-    if ( empty( $storefront_address ) || empty( $storefront_address['regionCode'] ) ) {
-        return new WP_Error( 'empty_address', __( 'storefrontAddress requiere al menos regionCode (código ISO del país, ej: CO).', 'lealez' ) );
-    }
-
-    // ── Endpoint ──────────────────────────────────────────────────────────────
-    $endpoint    = '/' . rtrim( $normalized_location, '/' );
-    $update_mask = 'storefrontAddress';
-
-    // ── Body del PATCH ────────────────────────────────────────────────────────
-    $body = array(
-        'name'              => $normalized_location,
-        'storefrontAddress' => $storefront_address,
-    );
-
-    // ── SAB: incluir serviceArea.businessType si el caller lo indica ──────────
-    $desired_business_type = '';
-    if ( $is_sab_intent ) {
-        $desired_business_type = $show_address_intent
-            ? 'CUSTOMER_AND_BUSINESS_LOCATION'
-            : 'CUSTOMER_LOCATION_ONLY';
-
-        $body['serviceArea'] = array( 'businessType' => $desired_business_type );
-        $update_mask         = 'storefrontAddress,serviceArea.businessType';
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( sprintf(
-                '[OY GMB Address] update_location_address ── SAB (from caller): show_address=%s → businessType: %s',
-                $show_address_intent ? 'true' : 'false',
-                $desired_business_type
-            ) );
-        }
-    }
-
-    // ── Debug: URL + body ─────────────────────────────────────────────────────
-    $full_debug_url = self::$business_api_base . $endpoint . '?updateMask=' . rawurlencode( $update_mask );
-    $body_json      = wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( '[OY GMB Address] update_location_address ── REQUEST URL: ' . $full_debug_url );
-        error_log( '[OY GMB Address] update_location_address ── REQUEST BODY: ' . $body_json );
-    }
-
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'info',
-            sprintf( 'Pushing address to GMB. updateMask: %s', $update_mask ),
-            array(
-                'location'              => $normalized_location,
-                'full_url'              => $full_debug_url,
-                'updateMask'            => $update_mask,
-                'storefront_body'       => $storefront_address,
-                'is_sab_intent'         => $is_sab_intent,
-                'show_address_intent'   => $show_address_intent,
-                'desired_business_type' => $desired_business_type,
-            )
-        );
-    }
-
-    // ── PATCH principal ───────────────────────────────────────────────────────
-    $result = self::make_request(
-        $business_id,
-        $endpoint,
-        self::$business_api_base,
-        'PATCH',
-        $body,
-        false,
-        array( 'updateMask' => $update_mask )
-    );
-
-    if ( is_wp_error( $result ) ) {
-        $err_msg  = $result->get_error_message();
-        $err_data = $result->get_error_data();
-        $raw_body = '';
-
-        if ( is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
-            $raw_body = ' | Google raw: ' . substr( (string) $err_data['raw_body'], 0, 800 );
-        }
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'error',
-                'update_location_address failed: ' . $err_msg . $raw_body,
-                array(
-                    'location'   => $normalized_location,
-                    'updateMask' => $update_mask,
-                    'address'    => $storefront_address,
-                )
-            );
-        }
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY GMB Address] update_location_address ── PATCH ERROR: ' . $err_msg . $raw_body );
-        }
-
-        return $result;
-    }
-
-    // ── Leer flags del PATCH principal ────────────────────────────────────────
-    $has_pending_edits     = ! empty( $result['metadata']['hasPendingEdits'] );
-    $has_voice_of_merchant = ! empty( $result['metadata']['hasVoiceOfMerchant'] );
-    $business_type         = isset( $result['serviceArea']['businessType'] ) ? (string) $result['serviceArea']['businessType'] : '';
-    $is_sab                = in_array( $business_type, array( 'CUSTOMER_LOCATION_ONLY', 'CUSTOMER_AND_BUSINESS_LOCATION' ), true );
-    $storefront_in_resp    = isset( $result['storefrontAddress'] );
-    $auto_corrected        = false;
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        $resp_json = wp_json_encode( $result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-        error_log( '[OY GMB Address] update_location_address ── PATCH RESPONSE (full): ' . $resp_json );
-        error_log( sprintf(
-            '[OY GMB Address] update_location_address ── FLAGS: hasPendingEdits=%s | hasVoiceOfMerchant=%s | businessType_sent="%s" | businessType_returned="%s" | isSAB=%s | storefrontAddress_in_response=%s',
-            $has_pending_edits ? 'true' : 'false',
-            $has_voice_of_merchant ? 'true' : 'false',
-            $desired_business_type ?: '(no enviado)',
-            $business_type ?: '(absent)',
-            $is_sab ? 'true' : 'false',
-            $storefront_in_resp ? 'YES' : 'NO'
-        ) );
-    }
-
-    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-        Lealez_GMB_Logger::log(
-            $business_id,
-            'success',
-            sprintf(
-                'PATCH address OK for %s | hasPendingEdits=%s | businessType_sent=%s | businessType_returned=%s | storefrontAddress_in_response=%s',
-                $normalized_location,
-                $has_pending_edits ? 'true' : 'false',
-                $desired_business_type ?: 'n/a (no SAB)',
-                $business_type ?: 'n/a',
-                $storefront_in_resp ? 'YES' : 'NO'
-            ),
-            array(
-                'location'                 => $normalized_location,
-                'updateMask'               => $update_mask,
-                'hasPendingEdits'          => $has_pending_edits,
-                'hasVoiceOfMerchant'       => $has_voice_of_merchant,
-                'businessType_sent'        => $desired_business_type,
-                'businessType_returned'    => $business_type,
-                'isSAB'                    => $is_sab,
-                'storefrontAddress_absent' => ! $storefront_in_resp,
-            )
-        );
-    }
-
-    // ── AUTO-CORRECCIÓN SAB — CASO 1: MOSTRAR ────────────────────────────────
-    // Si el caller NO incluyó serviceArea.businessType (porque no sabía que era SAB)
-    // pero la respuesta del PATCH revela businessType=CUSTOMER_LOCATION_ONLY
-    // Y la intención es MOSTRAR la dirección → segundo PATCH de corrección.
-    //
-    // Esto ocurre cuando el meta local 'service_area_only' no refleja el estado
-    // real del negocio en GMB (ej: post no guardado antes del push).
-    if (
-        $show_address_intent &&
-        'CUSTOMER_LOCATION_ONLY' === $business_type &&
-        '' === $desired_business_type // No lo incluimos en el primer PATCH
-    ) {
-        $desired_business_type = 'CUSTOMER_AND_BUSINESS_LOCATION';
-        $second_body = array(
-            'name'              => $normalized_location,
-            'storefrontAddress' => $storefront_address,
-            'serviceArea'       => array( 'businessType' => $desired_business_type ),
-        );
-        $second_mask = 'storefrontAddress,serviceArea.businessType';
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( sprintf(
-                '[OY GMB Address] update_location_address ── AUTO-CORRECT (CASO 1 MOSTRAR): SAB detectado en respuesta. Segundo PATCH. mask=%s | businessType=%s',
-                $second_mask,
-                $desired_business_type
-            ) );
-        }
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'info',
-                'Auto-corrección SAB (MOSTRAR): segundo PATCH con businessType=' . $desired_business_type,
-                array(
-                    'location'   => $normalized_location,
-                    'updateMask' => $second_mask,
-                )
-            );
-        }
-
-        $second_result = self::make_request(
-            $business_id,
-            $endpoint,
-            self::$business_api_base,
-            'PATCH',
-            $second_body,
-            false,
-            array( 'updateMask' => $second_mask )
-        );
-
-        if ( ! is_wp_error( $second_result ) ) {
-            $auto_corrected        = true;
-            $result                = $second_result;
-            $has_pending_edits     = ! empty( $result['metadata']['hasPendingEdits'] );
-            $has_voice_of_merchant = ! empty( $result['metadata']['hasVoiceOfMerchant'] );
-            $business_type         = isset( $result['serviceArea']['businessType'] ) ? (string) $result['serviceArea']['businessType'] : $business_type;
-            $is_sab                = in_array( $business_type, array( 'CUSTOMER_LOCATION_ONLY', 'CUSTOMER_AND_BUSINESS_LOCATION' ), true );
-            $storefront_in_resp    = isset( $result['storefrontAddress'] );
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( sprintf(
-                    '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 1 segundo PATCH OK: businessType=%s | hasPendingEdits=%s | storefrontAddress=%s',
-                    $business_type ?: '(absent)',
-                    $has_pending_edits ? 'true' : 'false',
-                    $storefront_in_resp ? 'YES' : 'NO'
-                ) );
-            }
-
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'success',
-                    sprintf(
-                        'Auto-corrección CASO 1 segundo PATCH OK | businessType_ret=%s | hasPendingEdits=%s',
-                        $business_type ?: 'n/a',
-                        $has_pending_edits ? 'true' : 'false'
-                    ),
-                    array(
-                        'location'          => $normalized_location,
-                        'businessType_sent' => $desired_business_type,
-                        'businessType_ret'  => $business_type,
-                        'hasPendingEdits'   => $has_pending_edits,
-                    )
-                );
-            }
-        } else {
-            $second_err = $second_result->get_error_message();
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 1 segundo PATCH FALLÓ: ' . $second_err );
-            }
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'error',
-                    'Auto-corrección CASO 1 segundo PATCH falló: ' . $second_err,
-                    array( 'location' => $normalized_location )
-                );
-            }
-            $desired_business_type = ''; // No se pudo aplicar
-        }
-    }
-
-    // ── AUTO-CORRECCIÓN SAB — CASO 2: OCULTAR ────────────────────────────────
-    // Si el caller NO incluyó serviceArea.businessType (porque el checkbox SAB estaba
-    // oculto/colapsado en la UI y form_is_sab llegó como '0') pero:
-    //   - La intención es OCULTAR la dirección (show_address_intent = false)
-    //   - La respuesta del PATCH revela que el negocio ES un SAB
-    //     (businessType = CUSTOMER_AND_BUSINESS_LOCATION)
-    //   - No enviamos businessType en el primer PATCH (desired_business_type = '')
-    //
-    // → Segundo PATCH con businessType=CUSTOMER_LOCATION_ONLY para aplicar el ocultado.
-    // Este es el bug principal: el PATCH de dirección llegó a GMB pero sin el cambio de
-    // businessType, por lo que Google mantuvo la dirección visible.
-    if (
-        ! $show_address_intent &&
-        in_array( $business_type, array( 'CUSTOMER_AND_BUSINESS_LOCATION', 'CUSTOMER_LOCATION_ONLY' ), true ) &&
-        '' === $desired_business_type // No lo incluimos en el primer PATCH
-    ) {
-        $desired_business_type = 'CUSTOMER_LOCATION_ONLY';
-        $second_body_hide = array(
-            'name'        => $normalized_location,
-            'serviceArea' => array( 'businessType' => $desired_business_type ),
-        );
-        // IMPORTANTE: solo actualizamos businessType, no storefrontAddress.
-        // Google requiere que la dirección siga existiendo en el recurso para SABs
-        // con tipo CUSTOMER_AND_BUSINESS_LOCATION convertidos a CUSTOMER_LOCATION_ONLY.
-        $second_mask_hide = 'serviceArea.businessType';
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( sprintf(
-                '[OY GMB Address] update_location_address ── AUTO-CORRECT (CASO 2 OCULTAR): SAB detectado en respuesta pero businessType no fue enviado. Segundo PATCH. mask=%s | businessType=%s',
-                $second_mask_hide,
-                $desired_business_type
-            ) );
-        }
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'info',
-                'Auto-corrección SAB (OCULTAR): segundo PATCH con businessType=' . $desired_business_type,
-                array(
-                    'location'   => $normalized_location,
-                    'updateMask' => $second_mask_hide,
-                    'reason'     => 'form_is_sab llegó como false pero GMB devolvió businessType de SAB; aplicando CUSTOMER_LOCATION_ONLY',
-                )
-            );
-        }
-
-        $second_result_hide = self::make_request(
-            $business_id,
-            $endpoint,
-            self::$business_api_base,
-            'PATCH',
-            $second_body_hide,
-            false,
-            array( 'updateMask' => $second_mask_hide )
-        );
-
-        if ( ! is_wp_error( $second_result_hide ) ) {
-            $auto_corrected        = true;
-            $result                = $second_result_hide;
-            $has_pending_edits     = ! empty( $result['metadata']['hasPendingEdits'] );
-            $has_voice_of_merchant = ! empty( $result['metadata']['hasVoiceOfMerchant'] );
-            $business_type         = isset( $result['serviceArea']['businessType'] ) ? (string) $result['serviceArea']['businessType'] : $business_type;
-            $is_sab                = in_array( $business_type, array( 'CUSTOMER_LOCATION_ONLY', 'CUSTOMER_AND_BUSINESS_LOCATION' ), true );
-            $storefront_in_resp    = isset( $result['storefrontAddress'] );
-
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( sprintf(
-                    '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 2 segundo PATCH OK: businessType=%s | hasPendingEdits=%s | storefrontAddress=%s',
-                    $business_type ?: '(absent)',
-                    $has_pending_edits ? 'true' : 'false',
-                    $storefront_in_resp ? 'YES' : 'NO'
-                ) );
-            }
-
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'success',
-                    sprintf(
-                        'Auto-corrección CASO 2 (OCULTAR) segundo PATCH OK | businessType_ret=%s | hasPendingEdits=%s',
-                        $business_type ?: 'n/a',
-                        $has_pending_edits ? 'true' : 'false'
-                    ),
-                    array(
-                        'location'          => $normalized_location,
-                        'businessType_sent' => $desired_business_type,
-                        'businessType_ret'  => $business_type,
-                        'hasPendingEdits'   => $has_pending_edits,
-                    )
-                );
-            }
-        } else {
-            $second_err_hide = $second_result_hide->get_error_message();
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB Address] update_location_address ── AUTO-CORRECT CASO 2 segundo PATCH FALLÓ: ' . $second_err_hide );
-            }
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $business_id,
-                    'error',
-                    'Auto-corrección CASO 2 (OCULTAR) segundo PATCH falló: ' . $second_err_hide,
-                    array( 'location' => $normalized_location )
-                );
-            }
-            $desired_business_type = ''; // No se pudo aplicar
-        }
-    }
-
-    // ── Verificación POST-PATCH ───────────────────────────────────────────────
-    $verify_result   = null;
-    $verify_address  = null;
-    $address_matched = false;
-
-    $verify_query = self::make_request(
-        $business_id,
-        $endpoint,
-        self::$business_api_base,
-        'GET',
-        array(),
-        false,
-        array( 'readMask' => 'name,storefrontAddress,metadata,serviceArea' )
-    );
-
-    if ( ! is_wp_error( $verify_query ) && is_array( $verify_query ) ) {
-        $verify_result  = $verify_query;
-        $verify_address = isset( $verify_query['storefrontAddress'] ) && is_array( $verify_query['storefrontAddress'] )
-            ? $verify_query['storefrontAddress']
-            : null;
-
-        $sent_locality = isset( $storefront_address['locality'] )
-            ? strtolower( trim( $storefront_address['locality'] ) )
-            : '';
-        $got_locality  = isset( $verify_address['locality'] )
-            ? strtolower( trim( (string) $verify_address['locality'] ) )
-            : '';
-
-        $address_matched = ( '' !== $sent_locality && $sent_locality === $got_locality );
-
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            $verify_json = wp_json_encode( $verify_query, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-            error_log( '[OY GMB Address] update_location_address ── VERIFY GET RESPONSE: ' . $verify_json );
-            error_log( sprintf(
-                '[OY GMB Address] update_location_address ── VERIFY: storefrontAddress=%s | address_matched=%s | sent="%s" | got="%s" | show_address_intent=%s | auto_corrected=%s',
-                ( null !== $verify_address ) ? 'YES' : 'NO',
-                $address_matched ? 'true' : 'false',
-                $sent_locality,
-                $got_locality,
-                $show_address_intent ? 'true (mostrar)' : 'false (ocultar)',
-                $auto_corrected ? 'true' : 'false'
-            ) );
-        }
-
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                $address_matched ? 'success' : 'warning',
-                sprintf(
-                    'Verification GET: storefrontAddress=%s | address_matched=%s | sent="%s" | got="%s"',
-                    ( null !== $verify_address ) ? 'PRESENT' : 'ABSENT',
-                    $address_matched ? 'true' : 'false',
-                    $sent_locality,
-                    $got_locality
-                ),
-                array(
-                    'location'            => $normalized_location,
-                    'verify_address'      => $verify_address,
-                    'address_matched'     => $address_matched,
-                    'show_address_intent' => $show_address_intent,
-                    'auto_corrected'      => $auto_corrected,
-                    'hasPendingEdits'     => isset( $verify_query['metadata']['hasPendingEdits'] )
-                        ? (bool) $verify_query['metadata']['hasPendingEdits']
-                        : null,
-                )
-            );
-        }
-
-    } else {
-        $verify_err = is_wp_error( $verify_query ) ? $verify_query->get_error_message() : 'Respuesta no válida';
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[OY GMB Address] update_location_address ── VERIFY GET failed: ' . $verify_err );
-        }
-        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-            Lealez_GMB_Logger::log(
-                $business_id,
-                'warning',
-                'Verification GET after PATCH failed: ' . $verify_err,
-                array( 'location' => $normalized_location )
-            );
-        }
-    }
-
-    return array(
-        'patch_result'        => $result,
-        'has_pending_edits'   => $has_pending_edits,
-        'has_voice_merchant'  => $has_voice_of_merchant,
-        'business_type'       => $business_type,
-        'business_type_sent'  => $desired_business_type,
-        'is_sab'              => $is_sab,
-        'auto_corrected'      => $auto_corrected,
-        'verify_result'       => $verify_result,
-        'verify_address'      => $verify_address,
-        'address_matched'     => $address_matched,
-    );
-}
-
-
-    /**
- * Obtiene el estado actual de una ubicación en GMB para diagnóstico/verificación de dirección.
- *
- * Endpoint:
- * GET https://mybusinessbusinessinformation.googleapis.com/v1/{location}
- *     ?readMask=name,storefrontAddress,metadata,serviceArea
- *
- * Usado por el sistema de tracking de estado de publicación de dirección en Lealez.
- * Devuelve los campos relevantes sin tocar post_meta (diferente a sync_location_data).
- *
- * @param int    $business_id   WP Post ID del oy_business.
- * @param string $location_name Resource name de la ubicación (cualquier formato).
- * @return array|WP_Error Array con storefrontAddress, metadata y serviceArea, o WP_Error.
- */
-public static function get_location_status( $business_id, $location_name ) {
-    $business_id   = absint( $business_id );
-    $location_name = trim( (string) $location_name );
-
-    if ( ! $business_id || '' === $location_name ) {
-        return new WP_Error(
-            'invalid_params',
-            __( 'Invalid business_id or location_name for get_location_status.', 'lealez' )
-        );
-    }
-
-    // Normalizar a formato corto 'locations/{id}'
-    $normalized = $location_name;
-    if ( strpos( $location_name, 'accounts/' ) === 0 ) {
-        $parts = explode( '/locations/', $location_name, 2 );
-        if ( ! empty( $parts[1] ) ) {
-            $normalized = 'locations/' . trim( $parts[1], '/' );
-        }
-    }
-
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log(
-            '[OY GMB Address] get_location_status ── GET ' .
-            self::$business_api_base . '/' . $normalized .
-            '?readMask=name,storefrontAddress,metadata,serviceArea'
-        );
-    }
-
-    return self::make_request(
-        $business_id,
-        '/' . rtrim( $normalized, '/' ),
-        self::$business_api_base,
-        'GET',
-        array(),
-        false, // Sin caché — siempre fresco
-        array( 'readMask' => 'name,storefrontAddress,metadata,serviceArea' )
-    );
-}
 
 
 /**
@@ -4106,6 +3519,260 @@ public static function clear_business_cache( $business_id, $preserve_rate_limit 
         }
 
         return null;
+    }
+
+// =========================================================================
+    // ADDRESS PUSH — Business Information API v1
+    // Arquitectura: snapshot antes del PATCH → PATCH → polling WP-Cron
+    // Fuente: GBP Business Information API v1 Patch Playbook
+    // =========================================================================
+
+    /**
+     * Obtiene un snapshot de los campos de dirección y área de servicio desde GMB.
+     *
+     * Usado ANTES del PATCH para guardar estado previo, y DURANTE el polling
+     * para comparar valores y determinar si el cambio fue aplicado, rechazado
+     * o sobreescrito por Google.
+     *
+     * readMask: storefrontAddress, serviceArea, metadata.hasPendingEdits, metadata.hasGoogleUpdated
+     * Fuente: Playbook Sección 3 — "snapshot the field values before PATCH"
+     *
+     * @param int    $business_id    WP post ID del oy_business (para OAuth).
+     * @param string $location_name  Resource name "locations/XXXX" (nombre GBP v1).
+     * @return array|WP_Error        Array con storefrontAddress, serviceArea, metadata o WP_Error.
+     */
+    public static function get_location_snapshot( $business_id, $location_name ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        // Asegurarse de que el resource name comience con "locations/"
+        if ( 0 !== strpos( $location_name, 'locations/' ) ) {
+            // Puede venir como "accounts/X/locations/Y" — extraer solo "locations/Y"
+            if ( preg_match( '#(locations/[^/]+)$#', $location_name, $m ) ) {
+                $location_name = $m[1];
+            } else {
+                return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+            }
+        }
+
+        // Verificar token
+        if ( Lealez_GMB_OAuth::is_token_expired( $business_id ) ) {
+            $refresh = Lealez_GMB_OAuth::refresh_access_token( $business_id );
+            if ( is_wp_error( $refresh ) ) {
+                return $refresh;
+            }
+        }
+
+        $tokens = Lealez_GMB_Encryption::get_tokens( $business_id );
+        if ( ! $tokens ) {
+            return new WP_Error( 'no_tokens', __( 'No se encontraron tokens válidos.', 'lealez' ) );
+        }
+
+        $read_mask = 'storefrontAddress,serviceArea,metadata.hasPendingEdits,metadata.hasGoogleUpdated';
+        $url       = self::$business_api_base . '/' . $location_name . '?readMask=' . rawurlencode( $read_mask );
+
+        $response = wp_remote_get( $url, array(
+            'timeout' => 30,
+            'headers' => array(
+                'Authorization'          => 'Bearer ' . $tokens['access_token'],
+                'Content-Type'           => 'application/json',
+                'X-GOOG-API-FORMAT-VERSION' => '2',
+            ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $code = wp_remote_retrieve_response_code( $response );
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+        if ( $code < 200 || $code >= 300 ) {
+            $msg = isset( $body['error']['message'] ) ? (string) $body['error']['message'] : "HTTP {$code}";
+            return new WP_Error( 'gmb_snapshot_error', $msg, array( 'code' => $code, 'body' => $body ) );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez GMB] get_location_snapshot OK — ' . $location_name . ' | hasPendingEdits=' . ( ! empty( $body['metadata']['hasPendingEdits'] ) ? 'true' : 'false' ) );
+        }
+
+        return is_array( $body ) ? $body : array();
+    }
+
+    /**
+     * Envía (PATCH) la dirección y tipo de negocio a Google Business Profile.
+     *
+     * Construye el updateMask dinámicamente según el tipo de negocio (SAB o no).
+     * Nunca incluye `latlng` — campo read-only para clientes no aprobados (HTTP 400).
+     * Incluye el header X-GOOG-API-FORMAT-VERSION:2 para obtener fieldViolations detallados.
+     *
+     * Reglas SAB (Playbook Sección 5):
+     * - CUSTOMER_LOCATION_ONLY: updateMask incluye AMBOS storefrontAddress+serviceArea.businessType,
+     *   pero storefrontAddress se envía vacío (Google lo ignoraría de todas formas).
+     * - CUSTOMER_AND_BUSINESS_LOCATION: se envía storefrontAddress real + serviceArea.businessType.
+     * - Sin SAB: solo storefrontAddress.
+     *
+     * @param int    $business_id    WP post ID del oy_business (para OAuth).
+     * @param string $location_name  Resource name "locations/XXXX".
+     * @param array  $address_data   Array PostalAddress de GBP: regionCode, addressLines, locality, etc.
+     * @param array  $sab_options    ['is_sab' => bool, 'show_address' => bool]
+     * @return array|WP_Error        Array con la respuesta de la API (valores confirmados) o WP_Error.
+     */
+    public static function push_location_address( $business_id, $location_name, array $address_data, array $sab_options = array() ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        // Normalizar resource name a formato plano v1
+        if ( 0 !== strpos( $location_name, 'locations/' ) ) {
+            if ( preg_match( '#(locations/[^/]+)$#', $location_name, $m ) ) {
+                $location_name = $m[1];
+            } else {
+                return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+            }
+        }
+
+        // Verificar token
+        if ( Lealez_GMB_OAuth::is_token_expired( $business_id ) ) {
+            $refresh = Lealez_GMB_OAuth::refresh_access_token( $business_id );
+            if ( is_wp_error( $refresh ) ) {
+                return $refresh;
+            }
+        }
+
+        $tokens = Lealez_GMB_Encryption::get_tokens( $business_id );
+        if ( ! $tokens ) {
+            return new WP_Error( 'no_tokens', __( 'No se encontraron tokens válidos.', 'lealez' ) );
+        }
+
+        $is_sab       = ! empty( $sab_options['is_sab'] );
+        $show_address = isset( $sab_options['show_address'] ) ? (bool) $sab_options['show_address'] : true;
+
+        // ── Determinar business_type y construir updateMask ────────────────────────
+        // Playbook Sección 5: reglas asimétricas de SAB
+        $body        = array();
+        $update_mask = array();
+
+        if ( $is_sab ) {
+            if ( $show_address ) {
+                // Híbrido: tiene frente físico Y atiende en domicilio
+                $business_type = 'CUSTOMER_AND_BUSINESS_LOCATION';
+                $body['storefrontAddress'] = $address_data;
+                $body['serviceArea']       = array( 'businessType' => $business_type );
+                $update_mask               = array( 'storefrontAddress', 'serviceArea.businessType' );
+            } else {
+                // SAB puro: solo atiende donde el cliente — storefrontAddress debe ir VACÍO
+                // Playbook: "storefrontAddress set to empty — otherwise the transition is inconsistent"
+                $business_type = 'CUSTOMER_LOCATION_ONLY';
+                $body['storefrontAddress'] = new stdClass(); // objeto vacío → {} en JSON
+                $body['serviceArea']       = array( 'businessType' => $business_type );
+                $update_mask               = array( 'serviceArea.businessType', 'storefrontAddress' );
+            }
+        } else {
+            // Negocio con frente de tienda puro — sin serviceArea en el mask
+            $business_type             = '';
+            $body['storefrontAddress'] = $address_data;
+            $update_mask               = array( 'storefrontAddress' );
+        }
+
+        $update_mask_str = implode( ',', $update_mask );
+        $url             = self::$business_api_base . '/' . $location_name . '?updateMask=' . rawurlencode( $update_mask_str );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] push_location_address → PATCH %s | mask=%s | is_sab=%s | show_address=%s | body=%s',
+                $location_name,
+                $update_mask_str,
+                $is_sab ? 'true' : 'false',
+                $show_address ? 'true' : 'false',
+                wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+            ) );
+        }
+
+        $response = wp_remote_request( $url, array(
+            'method'  => 'PATCH',
+            'timeout' => 45,
+            'headers' => array(
+                'Authorization'             => 'Bearer ' . $tokens['access_token'],
+                'Content-Type'              => 'application/json',
+                'X-GOOG-API-FORMAT-VERSION' => '2',
+            ),
+            'body' => wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $code      = wp_remote_retrieve_response_code( $response );
+        $raw_body  = wp_remote_retrieve_body( $response );
+        $body_data = json_decode( $raw_body, true );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] push_location_address ← HTTP %d | body=%s',
+                $code,
+                substr( $raw_body, 0, 500 )
+            ) );
+        }
+
+        if ( $code < 200 || $code >= 300 ) {
+            // Extraer fieldViolations si X-GOOG-API-FORMAT-VERSION:2 los devuelve
+            $violations = array();
+            if ( isset( $body_data['error']['details'] ) && is_array( $body_data['error']['details'] ) ) {
+                foreach ( $body_data['error']['details'] as $detail ) {
+                    if ( isset( $detail['fieldViolations'] ) && is_array( $detail['fieldViolations'] ) ) {
+                        $violations = array_merge( $violations, $detail['fieldViolations'] );
+                    }
+                }
+            }
+            $msg = isset( $body_data['error']['message'] ) ? (string) $body_data['error']['message'] : "HTTP {$code}";
+            return new WP_Error(
+                'gmb_patch_error',
+                $msg,
+                array(
+                    'code'             => $code,
+                    'body'             => $body_data,
+                    'raw_body'         => $raw_body,
+                    'field_violations' => $violations,
+                    'update_mask'      => $update_mask_str,
+                    'business_type'    => $business_type,
+                )
+            );
+        }
+
+        // HTTP 200 = entró a la cola de moderación de Google.
+        // NO significa que el cambio fue aplicado — requiere polling posterior.
+        // Playbook Sección 8: "HTTP 200 means queued, not published."
+        return array(
+            'patch_response' => is_array( $body_data ) ? $body_data : array(),
+            'update_mask'    => $update_mask_str,
+            'business_type'  => $business_type,
+            'is_sab'         => $is_sab,
+            'show_address'   => $show_address,
+        );
+    }
+
+    /**
+     * Consulta el estado actual de dirección en GMB para el ciclo de polling.
+     *
+     * Idéntico a get_location_snapshot() pero semánticamente separado para que
+     * los logs distingan un GET pre-PATCH de un GET de polling.
+     * Playbook Sección 4: GET con readMask de los campos enviados + metadata flags.
+     *
+     * @param int    $business_id   WP post ID del oy_business.
+     * @param string $location_name Resource name "locations/XXXX".
+     * @return array|WP_Error
+     */
+    public static function poll_location_address_status( $business_id, $location_name ) {
+        return self::get_location_snapshot( $business_id, $location_name );
     }
 
 // =========================================================================
