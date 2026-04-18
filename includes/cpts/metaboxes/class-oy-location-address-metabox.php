@@ -35,9 +35,15 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             // Sin tocar el CPT principal.
             add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 19, 2 );
 
+            // ── Guardado independiente del metabox de dirección ───────────────────────
+            add_action( 'wp_ajax_oy_save_address_metabox', array( $this, 'ajax_save_address_metabox' ) );
+
             // ── Push de dirección hacia GMB (nueva arquitectura, Playbook v1) ─────────
             add_action( 'wp_ajax_oy_push_address_to_gmb',       array( $this, 'ajax_push_address_to_gmb' ) );
             add_action( 'wp_ajax_oy_check_address_push_status', array( $this, 'ajax_check_address_push_status' ) );
+
+            // ── Assets/footer del editor del metabox ──────────────────────────────────
+            add_action( 'admin_footer', array( $this, 'render_address_editor_footer_assets' ) );
 
             // ── Hook de WP-Cron para el ciclo de polling post-PATCH ───────────────────
             // Registrado aquí Y en el CPT para garantizar que se ejecute aunque
@@ -117,6 +123,783 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             }
 
             update_post_meta( $post_id, 'location_service_areas', $clean );
+        }
+
+        /**
+         * Normaliza un payload de dirección recibido por POST/AJAX.
+         *
+         * @return array
+         */
+        private function build_address_payload_from_request() {
+            $country = isset( $_POST['location_country'] )
+                ? strtoupper( substr( sanitize_text_field( wp_unslash( $_POST['location_country'] ) ), 0, 2 ) )
+                : '';
+
+            $service_areas_json = isset( $_POST['location_service_areas_json'] )
+                ? wp_unslash( $_POST['location_service_areas_json'] )
+                : '[]';
+
+            $service_areas = json_decode( is_string( $service_areas_json ) ? trim( $service_areas_json ) : '[]', true );
+            if ( ! is_array( $service_areas ) ) {
+                $service_areas = array();
+            }
+
+            $clean_service_areas = array();
+            $seen_service_areas  = array();
+
+            foreach ( $service_areas as $area ) {
+                if ( ! is_string( $area ) ) {
+                    continue;
+                }
+
+                $area = trim( sanitize_text_field( $area ) );
+                if ( '' === $area ) {
+                    continue;
+                }
+
+                $area_key = strtolower( $area );
+                if ( isset( $seen_service_areas[ $area_key ] ) ) {
+                    continue;
+                }
+
+                $seen_service_areas[ $area_key ] = true;
+                $clean_service_areas[]           = $area;
+            }
+
+            return array(
+                'service_area_only'         => ! empty( $_POST['service_area_only'] ) ? '1' : '0',
+                'show_address_to_customers' => ! empty( $_POST['show_address_to_customers'] ) ? '1' : '0',
+                'location_address_line1'    => isset( $_POST['location_address_line1'] ) ? sanitize_text_field( wp_unslash( $_POST['location_address_line1'] ) ) : '',
+                'location_address_line2'    => isset( $_POST['location_address_line2'] ) ? sanitize_text_field( wp_unslash( $_POST['location_address_line2'] ) ) : '',
+                'location_neighborhood'     => isset( $_POST['location_neighborhood'] ) ? sanitize_text_field( wp_unslash( $_POST['location_neighborhood'] ) ) : '',
+                'location_city'             => isset( $_POST['location_city'] ) ? sanitize_text_field( wp_unslash( $_POST['location_city'] ) ) : '',
+                'location_state'            => isset( $_POST['location_state'] ) ? sanitize_text_field( wp_unslash( $_POST['location_state'] ) ) : '',
+                'location_country'          => $country,
+                'location_postal_code'      => isset( $_POST['location_postal_code'] ) ? sanitize_text_field( wp_unslash( $_POST['location_postal_code'] ) ) : '',
+                'location_latitude'         => isset( $_POST['location_latitude'] ) ? sanitize_text_field( wp_unslash( $_POST['location_latitude'] ) ) : '',
+                'location_longitude'        => isset( $_POST['location_longitude'] ) ? sanitize_text_field( wp_unslash( $_POST['location_longitude'] ) ) : '',
+                'location_map_url'          => isset( $_POST['location_map_url'] ) ? esc_url_raw( wp_unslash( $_POST['location_map_url'] ) ) : '',
+                'location_service_areas'    => $clean_service_areas,
+            );
+        }
+
+        /**
+         * Persiste el payload del metabox de dirección directamente en post meta.
+         *
+         * @param int    $post_id
+         * @param array  $payload
+         * @param string $save_source
+         * @return array
+         */
+        private function persist_address_payload( $post_id, array $payload, $save_source = 'manual_metabox_save' ) {
+            $post_id     = absint( $post_id );
+            $save_source = sanitize_key( (string) $save_source );
+
+            if ( ! $post_id ) {
+                return array();
+            }
+
+            $scalar_fields = array(
+                'location_address_line1',
+                'location_address_line2',
+                'location_neighborhood',
+                'location_city',
+                'location_state',
+                'location_country',
+                'location_postal_code',
+                'location_latitude',
+                'location_longitude',
+                'location_map_url',
+            );
+
+            foreach ( $scalar_fields as $meta_key ) {
+                $meta_value = isset( $payload[ $meta_key ] ) ? $payload[ $meta_key ] : '';
+                update_post_meta( $post_id, $meta_key, $meta_value );
+            }
+
+            if ( ! empty( $payload['service_area_only'] ) && '1' === (string) $payload['service_area_only'] ) {
+                update_post_meta( $post_id, 'service_area_only', '1' );
+            } else {
+                delete_post_meta( $post_id, 'service_area_only' );
+            }
+
+            if ( ! empty( $payload['show_address_to_customers'] ) && '1' === (string) $payload['show_address_to_customers'] ) {
+                update_post_meta( $post_id, 'show_address_to_customers', '1' );
+            } else {
+                delete_post_meta( $post_id, 'show_address_to_customers' );
+            }
+
+            update_post_meta(
+                $post_id,
+                'location_service_areas',
+                isset( $payload['location_service_areas'] ) && is_array( $payload['location_service_areas'] )
+                    ? array_values( $payload['location_service_areas'] )
+                    : array()
+            );
+
+            $now_ts   = current_time( 'timestamp' );
+            $user     = wp_get_current_user();
+            $by       = ( $user instanceof WP_User && ! empty( $user->user_login ) ) ? $user->user_login : 'system';
+            $at_label = date_i18n(
+                get_option( 'date_format' ) . ' ' . get_option( 'time_format' ),
+                $now_ts
+            );
+
+            $save_meta = array(
+                'at'       => gmdate( 'Y-m-d\TH:i:s\Z', $now_ts ),
+                'at_ts'    => $now_ts,
+                'at_label' => $at_label,
+                'by'       => $by,
+                'source'   => $save_source,
+            );
+
+            update_post_meta( $post_id, 'oy_address_last_manual_save', $save_meta );
+            update_post_meta( $post_id, 'oy_address_local_pending_publish', '1' );
+            update_post_meta( $post_id, 'date_modified', current_time( 'mysql' ) );
+            update_post_meta( $post_id, 'modified_by_user_id', get_current_user_id() );
+
+            $job = get_post_meta( $post_id, 'gmb_address_push_job', true );
+            if ( is_array( $job ) ) {
+                if ( ! isset( $job['history'] ) || ! is_array( $job['history'] ) ) {
+                    $job['history'] = array();
+                }
+
+                $job['history'][] = array(
+                    'event'  => 'local_metabox_save',
+                    'at'     => $save_meta['at'],
+                    'at_ts'  => $save_meta['at_ts'],
+                    'by'     => $by,
+                    'detail' => 'Se guardaron cambios locales del metabox de dirección. Pendiente por publicar en GMB.',
+                );
+
+                update_post_meta( $post_id, 'gmb_address_push_job', $job );
+            }
+
+            return $save_meta;
+        }
+
+        /**
+         * Guarda los campos del metabox de dirección sin depender del botón Actualizar del CPT.
+         *
+         * @return void
+         */
+        public function ajax_save_address_metabox() {
+            $nonce   = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+            $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+
+            if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_save_address_metabox_' . $post_id ) ) {
+                wp_send_json_error( array(
+                    'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ),
+                ) );
+            }
+
+            if ( ! current_user_can( 'edit_post', $post_id ) ) {
+                wp_send_json_error( array(
+                    'message' => __( 'No tienes permisos para guardar esta ubicación.', 'lealez' ),
+                ) );
+            }
+
+            $post = get_post( $post_id );
+            if ( ! $post || 'oy_location' !== $post->post_type ) {
+                wp_send_json_error( array(
+                    'message' => __( 'El post indicado no es una ubicación válida.', 'lealez' ),
+                ) );
+            }
+
+            $payload   = $this->build_address_payload_from_request();
+            $save_meta = $this->persist_address_payload( $post_id, $payload, 'manual_metabox_save' );
+
+            wp_send_json_success( array(
+                'message'               => __( 'Cambios del metabox guardados correctamente. Ya puedes usar "Enviar a GMB" y se publicará exactamente lo que acabas de guardar.', 'lealez' ),
+                'saved_at'              => isset( $save_meta['at'] ) ? $save_meta['at'] : '',
+                'saved_at_label'        => isset( $save_meta['at_label'] ) ? $save_meta['at_label'] : '',
+                'saved_by'              => isset( $save_meta['by'] ) ? $save_meta['by'] : '',
+                'panel_html'            => $this->render_address_push_panel( $post_id ),
+                'local_pending_publish' => true,
+            ) );
+        }
+
+        /**
+         * Renderiza el JS/CSS del modo Editar / Guardar propio del metabox.
+         *
+         * @return void
+         */
+        public function render_address_editor_footer_assets() {
+            if ( ! is_admin() ) {
+                return;
+            }
+
+            $screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+            if ( ! $screen || 'oy_location' !== $screen->post_type ) {
+                return;
+            }
+
+            if ( ! in_array( $screen->base, array( 'post', 'post-new' ), true ) ) {
+                return;
+            }
+
+            global $post;
+            if ( ! $post || 'oy_location' !== $post->post_type ) {
+                return;
+            }
+
+            $post_id           = (int) $post->ID;
+            $save_nonce        = wp_create_nonce( 'oy_save_address_metabox_' . $post_id );
+            $local_pending     = (bool) get_post_meta( $post_id, 'oy_address_local_pending_publish', true );
+            $last_manual_save  = get_post_meta( $post_id, 'oy_address_last_manual_save', true );
+            $last_manual_label = ( is_array( $last_manual_save ) && ! empty( $last_manual_save['at_label'] ) )
+                ? (string) $last_manual_save['at_label']
+                : '';
+            ?>
+            <style id="oy-address-editor-style">
+                #oy_location_address .oy-address-editor-bar{
+                    display:flex;
+                    align-items:center;
+                    gap:10px;
+                    flex-wrap:wrap;
+                    padding:10px 14px;
+                    margin:0 0 16px;
+                    border:1px solid #dadce0;
+                    border-radius:4px;
+                    background:#fff;
+                }
+                #oy_location_address .oy-address-editor-status{
+                    font-size:12px;
+                    color:#555;
+                }
+                #oy_location_address .oy-address-readonly{
+                    background:#f6f7f7 !important;
+                    color:#50575e !important;
+                    cursor:not-allowed !important;
+                }
+                #oy_location_address .oy-address-editor-note{
+                    display:block;
+                    width:100%;
+                    font-size:11px;
+                    color:#666;
+                }
+                #oy_location_address.oy-address-editing-active .oy-address-editor-bar{
+                    border-color:#2271b1;
+                    background:#f0f6fc;
+                }
+                #oy_location_address .oy-address-local-pending{
+                    display:block;
+                    width:100%;
+                    margin-top:4px;
+                    font-size:11px;
+                    color:#1d4ed8;
+                }
+            </style>
+            <script type="text/javascript">
+                (function() {
+                    var $ = jQuery;
+                    var ajaxUrl   = (typeof ajaxurl !== 'undefined') ? ajaxurl : <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
+                    var postId    = <?php echo wp_json_encode( (string) $post_id ); ?>;
+                    var saveNonce = <?php echo wp_json_encode( $save_nonce ); ?>;
+                    var localPending = <?php echo $local_pending ? 'true' : 'false'; ?>;
+                    var lastManualLabel = <?php echo wp_json_encode( $last_manual_label ); ?>;
+
+                    var editorState = {
+                        enabled: false,
+                        dirty: false,
+                        saving: false,
+                        baseline: null
+                    };
+
+                    var FIELD_MAP = [
+                        { key: 'service_area_only',         selector: '#service_area_only',           label: 'Sin ubicación física', type: 'checkbox' },
+                        { key: 'show_address_to_customers', selector: '#show_address_to_customers',   label: 'Mostrar dirección',   type: 'checkbox' },
+                        { key: 'location_address_line1',    selector: '#location_address_line1',      label: 'Dirección Principal' },
+                        { key: 'location_address_line2',    selector: '#location_address_line2',      label: 'Complemento' },
+                        { key: 'location_neighborhood',     selector: '#location_neighborhood',       label: 'Barrio/Colonia' },
+                        { key: 'location_city',             selector: '#location_city',               label: 'Ciudad' },
+                        { key: 'location_state',            selector: '#location_state',              label: 'Estado/Dpto' },
+                        { key: 'location_country',          selector: '#location_country',            label: 'País (ISO 2)' },
+                        { key: 'location_postal_code',      selector: '#location_postal_code',        label: 'Código Postal' },
+                        { key: 'location_latitude',         selector: '#location_latitude',           label: 'Latitud' },
+                        { key: 'location_longitude',        selector: '#location_longitude',          label: 'Longitud' },
+                        { key: 'location_map_url',          selector: '#location_map_url',            label: 'URL Google Maps' },
+                        { key: 'location_service_areas',    selector: '#location_service_areas_json', label: 'Áreas de Servicio', type: 'json' }
+                    ];
+
+                    function ensureUi() {
+                        var $metabox = $('#oy_location_address');
+                        if (!$metabox.length) {
+                            return;
+                        }
+
+                        if ($metabox.find('.oy-address-editor-bar').length) {
+                            return;
+                        }
+
+                        var barHtml = ''
+                            + '<div class="oy-address-editor-bar">'
+                            + '  <button type="button" class="button button-primary" id="oy-address-editor-start">Editar dirección</button>'
+                            + '  <button type="button" class="button button-primary" id="oy-address-editor-save" style="display:none;">Guardar cambios del metabox</button>'
+                            + '  <button type="button" class="button button-secondary" id="oy-address-editor-cancel" style="display:none;">Cancelar edición</button>'
+                            + '  <span class="oy-address-editor-status" id="oy-address-editor-status"></span>'
+                            + '  <span class="oy-address-editor-note">Los cambios de este metabox NO se guardan con el botón "Actualizar" del CPT. Debes usar "Guardar cambios del metabox".</span>'
+                            + (localPending ? '<span class="oy-address-local-pending" id="oy-address-local-pending-note">Hay cambios locales guardados pendientes por publicar en GMB.</span>' : '<span class="oy-address-local-pending" id="oy-address-local-pending-note" style="display:none;"></span>')
+                            + '</div>';
+
+                        var $anchor = $('#oy-address-sync-bar');
+                        if ($anchor.length) {
+                            $(barHtml).insertAfter($anchor);
+                        } else {
+                            $metabox.find('.inside').prepend(barHtml);
+                        }
+                    }
+
+                    function parseJsonSafe(raw) {
+                        try {
+                            var parsed = JSON.parse(raw || '[]');
+                            return Array.isArray(parsed) ? parsed : [];
+                        } catch (e) {
+                            return [];
+                        }
+                    }
+
+                    function captureState() {
+                        var state = {};
+                        FIELD_MAP.forEach(function(field) {
+                            if (field.type === 'checkbox') {
+                                state[field.key] = $(field.selector).is(':checked') ? '1' : '0';
+                                return;
+                            }
+
+                            if (field.type === 'json') {
+                                state[field.key] = parseJsonSafe($(field.selector).val() || '[]');
+                                return;
+                            }
+
+                            state[field.key] = ($(field.selector).val() || '').toString();
+                        });
+                        return state;
+                    }
+
+                    function statesEqual(a, b) {
+                        return JSON.stringify(a || {}) === JSON.stringify(b || {});
+                    }
+
+                    function buildDiff(before, after) {
+                        var rows = [];
+
+                        FIELD_MAP.forEach(function(field) {
+                            var beforeVal = before[field.key];
+                            var afterVal  = after[field.key];
+
+                            var beforeText;
+                            var afterText;
+
+                            if (field.type === 'checkbox') {
+                                beforeText = beforeVal === '1' ? 'Sí' : 'No';
+                                afterText  = afterVal === '1' ? 'Sí' : 'No';
+                            } else if (field.type === 'json') {
+                                beforeText = Array.isArray(beforeVal) ? beforeVal.join(', ') : '';
+                                afterText  = Array.isArray(afterVal) ? afterVal.join(', ') : '';
+                            } else {
+                                beforeText = (beforeVal || '').toString();
+                                afterText  = (afterVal || '').toString();
+                            }
+
+                            var status = beforeText === afterText ? 'unchanged' : ( beforeText ? 'changed' : 'new' );
+
+                            rows.push({
+                                label: field.label,
+                                before: beforeText,
+                                after: afterText,
+                                status: status
+                            });
+                        });
+
+                        return rows;
+                    }
+
+                    function applyState(state) {
+                        if (!state) {
+                            return;
+                        }
+
+                        FIELD_MAP.forEach(function(field) {
+                            if (field.type === 'checkbox') {
+                                $(field.selector).prop('checked', state[field.key] === '1');
+                                return;
+                            }
+
+                            if (field.type === 'json') {
+                                var jsonValue = Array.isArray(state[field.key]) ? state[field.key] : [];
+                                $('#location_service_areas_json').val(JSON.stringify(jsonValue));
+                                if (typeof window.oy_service_areas_set === 'function') {
+                                    window.oy_service_areas_set(jsonValue);
+                                }
+                                return;
+                            }
+
+                            $(field.selector).val(state[field.key] || '');
+                        });
+
+                        if (typeof window.oy_toggle_address_fields === 'function') {
+                            window.oy_toggle_address_fields();
+                        }
+                        if (typeof window.oy_update_map_preview === 'function') {
+                            window.oy_update_map_preview();
+                        }
+                    }
+
+                    function setStatus(message, type) {
+                        var colors = {
+                            info: '#555',
+                            success: '#166534',
+                            error: '#dc3232',
+                            loading: '#1a73e8'
+                        };
+
+                        $('#oy-address-editor-status')
+                            .text(message || '')
+                            .css('color', colors[type] || '#555');
+                    }
+
+                    function setPushStatus(message, type) {
+                        var colors = {
+                            info: '#555',
+                            success: '#166534',
+                            error: '#dc3232',
+                            loading: '#1a73e8'
+                        };
+
+                        $('#oy-push-state-action-msg')
+                            .text(message || '')
+                            .css({
+                                color: colors[type] || '#555',
+                                display: message ? 'block' : 'none'
+                            });
+                    }
+
+                    function updateUiState() {
+                        var lock = !editorState.enabled;
+
+                        [
+                            '#location_address_line1',
+                            '#location_address_line2',
+                            '#location_neighborhood',
+                            '#location_city',
+                            '#location_state',
+                            '#location_country',
+                            '#location_postal_code',
+                            '#location_latitude',
+                            '#location_longitude',
+                            '#location_map_url',
+                            '#oy-service-area-search'
+                        ].forEach(function(selector) {
+                            $(selector).prop('readonly', lock).toggleClass('oy-address-readonly', lock);
+                        });
+
+                        $('#oy_location_address')
+                            .toggleClass('oy-address-editing-active', editorState.enabled);
+
+                        $('#oy-address-editor-start').toggle(!editorState.enabled);
+                        $('#oy-address-editor-save, #oy-address-editor-cancel').toggle(editorState.enabled);
+                        $('#oy-address-editor-save').prop('disabled', !editorState.dirty || editorState.saving);
+                    }
+
+                    function refreshDirtyState() {
+                        editorState.dirty = !statesEqual(editorState.baseline, captureState());
+                        updateUiState();
+                    }
+
+                    function beginEditMode() {
+                        if (!postId || postId === '0') {
+                            setStatus('Guarda primero la ubicación para poder editar este metabox de forma independiente.', 'error');
+                            return;
+                        }
+
+                        editorState.baseline = captureState();
+                        editorState.enabled  = true;
+                        editorState.dirty    = false;
+                        updateUiState();
+                        setStatus('Modo edición activo. Cuando termines, usa "Guardar cambios del metabox".', 'info');
+                    }
+
+                    function cancelEditMode() {
+                        applyState(editorState.baseline || {});
+                        editorState.enabled = false;
+                        editorState.dirty   = false;
+                        updateUiState();
+                        setStatus('Edición cancelada. Se restauró el último estado guardado.', 'info');
+                    }
+
+                    function replacePushPanel(html) {
+                        if (!html) {
+                            return;
+                        }
+
+                        var $old = $('#oy-address-push-panel');
+                        if (!$old.length) {
+                            return;
+                        }
+
+                        var $new = $(html);
+                        $old.replaceWith($new);
+                    }
+
+                    function addMetaboxLogEntry(diffRows, savedAtLabel) {
+                        if (!window.oyAddrLogAPI || typeof window.oyAddrLogAPI.addLogEntry !== 'function') {
+                            return;
+                        }
+
+                        window.oyAddrLogAPI.addLogEntry(
+                            {
+                                action: 'manual_address_save',
+                                saved_at: savedAtLabel || '',
+                                message: 'Cambios locales del metabox guardados',
+                                pending_publish: true
+                            },
+                            diffRows,
+                            'metabox_save'
+                        );
+                    }
+
+                    function collectAjaxPayload() {
+                        var state = captureState();
+
+                        return {
+                            action:                      'oy_save_address_metabox',
+                            nonce:                       saveNonce,
+                            post_id:                     postId,
+                            service_area_only:           state.service_area_only === '1' ? '1' : '',
+                            show_address_to_customers:   state.show_address_to_customers === '1' ? '1' : '',
+                            location_address_line1:      state.location_address_line1,
+                            location_address_line2:      state.location_address_line2,
+                            location_neighborhood:       state.location_neighborhood,
+                            location_city:               state.location_city,
+                            location_state:              state.location_state,
+                            location_country:            state.location_country,
+                            location_postal_code:        state.location_postal_code,
+                            location_latitude:           state.location_latitude,
+                            location_longitude:          state.location_longitude,
+                            location_map_url:            state.location_map_url,
+                            location_service_areas_json: JSON.stringify(state.location_service_areas || [])
+                        };
+                    }
+
+                    function saveMetabox() {
+                        if (!editorState.enabled || editorState.saving) {
+                            return;
+                        }
+
+                        var before = editorState.baseline || captureState();
+                        var after  = captureState();
+                        var diff   = buildDiff(before, after);
+                        var hasRealChanges = diff.some(function(row) {
+                            return row.status === 'changed' || row.status === 'new';
+                        });
+
+                        if (!hasRealChanges) {
+                            setStatus('No hay cambios para guardar en el metabox.', 'info');
+                            return;
+                        }
+
+                        editorState.saving = true;
+                        updateUiState();
+                        setStatus('Guardando cambios del metabox...', 'loading');
+
+                        $.ajax({
+                            url: ajaxUrl,
+                            type: 'POST',
+                            timeout: 45000,
+                            data: collectAjaxPayload()
+                        })
+                        .done(function(resp) {
+                            if (!resp || !resp.success) {
+                                var errorMessage = (resp && resp.data && resp.data.message)
+                                    ? resp.data.message
+                                    : 'No se pudieron guardar los cambios del metabox.';
+                                setStatus(errorMessage, 'error');
+                                return;
+                            }
+
+                            editorState.baseline = captureState();
+                            editorState.enabled  = false;
+                            editorState.dirty    = false;
+                            localPending = true;
+
+                            updateUiState();
+                            setStatus(resp.data && resp.data.message ? resp.data.message : 'Cambios del metabox guardados correctamente.', 'success');
+
+                            if (resp.data && resp.data.panel_html) {
+                                replacePushPanel(resp.data.panel_html);
+                            }
+
+                            $('#oy-address-local-pending-note')
+                                .text('Hay cambios locales guardados pendientes por publicar en GMB.')
+                                .show();
+
+                            addMetaboxLogEntry(diff, resp.data && resp.data.saved_at_label ? resp.data.saved_at_label : '');
+                        })
+                        .fail(function(xhr, status) {
+                            var message = (status === 'timeout')
+                                ? 'Timeout al guardar el metabox. Intenta de nuevo.'
+                                : 'Error de red al guardar el metabox.';
+                            setStatus(message, 'error');
+                        })
+                        .always(function() {
+                            editorState.saving = false;
+                            updateUiState();
+                        });
+                    }
+
+                    function blockIfNotEditing(event, message) {
+                        if (editorState.enabled) {
+                            return false;
+                        }
+
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (typeof event.stopImmediatePropagation === 'function') {
+                            event.stopImmediatePropagation();
+                        }
+
+                        setStatus(message, 'error');
+                        return true;
+                    }
+
+                    function lockCheckboxInteraction() {
+                        $(document).on('click.oyAddrEditLock', '#service_area_only, #show_address_to_customers', function(event) {
+                            if (blockIfNotEditing(event, 'Activa primero "Editar dirección" para modificar estos campos.')) {
+                                return false;
+                            }
+
+                            setTimeout(function() {
+                                refreshDirtyState();
+                            }, 0);
+                        });
+                    }
+
+                    function lockServiceAreaInteraction() {
+                        $(document).on('click.oyAddrEditLock', '#oy-service-area-selected button, #oy-service-area-suggestions > div', function(event) {
+                            if (editorState.enabled) {
+                                setTimeout(function() {
+                                    refreshDirtyState();
+                                }, 0);
+                                return;
+                            }
+
+                            blockIfNotEditing(event, 'Activa primero "Editar dirección" para cambiar las áreas de servicio.');
+                        });
+
+                        $(document).on('focus.oyAddrEditLock input.oyAddrEditLock', '#oy-service-area-search', function() {
+                            if (!editorState.enabled) {
+                                $(this).blur();
+                                setStatus('Activa primero "Editar dirección" para cambiar las áreas de servicio.', 'error');
+                            }
+                        });
+
+                        $(document).on('input.oyAddrEditLock', '#oy-service-area-search', function() {
+                            if (!editorState.enabled) {
+                                $(this).val('');
+                            }
+                        });
+                    }
+
+                    function bindDirtyWatchers() {
+                        $(document).on(
+                            'input.oyAddrEdit change.oyAddrEdit',
+                            '#location_address_line1, #location_address_line2, #location_neighborhood, #location_city, #location_state, #location_country, #location_postal_code, #location_latitude, #location_longitude, #location_map_url, #location_service_areas_json',
+                            function() {
+                                if (!editorState.enabled) {
+                                    return;
+                                }
+                                refreshDirtyState();
+                            }
+                        );
+                    }
+
+                    function bindButtons() {
+                        $(document).on('click.oyAddrEdit', '#oy-address-editor-start', function(event) {
+                            event.preventDefault();
+                            beginEditMode();
+                        });
+
+                        $(document).on('click.oyAddrEdit', '#oy-address-editor-cancel', function(event) {
+                            event.preventDefault();
+                            cancelEditMode();
+                        });
+
+                        $(document).on('click.oyAddrEdit', '#oy-address-editor-save', function(event) {
+                            event.preventDefault();
+                            saveMetabox();
+                        });
+                    }
+
+                    function guardCptSaveButtons() {
+                        document.addEventListener('click', function(event) {
+                            var saveButton = event.target.closest('#publish, #save-post');
+                            if (!saveButton) {
+                                return;
+                            }
+
+                            if (editorState.enabled && editorState.dirty) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (typeof event.stopImmediatePropagation === 'function') {
+                                    event.stopImmediatePropagation();
+                                }
+                                setStatus('Primero guarda los cambios del metabox de dirección antes de usar "Actualizar" o "Guardar borrador".', 'error');
+                            }
+                        }, true);
+                    }
+
+                    function guardExternalButtons() {
+                        document.addEventListener('click', function(event) {
+                            var pushButton = event.target.closest('#oy-push-address-btn');
+                            if (pushButton && editorState.enabled && editorState.dirty) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (typeof event.stopImmediatePropagation === 'function') {
+                                    event.stopImmediatePropagation();
+                                }
+                                setPushStatus('Primero guarda los cambios del metabox de dirección. "Enviar a GMB" usa únicamente lo que ya quedó guardado.', 'error');
+                                setStatus('Primero guarda los cambios del metabox de dirección.', 'error');
+                                return;
+                            }
+
+                            var syncButton = event.target.closest('#oy-address-sync-btn');
+                            if (syncButton && editorState.enabled && editorState.dirty) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (typeof event.stopImmediatePropagation === 'function') {
+                                    event.stopImmediatePropagation();
+                                }
+                                setStatus('Primero guarda o cancela la edición actual antes de sincronizar desde GMB.', 'error');
+                            }
+                        }, true);
+                    }
+
+                    $(document).ready(function() {
+                        if (!$('#oy_location_address').length) {
+                            return;
+                        }
+
+                        ensureUi();
+                        editorState.baseline = captureState();
+                        updateUiState();
+
+                        if (lastManualLabel) {
+                            setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info');
+                        } else if (localPending) {
+                            setStatus('Hay cambios locales pendientes por publicar en GMB.', 'info');
+                        }
+
+                        lockCheckboxInteraction();
+                        lockServiceAreaInteraction();
+                        bindDirtyWatchers();
+                        bindButtons();
+                        guardCptSaveButtons();
+                        guardExternalButtons();
+                    });
+                })();
+            </script>
+            <?php
         }
 
         /**
@@ -493,6 +1276,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
             update_post_meta( $post_id, 'gmb_address_push_job', $job );
 
+            if ( 'applied' === $new_status ) {
+                delete_post_meta( $post_id, 'oy_address_local_pending_publish' );
+            }
+
             wp_send_json_success( array(
                 'message'    => '',
                 'status'     => $new_status,
@@ -592,6 +1379,10 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             }
 
             update_post_meta( $post_id, 'gmb_address_push_job', $job );
+
+            if ( 'applied' === $new_status ) {
+                delete_post_meta( $post_id, 'oy_address_local_pending_publish' );
+            }
 
             // Si todavía está pendiente, programar el siguiente ciclo
             if ( 'pending_review' === $new_status ) {
@@ -714,9 +1505,17 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
             $push_nonce   = wp_create_nonce( 'oy_push_address_gmb_' . $post_id );
             $check_nonce  = wp_create_nonce( 'oy_check_push_status_' . $post_id );
 
-            $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
-            $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-            $gmb_connected = ! empty( $business_id ) && ! empty( $location_name );
+            $business_id        = (int) get_post_meta( $post_id, 'parent_business_id', true );
+            $location_name      = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+            $gmb_connected      = ! empty( $business_id ) && ! empty( $location_name );
+            $local_pending      = (bool) get_post_meta( $post_id, 'oy_address_local_pending_publish', true );
+            $last_manual_save   = get_post_meta( $post_id, 'oy_address_last_manual_save', true );
+            $last_manual_label  = ( is_array( $last_manual_save ) && ! empty( $last_manual_save['at_label'] ) ) ? (string) $last_manual_save['at_label'] : '';
+            $last_manual_user   = ( is_array( $last_manual_save ) && ! empty( $last_manual_save['by'] ) ) ? (string) $last_manual_save['by'] : '';
+
+            $job_status         = is_array( $job ) ? (string) ( $job['status'] ?? '' ) : '';
+            $push_is_locked     = in_array( $job_status, array( 'pending_review', 'queued' ), true );
+            $push_disabled_attr = ( $gmb_connected && ! $push_is_locked ) ? '' : 'disabled';
 
             ob_start();
             ?>
@@ -737,7 +1536,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         <button type="button"
                                 id="oy-push-address-btn"
                                 class="button button-primary"
-                                <?php echo ( $gmb_connected ) ? '' : 'disabled'; ?>
+                                <?php echo $push_disabled_attr; ?>
                                 style="display:inline-flex; align-items:center; gap:6px;">
                             <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
                             <?php _e( 'Enviar a GMB', 'lealez' ); ?>
@@ -756,6 +1555,22 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
 
                     </div>
                 </div>
+
+                <?php if ( $local_pending ) : ?>
+                    <div style="padding:10px 14px; background:#eef4ff; border-bottom:1px solid #d7e3ff;">
+                        <p style="margin:0; font-size:12px; color:#1d4ed8; font-weight:600;">
+                            <?php _e( 'Hay cambios locales guardados en este metabox pendientes por publicar en GMB.', 'lealez' ); ?>
+                        </p>
+                        <?php if ( $last_manual_label ) : ?>
+                            <p style="margin:4px 0 0; font-size:11px; color:#4b5563;">
+                                <?php printf( esc_html__( 'Último guardado local: %s', 'lealez' ), esc_html( $last_manual_label ) ); ?>
+                                <?php if ( $last_manual_user ) : ?>
+                                    &nbsp;·&nbsp;<?php printf( esc_html__( 'por %s', 'lealez' ), esc_html( $last_manual_user ) ); ?>
+                                <?php endif; ?>
+                            </p>
+                        <?php endif; ?>
+                    </div>
+                <?php endif; ?>
 
                 <?php /* ── Aviso: GMB no conectado ── */ ?>
                 <?php if ( ! $gmb_connected ) : ?>
@@ -822,7 +1637,7 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                 <?php else : ?>
                     <div style="padding:10px 14px;">
                         <p style="margin:0; font-size:12px; color:#888; font-style:italic;">
-                            <?php _e( 'Ningún cambio enviado aún. Edita los campos de dirección, guarda el post y luego usa "Enviar a GMB".', 'lealez' ); ?>
+                            <?php _e( 'Ningún cambio enviado aún. Activa "Editar dirección", guarda los cambios del metabox y luego usa "Enviar a GMB".', 'lealez' ); ?>
                         </p>
                     </div>
                 <?php endif; ?>
