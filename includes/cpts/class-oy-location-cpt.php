@@ -3970,13 +3970,32 @@ private function humanize_attribute_id( $attr_id ) {
 
         /**
          * ✅ Importación desde Google al guardar (si está activado y hay business + location_name)
+         *
+         * IMPORTANTE:
+         * Si el metabox de dirección tiene cambios locales pendientes por publicar
+         * o un push de dirección sigue en revisión en Google, se omite el import-on-save.
+         * De lo contrario, la importación automática volvería a traer la dirección vieja
+         * desde GMB y sobrescribiría la edición local recién guardada.
          */
-        $business_id     = (int) get_post_meta( $post_id, 'parent_business_id', true );
-        $location_name   = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-        $import_on_save  = (int) get_post_meta( $post_id, 'gmb_import_on_save', true );
+        $business_id           = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name         = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        $import_on_save        = (int) get_post_meta( $post_id, 'gmb_import_on_save', true );
+        $address_local_pending = (bool) get_post_meta( $post_id, 'oy_address_local_pending_publish', true );
+        $address_push_job      = get_post_meta( $post_id, 'gmb_address_push_job', true );
+        $address_push_pending  = is_array( $address_push_job ) && in_array( (string) ( $address_push_job['status'] ?? '' ), array( 'pending_review', 'queued' ), true );
 
         if ( $import_on_save === 1 && $business_id && ! empty( $location_name ) ) {
-            $this->import_location_from_gmb_and_map_fields( $post_id, $business_id, $location_name );
+            if ( $address_local_pending || $address_push_pending ) {
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log(
+                        '[OY Location] save_meta_boxes — import_on_save omitido para proteger cambios locales de Dirección y Geolocalización. '
+                        . 'local_pending=' . ( $address_local_pending ? '1' : '0' )
+                        . ' | push_pending=' . ( $address_push_pending ? '1' : '0' )
+                    );
+                }
+            } else {
+                $this->import_location_from_gmb_and_map_fields( $post_id, $business_id, $location_name );
+            }
         }
     }
 
