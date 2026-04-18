@@ -51,6 +51,16 @@ class Lealez_GMB_Settings {
                 'default'           => '',
             )
         );
+
+        register_setting(
+            'lealez_gmb_settings_group',
+            'lealez_places_api_key',
+            array(
+                'type'              => 'string',
+                'sanitize_callback' => 'sanitize_text_field',
+                'default'           => '',
+            )
+        );
     }
 
     /**
@@ -77,8 +87,9 @@ class Lealez_GMB_Settings {
         }
 
         // Get saved settings
-        $client_id     = get_option( 'lealez_gmb_client_id', '' );
-        $client_secret = get_option( 'lealez_gmb_client_secret', '' );
+        $client_id       = get_option( 'lealez_gmb_client_id', '' );
+        $client_secret   = get_option( 'lealez_gmb_client_secret', '' );
+        $places_api_key  = get_option( 'lealez_places_api_key', '' );
 
         // Get the redirect URI
         $redirect_uri = admin_url( 'admin.php?page=lealez-gmb-callback' );
@@ -90,21 +101,29 @@ class Lealez_GMB_Settings {
                 <h3><?php _e( 'Setup Instructions:', 'lealez' ); ?></h3>
                 <ol>
                     <li>
-                        <?php _e( 'Go to Google Cloud Console:', 'lealez' ); ?> 
-                        <a href="https://console.cloud.google.com/" target="_blank">https://console.cloud.google.com/</a>
+                        <?php _e( 'Go to Google Cloud Console:', 'lealez' ); ?>
+                        <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">https://console.cloud.google.com/</a>
                     </li>
                     <li><?php _e( 'Create a new project or select an existing one', 'lealez' ); ?></li>
                     <li>
                         <?php _e( 'Enable the following APIs in the API Library:', 'lealez' ); ?>
                         <ul style="margin-top: 8px; margin-left: 20px;">
-                            <li><strong>My Business Business Information API</strong> <?php _e( '(required for location data)', 'lealez' ); ?></li>
+                            <li><strong>My Business Business Information API</strong> <?php _e( '(required for location data and PATCH to GBP)', 'lealez' ); ?></li>
                             <li><strong>My Business Account Management API</strong> <?php _e( '(required for account access)', 'lealez' ); ?></li>
+                            <li><strong>Places API (New)</strong> <?php _e( '(required for predictive service-area autocomplete)', 'lealez' ); ?></li>
                         </ul>
                         <p style="margin-left: 20px; color: #d63638; font-weight: bold;">
-                            <?php _e( '⚠️ IMPORTANT: Both APIs must be enabled or you will get permission errors!', 'lealez' ); ?>
+                            <?php _e( '⚠️ IMPORTANT: If you want the predictive field for "Áreas de servicio", you must also enable Places API (New).', 'lealez' ); ?>
                         </p>
                     </li>
-                    <li><?php _e( 'Go to "Credentials" and create an OAuth 2.0 Client ID', 'lealez' ); ?></li>
+                    <li><?php _e( 'Go to "Credentials" and create an OAuth 2.0 Client ID for Google Business Profile', 'lealez' ); ?></li>
+                    <li>
+                        <?php _e( 'Create an API Key for Places API (New)', 'lealez' ); ?>
+                        <ul style="margin-top: 8px; margin-left: 20px; list-style: disc;">
+                            <li><?php _e( 'Restrict the key to Places API (New)', 'lealez' ); ?></li>
+                            <li><?php _e( 'Prefer server-side/IP restriction because Lealez will call Places from wp-admin AJAX', 'lealez' ); ?></li>
+                        </ul>
+                    </li>
                     <li>
                         <?php _e( 'Configure the OAuth consent screen:', 'lealez' ); ?>
                         <ul style="margin-top: 8px; margin-left: 20px; list-style: disc;">
@@ -127,7 +146,7 @@ class Lealez_GMB_Settings {
                         </ul>
                     </li>
                     <li><?php _e( 'Add the Redirect URI shown below to your OAuth client', 'lealez' ); ?></li>
-                    <li><?php _e( 'Copy the Client ID and Client Secret and paste them below', 'lealez' ); ?></li>
+                    <li><?php _e( 'Copy the Client ID, Client Secret and Places API Key and paste them below', 'lealez' ); ?></li>
                 </ol>
             </div>
 
@@ -138,7 +157,7 @@ class Lealez_GMB_Settings {
                 ?>
 
                 <h2><?php _e( 'Google OAuth Configuration', 'lealez' ); ?></h2>
-                <p><?php _e( 'Configure your Google OAuth credentials to enable Google My Business integration.', 'lealez' ); ?></p>
+                <p><?php _e( 'Configure your Google OAuth credentials to enable Google Business Profile integration.', 'lealez' ); ?></p>
 
                 <table class="form-table">
                     <tr>
@@ -146,14 +165,14 @@ class Lealez_GMB_Settings {
                             <label for="lealez_gmb_client_id"><?php _e( 'Client ID', 'lealez' ); ?></label>
                         </th>
                         <td>
-                            <input type="text" 
-                                   id="lealez_gmb_client_id" 
-                                   name="lealez_gmb_client_id" 
-                                   value="<?php echo esc_attr( $client_id ); ?>" 
-                                   class="regular-text" 
+                            <input type="text"
+                                   id="lealez_gmb_client_id"
+                                   name="lealez_gmb_client_id"
+                                   value="<?php echo esc_attr( $client_id ); ?>"
+                                   class="regular-text"
                                    placeholder="123456789-abcdefg.apps.googleusercontent.com"
                                    style="width: 500px;">
-                            <p class="description"><?php _e( 'Your Google OAuth Client ID', 'lealez' ); ?></p>
+                            <p class="description"><?php _e( 'Your Google OAuth Client ID.', 'lealez' ); ?></p>
                         </td>
                     </tr>
 
@@ -162,13 +181,31 @@ class Lealez_GMB_Settings {
                             <label for="lealez_gmb_client_secret"><?php _e( 'Client Secret', 'lealez' ); ?></label>
                         </th>
                         <td>
-                            <input type="password" 
-                                   id="lealez_gmb_client_secret" 
-                                   name="lealez_gmb_client_secret" 
-                                   value="<?php echo esc_attr( $client_secret ); ?>" 
-                                   class="regular-text" 
+                            <input type="password"
+                                   id="lealez_gmb_client_secret"
+                                   name="lealez_gmb_client_secret"
+                                   value="<?php echo esc_attr( $client_secret ); ?>"
+                                   class="regular-text"
                                    placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxx">
-                            <p class="description"><?php _e( 'Your Google OAuth Client Secret', 'lealez' ); ?></p>
+                            <p class="description"><?php _e( 'Your Google OAuth Client Secret.', 'lealez' ); ?></p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th scope="row">
+                            <label for="lealez_places_api_key"><?php _e( 'Places API Key', 'lealez' ); ?></label>
+                        </th>
+                        <td>
+                            <input type="password"
+                                   id="lealez_places_api_key"
+                                   name="lealez_places_api_key"
+                                   value="<?php echo esc_attr( $places_api_key ); ?>"
+                                   class="regular-text"
+                                   placeholder="AIzaSy..."
+                                   style="width: 500px;">
+                            <p class="description">
+                                <?php _e( 'API Key used by the "Áreas de servicio" predictive field via Places API (New). Restrict it to Places API (New) and keep it server-side.', 'lealez' ); ?>
+                            </p>
                         </td>
                     </tr>
 
@@ -177,10 +214,10 @@ class Lealez_GMB_Settings {
                             <label for="lealez_gmb_redirect_uri"><?php _e( 'Redirect URI', 'lealez' ); ?></label>
                         </th>
                         <td>
-                            <input type="text" 
-                                   id="lealez_gmb_redirect_uri" 
-                                   value="<?php echo esc_url( $redirect_uri ); ?>" 
-                                   class="regular-text" 
+                            <input type="text"
+                                   id="lealez_gmb_redirect_uri"
+                                   value="<?php echo esc_url( $redirect_uri ); ?>"
+                                   class="regular-text"
                                    readonly
                                    style="width: 500px;">
                             <button type="button" class="button" onclick="navigator.clipboard.writeText('<?php echo esc_js( $redirect_uri ); ?>')">
@@ -196,11 +233,11 @@ class Lealez_GMB_Settings {
                 <?php submit_button( __( 'Save Changes', 'lealez' ) ); ?>
             </form>
 
-            <?php if ( ! empty( $client_id ) && ! empty( $client_secret ) ) : ?>
+            <?php if ( ! empty( $client_id ) && ! empty( $client_secret ) && ! empty( $places_api_key ) ) : ?>
                 <div class="notice notice-success" style="margin-top: 20px;">
                     <p>
-                        <strong><?php _e( '✓ OAuth Configuration Complete', 'lealez' ); ?></strong><br>
-                        <?php _e( 'You can now connect Google My Business accounts from individual business edit pages.', 'lealez' ); ?>
+                        <strong><?php _e( '✓ OAuth + Places Configuration Complete', 'lealez' ); ?></strong><br>
+                        <?php _e( 'You can now connect Google Business Profile accounts and use predictive autocomplete for service areas.', 'lealez' ); ?>
                     </p>
                 </div>
             <?php endif; ?>
@@ -209,17 +246,30 @@ class Lealez_GMB_Settings {
                 <div class="notice notice-warning" style="margin-top: 20px;">
                     <p>
                         <strong><?php _e( '⚠ OAuth Configuration Required', 'lealez' ); ?></strong><br>
-                        <?php _e( 'Please complete the OAuth configuration above before connecting Google My Business accounts.', 'lealez' ); ?>
+                        <?php _e( 'Please complete the OAuth configuration above before connecting Google Business Profile accounts.', 'lealez' ); ?>
                     </p>
                 </div>
             <?php endif; ?>
-            
+
+            <?php if ( empty( $places_api_key ) ) : ?>
+                <div class="notice notice-warning" style="margin-top: 20px;">
+                    <p>
+                        <strong><?php _e( '⚠ Places API Key Required for Áreas de servicio', 'lealez' ); ?></strong><br>
+                        <?php _e( 'Without this API Key, the service-area field will stay in compatibility mode and the predictive search will remain disabled.', 'lealez' ); ?>
+                    </p>
+                </div>
+            <?php endif; ?>
+
             <div class="notice notice-info" style="margin-top: 20px;">
                 <h3><?php _e( 'Troubleshooting Common Errors:', 'lealez' ); ?></h3>
                 <ul style="list-style: disc; margin-left: 20px;">
                     <li>
                         <strong><?php _e( 'Error 403: Permission Denied', 'lealez' ); ?></strong><br>
-                        <?php _e( 'Make sure both "My Business Account Management API" and "My Business Business Information API" are enabled in Google Cloud Console.', 'lealez' ); ?>
+                        <?php _e( 'Make sure "My Business Account Management API" and "My Business Business Information API" are enabled in Google Cloud Console.', 'lealez' ); ?>
+                    </li>
+                    <li>
+                        <strong><?php _e( 'Autocomplete without suggestions', 'lealez' ); ?></strong><br>
+                        <?php _e( 'Verify that Places API (New) is enabled, billing is active, and the Places API Key is saved here.', 'lealez' ); ?>
                     </li>
                     <li>
                         <strong><?php _e( 'Error 403: access_denied', 'lealez' ); ?></strong><br>
@@ -227,7 +277,7 @@ class Lealez_GMB_Settings {
                     </li>
                     <li>
                         <strong><?php _e( 'Rate Limit Errors', 'lealez' ); ?></strong><br>
-                        <?php _e( 'Wait at least 15 minutes between manual refresh attempts.', 'lealez' ); ?>
+                        <?php _e( 'Wait at least 60 minutes between manual refresh attempts for GBP sync.', 'lealez' ); ?>
                     </li>
                 </ul>
             </div>
