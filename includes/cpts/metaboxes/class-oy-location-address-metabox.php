@@ -121,13 +121,10 @@ public function __construct() {
 /**
  * AJAX: Envía la dirección guardada en Lealez hacia GMB (push) y persiste el estado del cambio.
  *
- * Tras el PATCH, ejecuta un GET de verificación. Con los flags de diagnóstico determina el
- * estado del cambio (pending / approved / not_applicable / google_updated / inconclusive) y
- * lo guarda en post_meta 'gmb_address_push_state' para tracking posterior.
- *
- * Para negocios SAB (service_area_only=1), incluye serviceArea.businessType en el PATCH:
- * - show_address_to_customers=1 → CUSTOMER_AND_BUSINESS_LOCATION (activa "Mostrar dirección" en GMB)
- * - show_address_to_customers=0 → CUSTOMER_LOCATION_ONLY (desactiva "Mostrar dirección" en GMB)
+ * Lee el estado SAB/show_address con prioridad:
+ * 1. Parámetros POST enviados por JS (estado actual de los checkboxes en la UI — más confiable)
+ * 2. post_meta (estado guardado en DB — fallback)
+ * 3. Auto-detección desde la respuesta del PATCH (ver update_location_address)
  *
  * @return void
  */
@@ -174,16 +171,46 @@ public function ajax_push_address_to_gmb() {
         ) );
     }
 
-    // ── Leer estado SAB y visibilidad de dirección desde post_meta ────────────
-    // service_area_only = '1'         → negocio es de Área de Servicio (SAB)
-    // show_address_to_customers = '1' → mostrar dirección al público en GMB
-    // show_address_to_customers = '0' → ocultar dirección al público en GMB
-    // (el metabox tiene default '1' cuando el campo está vacío)
-    $raw_service_area_only = get_post_meta( $post_id, 'service_area_only', true );
-    $is_sab_intent         = ( '1' === (string) $raw_service_area_only );
+    // ── Detectar estado SAB y visibilidad de dirección ────────────────────────
+    //
+    // Prioridad 1: parámetros POST enviados explícitamente por el JS al momento del click.
+    //   Estos reflejan el estado ACTUAL de los checkboxes en la pantalla, independientemente
+    //   de si el usuario guardó o no el post. Son los más confiables.
+    //
+    // Prioridad 2: post_meta guardado en DB (fallback si el JS no envió los parámetros).
+    //   Puede estar desincronizado si el usuario cambió los checkboxes sin guardar.
+    //
+    // Prioridad 3: auto-detección desde la respuesta del PATCH en update_location_address()
+    //   (segundo PATCH automático si la respuesta revela SAB no detectado localmente).
 
-    $raw_show_address    = get_post_meta( $post_id, 'show_address_to_customers', true );
-    $show_address_intent = ( '' === (string) $raw_show_address ) ? true : ( '1' === (string) $raw_show_address );
+    if ( isset( $_POST['form_is_sab'] ) ) {
+        // Prioridad 1: viene del JS (estado actual de la UI)
+        $is_sab_intent = ( '1' === sanitize_text_field( wp_unslash( $_POST['form_is_sab'] ) ) );
+    } else {
+        // Prioridad 2: post_meta
+        $raw_service_area_only = get_post_meta( $post_id, 'service_area_only', true );
+        $is_sab_intent         = ( '1' === (string) $raw_service_area_only );
+    }
+
+    if ( isset( $_POST['form_show_address'] ) ) {
+        // Prioridad 1: viene del JS
+        $show_address_intent = ( '1' === sanitize_text_field( wp_unslash( $_POST['form_show_address'] ) ) );
+    } else {
+        // Prioridad 2: post_meta
+        $raw_show_address    = get_post_meta( $post_id, 'show_address_to_customers', true );
+        $show_address_intent = ( '' === (string) $raw_show_address ) ? true : ( '1' === (string) $raw_show_address );
+    }
+
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        $source_sab  = isset( $_POST['form_is_sab'] ) ? 'POST(UI)' : 'meta';
+        $source_show = isset( $_POST['form_show_address'] ) ? 'POST(UI)' : 'meta';
+        error_log( sprintf(
+            '[OY GMB Address] ajax_push_address_to_gmb ── is_sab=%s (src:%s) | show_address=%s (src:%s) | post_id=%d | location=%s',
+            $is_sab_intent       ? 'true' : 'false', $source_sab,
+            $show_address_intent ? 'true' : 'false', $source_show,
+            $post_id, $location_name
+        ) );
+    }
 
     $address_lines = array_values( array_filter(
         array( trim( $address_line1 ), trim( $address_line2 ) ),
@@ -200,10 +227,7 @@ public function ajax_push_address_to_gmb() {
 
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
         error_log( sprintf(
-            '[OY GMB Address] ajax_push_address_to_gmb ── post_id=%d | location=%s | is_sab=%s | show_address=%s | payload=%s',
-            $post_id, $location_name,
-            $is_sab_intent       ? 'true' : 'false',
-            $show_address_intent ? 'true' : 'false',
+            '[OY GMB Address] ajax_push_address_to_gmb ── payload=%s',
             wp_json_encode( $address_data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
         ) );
     }
@@ -241,26 +265,33 @@ public function ajax_push_address_to_gmb() {
     }
 
     // ── Desempaquetar array enriquecido de update_location_address ────────
-    $patch_result        = isset( $result['patch_result'] )      ? $result['patch_result']      : $result;
+    $patch_result        = isset( $result['patch_result'] )       ? $result['patch_result']       : $result;
     $has_pending_edits   = ! empty( $result['has_pending_edits'] );
     $is_sab              = ! empty( $result['is_sab'] );
     $address_matched     = ! empty( $result['address_matched'] );
-    $verify_address      = isset( $result['verify_address'] )    ? $result['verify_address']    : null;
-    $business_type       = isset( $result['business_type'] )     ? (string) $result['business_type'] : '';
+    $verify_address      = isset( $result['verify_address'] )     ? $result['verify_address']     : null;
+    $business_type       = isset( $result['business_type'] )      ? (string) $result['business_type'] : '';
     $business_type_sent  = isset( $result['business_type_sent'] ) ? (string) $result['business_type_sent'] : '';
-    // hasGoogleUpdated viene del GET de verificación post-PATCH
+    $auto_corrected      = ! empty( $result['auto_corrected'] );
     $has_google_updated  = ! empty( $result['verify_result']['metadata']['hasGoogleUpdated'] );
+
+    // Si la auto-corrección fue aplicada, actualizar el intent local para reflejar
+    // el estado real que se envió a GMB (el segundo PATCH lo cambió a CUSTOMER_AND_BUSINESS_LOCATION)
+    if ( $auto_corrected ) {
+        $is_sab_intent       = true;
+        $show_address_intent = true;
+    }
 
     if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
         error_log( sprintf(
-            '[OY GMB Address] ajax_push_address_to_gmb ── RESULT: hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | businessType_sent="%s" | businessType_returned="%s" | addressMatched=%s | verifyAddress=%s',
+            '[OY GMB Address] ajax_push_address_to_gmb ── RESULT: hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | businessType_sent="%s" | businessType_returned="%s" | addressMatched=%s | auto_corrected=%s',
             $has_pending_edits  ? 'true' : 'false',
             $has_google_updated ? 'true' : 'false',
             $is_sab             ? 'true' : 'false',
-            $business_type_sent ?: '(no SAB)',
+            $business_type_sent ?: '(vacío)',
             $business_type      ?: '(absent)',
             $address_matched    ? 'true' : 'false',
-            wp_json_encode( $verify_address, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+            $auto_corrected     ? 'true' : 'false'
         ) );
     }
 
@@ -281,7 +312,6 @@ public function ajax_push_address_to_gmb() {
     $user_login   = ( $current_user instanceof WP_User && $current_user->user_login )
         ? $current_user->user_login : 'system';
 
-    // Campos enviados (incluye businessType para SABs)
     $pushed_fields = array(
         'regionCode'         => $address_data['regionCode'],
         'addressLines'       => $address_data['addressLines'],
@@ -289,12 +319,12 @@ public function ajax_push_address_to_gmb() {
         'administrativeArea' => $address_data['administrativeArea'],
         'postalCode'         => $address_data['postalCode'],
     );
-    if ( $is_sab_intent && '' !== $business_type_sent ) {
+    if ( '' !== $business_type_sent ) {
         $pushed_fields['serviceArea.businessType'] = $business_type_sent;
     }
 
     $history_detail = sprintf(
-        'PATCH enviado. hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | businessType_enviado=%s | businessType_respuesta=%s | storefrontAddress_en_respuesta=%s | address_matched=%s | intent_show_address=%s',
+        'PATCH enviado. hasPendingEdits=%s | hasGoogleUpdated=%s | isSAB=%s | businessType_enviado=%s | businessType_respuesta=%s | storefrontAddress_en_respuesta=%s | address_matched=%s | intent_show_address=%s | auto_corrected=%s',
         $has_pending_edits  ? 'true' : 'false',
         $has_google_updated ? 'true' : 'false',
         $is_sab             ? 'true' : 'false',
@@ -302,7 +332,8 @@ public function ajax_push_address_to_gmb() {
         $business_type      ?: 'n/a',
         ( null !== $verify_address ) ? 'SÍ' : 'NO',
         $address_matched    ? 'true' : 'false',
-        $show_address_intent ? 'mostrar' : 'ocultar'
+        $show_address_intent ? 'mostrar' : 'ocultar',
+        $auto_corrected ? 'sí (2do PATCH)' : 'no'
     );
 
     $push_state = array(
@@ -321,6 +352,7 @@ public function ajax_push_address_to_gmb() {
             'business_type'                => $business_type,
             'business_type_sent'           => $business_type_sent,
             'storefront_in_patch_response' => isset( $patch_result['storefrontAddress'] ),
+            'auto_corrected'               => $auto_corrected,
         ),
         'verify'              => array(
             'ran'                      => true,
@@ -331,10 +363,11 @@ public function ajax_push_address_to_gmb() {
         ),
         'last_check'   => null,
         'resolution'   => in_array( $push_status, array( 'approved' ), true ) ? array(
-            'resolved_at'    => $now_iso,
-            'resolved_at_ts' => $now_ts,
-            'resolved_to'    => 'approved',
-            'confirm_value'  => $verify_address,
+            'resolved_at'         => $now_iso,
+            'resolved_at_ts'      => $now_ts,
+            'resolved_to'         => 'approved',
+            'confirm_value'       => $verify_address,
+            'intent_show_address' => $show_address_intent,
         ) : null,
         'cancellation' => null,
         'history'      => array(
@@ -351,6 +384,12 @@ public function ajax_push_address_to_gmb() {
 
     update_post_meta( $post_id, 'gmb_address_push_state', $push_state );
 
+    // Actualizar también el meta local para que futuras operaciones reflejen el estado real
+    if ( $auto_corrected ) {
+        update_post_meta( $post_id, 'service_area_only', '1' );
+        update_post_meta( $post_id, 'show_address_to_customers', $show_address_intent ? '1' : '0' );
+    }
+
     wp_send_json_success( array(
         'message'             => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
         'pushed_fields'       => $pushed_fields,
@@ -361,6 +400,7 @@ public function ajax_push_address_to_gmb() {
         'verify_address'      => $verify_address,
         'business_type'       => $business_type,
         'business_type_sent'  => $business_type_sent,
+        'auto_corrected'      => $auto_corrected,
         'push_status'         => $push_status,
         'intent_show_address' => $show_address_intent,
         'state_html'          => $this->render_address_push_state_panel( $post_id, false ),
@@ -2594,6 +2634,17 @@ var statusLabel, statusColor;
                             return;
                         }
 
+                        // ── Leer estado actual de los checkboxes desde la UI ──────────────
+                        // CRÍTICO: se envía el estado DOM actual (no el de la DB).
+                        // Esto evita el bug donde el usuario no guardó antes de hacer push
+                        // y el meta en DB no refleja lo que ve en pantalla.
+                        var formIsSab      = $('#service_area_only').is(':checked') ? '1' : '0';
+                        var formShowAddress = ( formIsSab === '1' && $('#show_address_to_customers').is(':checked') ) ? '1' : '0';
+
+                        if (window.console && window.console.log) {
+                            console.log('[OY Address Push] Checkboxes UI → form_is_sab:', formIsSab, '| form_show_address:', formShowAddress);
+                        }
+
                         pushRunning = true;
                         var $btn = $('#oy-address-push-btn');
                         $btn.prop('disabled', true);
@@ -2601,21 +2652,23 @@ var statusLabel, statusColor;
                         setPushMsg('<?php echo esc_js( __( 'Enviando a Google...', 'lealez' ) ); ?>', 'info');
 
                         if (window.console && window.console.log) {
-                            console.log('[OY Address Push] Iniciando push → postId:', postId, '| location:', locationName);
+                            console.log('[OY Address Push] Iniciando push → postId:', postId, '| location:', locationName, '| is_sab:', formIsSab, '| show_address:', formShowAddress);
                         }
 
                         $.ajax({
                             url:     ajaxUrl,
                             type:    'POST',
-                            timeout: 45000,
+                            timeout: 60000,
                             data: {
-                                action:  'oy_push_address_to_gmb',
-                                nonce:   pushNonce,
-                                post_id: postId,
+                                action:           'oy_push_address_to_gmb',
+                                nonce:            pushNonce,
+                                post_id:          postId,
+                                form_is_sab:      formIsSab,
+                                form_show_address: formShowAddress,
                             },
                         })
-.done(function(resp) {
-                            
+                        .done(function(resp) {
+                            resetPushBtn();
 
                             try {
                                 if (window.console && window.console.log) {
@@ -2640,22 +2693,36 @@ var statusLabel, statusColor;
                                 var verifyAddr     = (resp.data && resp.data.verify_address)   ? resp.data.verify_address   : null;
                                 var businessType   = (resp.data && resp.data.business_type)    ? resp.data.business_type    : '';
                                 var pushStatus     = (resp.data && resp.data.push_status)      ? resp.data.push_status      : '';
-                                var verifyRan      = (resp.data && typeof resp.data.address_matched !== 'undefined');
+                                var autoCorrected  = !!(resp.data && resp.data.auto_corrected);
 
                                 if (window.console && window.console.log) {
-                                    console.log('[OY Address Push] Diagnóstico → hasPendingEdits:', hasPending, '| isSAB:', isSab, '| businessType:', businessType, '| addressMatched:', addressMatched, '| pushStatus:', pushStatus);
+                                    console.log('[OY Address Push] Diagnóstico → hasPendingEdits:', hasPending, '| isSAB:', isSab, '| businessType:', businessType, '| addressMatched:', addressMatched, '| pushStatus:', pushStatus, '| auto_corrected:', autoCorrected);
                                 }
 
-                                // ── Mensaje de resultado según estado real ──────────────────────────
+                                // Si hubo auto-corrección, actualizar los checkboxes en UI
+                                if (autoCorrected) {
+                                    $('#service_area_only').prop('checked', true);
+                                    $('#show_address_to_customers').prop('checked', true);
+                                    if (typeof window.oy_toggle_address_fields === 'function') {
+                                        window.oy_toggle_address_fields();
+                                    }
+                                    if (window.console && window.console.log) {
+                                        console.log('[OY Address Push] Auto-corrección aplicada: checkboxes SAB actualizados en UI.');
+                                    }
+                                }
+
+                                // ── Mensaje según estado ──────────────────────────────────────────
                                 var successMsg, msgType;
                                 if ('approved' === pushStatus) {
                                     successMsg = '<?php echo esc_js( __( '✅ Dirección publicada en GMB y verificada correctamente.', 'lealez' ) ); ?>';
                                     msgType    = 'success';
                                 } else if ('not_applicable' === pushStatus) {
-    successMsg = '<?php echo esc_js( __( '⚠️ PATCH enviado pero Google no confirmó la activación de la visibilidad (storefrontAddress ausente en la verificación). Puede estar en revisión. Usa "Verificar estado en GMB" en unos minutos.', 'lealez' ) ); ?>';
-    msgType    = 'blue';
-} else if ('pending' === pushStatus) {
-                                    successMsg = '<?php echo esc_js( __( '⏳ Enviado a GMB. Google tiene el cambio en revisión (hasPendingEdits=true). Usa "Verificar estado en GMB" en el Panel de Estado para comprobar si fue aprobado.', 'lealez' ) ); ?>';
+                                    successMsg = '<?php echo esc_js( __( '⚠️ PATCH enviado pero Google no confirmó la visibilidad aún. Usa "Verificar estado en GMB" en unos minutos.', 'lealez' ) ); ?>';
+                                    msgType    = 'blue';
+                                } else if ('pending' === pushStatus) {
+                                    successMsg = autoCorrected
+                                        ? '<?php echo esc_js( __( '⏳ SAB detectado automáticamente. businessType corregido a CUSTOMER_AND_BUSINESS_LOCATION. Google tiene el cambio en revisión. Usa "Verificar estado" para confirmar.', 'lealez' ) ); ?>'
+                                        : '<?php echo esc_js( __( '⏳ Enviado a GMB. Google tiene el cambio en revisión (hasPendingEdits=true). Usa "Verificar estado en GMB" para comprobar.', 'lealez' ) ); ?>';
                                     msgType    = 'blue';
                                 } else if ('google_updated' === pushStatus) {
                                     successMsg = '<?php echo esc_js( __( '⚠️ Enviado, pero Google tiene datos propios que difieren (hasGoogleUpdated=true). El cambio puede haber sido reemplazado. Revisa el Panel de Estado.', 'lealez' ) ); ?>';
@@ -2667,7 +2734,7 @@ var statusLabel, statusColor;
 
                                 setPushMsg(successMsg, msgType);
 
-                                // ── Actualizar / insertar panel de estado ──────────────────────────
+                                // ── Actualizar / insertar panel de estado ─────────────────────────
                                 if (resp.data && resp.data.state_html) {
                                     var $existingPanel = $('#oy-address-push-state-panel');
                                     if ($existingPanel.length) {
@@ -2680,14 +2747,15 @@ var statusLabel, statusColor;
                                 // Registrar en log
                                 if (window.oyAddrLogAPI && typeof window.oyAddrLogAPI.addLogEntry === 'function') {
                                     window.oyAddrLogAPI.addLogEntry({
-                                        pushed_fields:    pushed,
-                                        gmb_response:     resp.data.gmb_response    || null,
+                                        pushed_fields:     pushed,
+                                        gmb_response:      resp.data.gmb_response    || null,
                                         has_pending_edits: hasPending,
-                                        is_sab:           isSab,
-                                        address_matched:  addressMatched,
-                                        verify_address:   verifyAddr,
-                                        business_type:    businessType,
-                                        push_status:      pushStatus,
+                                        is_sab:            isSab,
+                                        address_matched:   addressMatched,
+                                        verify_address:    verifyAddr,
+                                        business_type:     businessType,
+                                        push_status:       pushStatus,
+                                        auto_corrected:    autoCorrected,
                                     }, [], 'push');
                                 }
 
@@ -2708,12 +2776,12 @@ var statusLabel, statusColor;
                             }
                         })
                         .fail(function(xhr, status, error) {
-                            
+                            resetPushBtn();
 
                             var isTimeout  = status === 'timeout';
                             var httpStatus = xhr && xhr.status ? xhr.status : 0;
                             var errDetail  = isTimeout
-                                ? 'Timeout: el servidor tardó más de 45 s'
+                                ? 'Timeout: el servidor tardó más de 60 s'
                                 : ('HTTP ' + httpStatus + ' — ' + (error || status || 'desconocido'));
 
                             if (window.console && window.console.error) {
@@ -2747,8 +2815,8 @@ var statusLabel, statusColor;
                             }
                         })
                         .always(function() {
-                            // Seguridad final: resetea si .done()/.fail() no lo hicieron
-                            if (pushRunning) {  }
+                            // Seguridad: resetear si .done()/.fail() fallaron antes de llamarlo
+                            if (pushRunning) { resetPushBtn(); }
                         });
                     });
 
