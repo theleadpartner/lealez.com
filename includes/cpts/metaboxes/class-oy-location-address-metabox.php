@@ -2625,32 +2625,45 @@ if ( ! class_exists( 'OY_Location_Address_Metabox' ) ) {
                         return out;
                     }
 
-                    function setAreas(arr){
-                        if (!Array.isArray(arr)) arr = [];
-                        var seen = {};
-                        var out = [];
-                        arr.forEach(function(item){
-                            var normalized = normalizeAreaItem(item);
-                            if (!normalized) {
-                                return;
-                            }
+function setAreas(arr){
+    if (!Array.isArray(arr)) arr = [];
+    var seen = {};
+    var out = [];
+    var nextJson = '[]';
+    var previousJson = ($('#location_service_areas_json').val() || '[]').toString();
 
-                            var key = getAreaKey(normalized);
-                            if (!key || seen[key]) {
-                                return;
-                            }
+    arr.forEach(function(item){
+        var normalized = normalizeAreaItem(item);
+        if (!normalized) {
+            return;
+        }
 
-                            seen[key] = true;
-                            out.push(normalized);
-                        });
+        var key = getAreaKey(normalized);
+        if (!key || seen[key]) {
+            return;
+        }
 
-                        if (out.length > 20) {
-                            out = out.slice(0, 20);
-                        }
+        seen[key] = true;
+        out.push(normalized);
+    });
 
-                        $('#location_service_areas_json').val(JSON.stringify(out));
-                        renderChips(out);
-                    }
+    if (out.length > 20) {
+        out = out.slice(0, 20);
+    }
+
+    nextJson = JSON.stringify(out);
+
+    $('#location_service_areas_json').val(nextJson);
+    renderChips(out);
+
+    if (previousJson !== nextJson) {
+        $('#location_service_areas_json').trigger('change');
+    }
+
+    if (typeof refreshDirtyState === 'function' && editorState && editorState.enabled) {
+        refreshDirtyState();
+    }
+}
 
                     function renderChips(arr){
                         var $wrap = $('#oy-service-area-selected');
