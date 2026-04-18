@@ -91,6 +91,11 @@ public function __construct() {
     add_action( 'wp_ajax_oy_get_gmb_location_details', array( $this, 'ajax_get_gmb_location_details' ) );
     add_action( 'wp_ajax_oy_sync_location_food_menus', array( $this, 'ajax_sync_location_food_menus' ) );
 
+    // ✅ WP-Cron: polling de estado de push de dirección → GMB
+    // Registrado en el CPT (no solo en el metabox) para que el hook esté disponible
+    // en cualquier request donde WordPress dispare el cron, incluyendo frontend.
+    add_action( 'oy_poll_address_push_status', array( 'OY_Location_Address_Metabox', 'cron_poll_address_push_status' ) );
+
     /**
      * ✅ Metabox externo: Fotos del propietario (GBP Media)
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-media-metabox.php
