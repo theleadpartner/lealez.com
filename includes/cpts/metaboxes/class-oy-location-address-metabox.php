@@ -186,6 +186,23 @@ public function ajax_push_address_to_gmb() {
     if ( isset( $_POST['form_is_sab'] ) ) {
         // Prioridad 1: viene del JS (estado actual de la UI)
         $is_sab_intent = ( '1' === sanitize_text_field( wp_unslash( $_POST['form_is_sab'] ) ) );
+
+        // ── Cross-check SAB ────────────────────────────────────────────────────
+        // Si el JS reporta form_is_sab=0 pero el meta de DB dice service_area_only=1,
+        // confiamos en el DB. El tipo SAB es una propiedad de GMB (no cambia con el
+        // checkbox sin guardar), y el checkbox puede estar oculto/colapsado en la UI
+        // al momento del click, haciendo que jQuery lo detecte como desmarcado.
+        // Nota: el caso contrario (JS=1, DB=0) sí lo respetamos, porque el usuario
+        // puede haber marcado el checkbox sin guardar aún.
+        if ( ! $is_sab_intent ) {
+            $raw_sab_db = get_post_meta( $post_id, 'service_area_only', true );
+            if ( '1' === (string) $raw_sab_db ) {
+                $is_sab_intent = true;
+                if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                    error_log( '[OY GMB Address] ajax_push_address_to_gmb ── SAB cross-check: form_is_sab=0 pero DB service_area_only=1 → forzando is_sab_intent=true.' );
+                }
+            }
+        }
     } else {
         // Prioridad 2: post_meta
         $raw_service_area_only = get_post_meta( $post_id, 'service_area_only', true );
@@ -194,6 +211,11 @@ public function ajax_push_address_to_gmb() {
 
     if ( isset( $_POST['form_show_address'] ) ) {
         // Prioridad 1: viene del JS
+        // Nota: el JS calcula form_show_address=0 si form_is_sab=0, lo que puede
+        // dar un falso '0' cuando el SAB fue corregido arriba por el cross-check.
+        // Sin embargo, si el usuario desmarcó "Mostrar dirección a clientes" eso
+        // también produce form_show_address=0, que es el intent correcto. Ambos
+        // escenarios convergen en show_address=false → enviar CUSTOMER_LOCATION_ONLY.
         $show_address_intent = ( '1' === sanitize_text_field( wp_unslash( $_POST['form_show_address'] ) ) );
     } else {
         // Prioridad 2: post_meta
@@ -302,7 +324,8 @@ public function ajax_push_address_to_gmb() {
         $verify_address,
         $address_matched,
         $has_google_updated,
-        $show_address_intent
+        $show_address_intent,
+        $business_type_sent  // nuevo: para distinguir pending vs inconclusive en ocultar
     );
 
     // ── Construir y persistir estado del push ─────────────────────────────
@@ -384,11 +407,16 @@ public function ajax_push_address_to_gmb() {
 
     update_post_meta( $post_id, 'gmb_address_push_state', $push_state );
 
-    // Actualizar también el meta local para que futuras operaciones reflejen el estado real
-    if ( $auto_corrected ) {
+    // ── Persistir intent del usuario en meta ──────────────────────────────
+    // Siempre actualizamos service_area_only y show_address_to_customers para que
+    // el metabox refleje la intención correcta en el próximo reload, independientemente
+    // de si la auto-corrección fue aplicada o si el push aún está pendiente en GMB.
+    // Esto evita que un sync/import posterior sobrescriba el intent antes de que
+    // Google procese el cambio de businessType.
+    if ( $is_sab_intent || $is_sab ) {
         update_post_meta( $post_id, 'service_area_only', '1' );
-        update_post_meta( $post_id, 'show_address_to_customers', $show_address_intent ? '1' : '0' );
     }
+    update_post_meta( $post_id, 'show_address_to_customers', $show_address_intent ? '1' : '0' );
 
     wp_send_json_success( array(
         'message'             => __( 'Dirección enviada a GMB correctamente.', 'lealez' ),
@@ -431,13 +459,40 @@ public function ajax_push_address_to_gmb() {
  *                                          false = el usuario quiere OCULTAR la dirección
  * @return string Estado: 'approved' | 'not_applicable' | 'pending' | 'google_updated' | 'inconclusive'
  */
+/**
+ * Determina el estado canónico del push de dirección basado en las flags de GMB
+ * y la intención del usuario (mostrar u ocultar la dirección).
+ *
+ * Estados posibles:
+ * - approved      : Confirmado que GMB refleja la intención del usuario
+ * - pending       : PATCH enviado y procesándose en Google (puede tardar minutos/horas)
+ * - google_updated: Google reemplazó con sus propios datos (manual override de Google)
+ * - not_applicable: SAB con intent de MOSTRAR pero storefrontAddress ausente sin pending → edge case
+ * - inconclusive  : PATCH OK pero sin confirmación posible (situación ambigua)
+ *
+ * Lógica por intent:
+ * - show_address=true  : approved cuando address_matched=true (dirección visible en GET)
+ * - show_address=false : approved cuando verify_address=null && !pending (dirección oculta)
+ *
+ * @param bool       $has_pending_edits    true si GMB tiene edits pendientes
+ * @param bool       $is_sab               true si businessType indica SAB
+ * @param array|null $verify_address       storefrontAddress del GET post-PATCH, o null si ausente
+ * @param bool       $address_matched      true si locality enviada == locality retornada
+ * @param bool       $has_google_updated   true si Google tiene datos que sobreescriben
+ * @param bool       $intent_show_address  true = el usuario quiere MOSTRAR la dirección (default)
+ * @param string     $business_type_sent   businessType que se envió en el PATCH ('CUSTOMER_LOCATION_ONLY',
+ *                                         'CUSTOMER_AND_BUSINESS_LOCATION', o '' si no se envió)
+ *
+ * @return string Estado: 'approved' | 'not_applicable' | 'pending' | 'google_updated' | 'inconclusive'
+ */
 private function determine_address_push_status(
     $has_pending_edits,
     $is_sab,
     $verify_address,
     $address_matched,
     $has_google_updated,
-    $intent_show_address = true
+    $intent_show_address = true,
+    $business_type_sent  = ''
 ) {
     // ── Intent: MOSTRAR dirección ─────────────────────────────────────────────
     if ( $intent_show_address ) {
@@ -470,12 +525,19 @@ private function determine_address_push_status(
         if ( $has_pending_edits ) {
             return 'pending';
         }
-        // storefrontAddress sigue presente a pesar de pedir CUSTOMER_LOCATION_ONLY
+        // Google reemplazó con sus propios datos
         if ( $has_google_updated ) {
             return 'google_updated';
         }
-        // storefrontAddress presente pero no hay pending → Google no aplicó el cambio aún
+        // storefrontAddress sigue presente después del PATCH.
+        // Si enviamos CUSTOMER_LOCATION_ONLY explícitamente, Google puede tardar
+        // minutos en procesar el cambio de businessType — devolvemos 'pending'
+        // (con mensaje accionable) en lugar de 'inconclusive'.
         if ( null !== $verify_address ) {
+            if ( 'CUSTOMER_LOCATION_ONLY' === $business_type_sent ) {
+                return 'pending';
+            }
+            // No enviamos el businessType correctamente → situación ambigua
             return 'inconclusive';
         }
     }
@@ -543,6 +605,11 @@ public function ajax_check_address_push_status() {
         ? (bool) $push_state['intent_show_address']
         : true; // default: asumir que se quiso mostrar (compatibilidad con pushes anteriores)
 
+    // Recuperar el businessType que se envió en el PATCH original para afinar el estado.
+    $original_business_type_sent = isset( $push_state['gmb_flags']['business_type_sent'] )
+        ? (string) $push_state['gmb_flags']['business_type_sent']
+        : '';
+
     $gmb_result = Lealez_GMB_API::get_location_status( $business_id, $location_name );
 
     $now_ts       = time();
@@ -603,7 +670,8 @@ public function ajax_check_address_push_status() {
         $verify_address,
         $address_matched,
         $has_google_updated,
-        $intent_show_address
+        $intent_show_address,
+        $original_business_type_sent  // para distinguir pending vs inconclusive en ocultar
     );
 
     $check_detail = sprintf(
