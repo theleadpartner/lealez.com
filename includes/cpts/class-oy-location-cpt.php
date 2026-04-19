@@ -4530,6 +4530,21 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
         if ( ! empty( $open_info_raw ) ) {
             update_post_meta( $post_id, 'gmb_open_info_raw', $open_info_raw );
+
+            // ✅ Map openInfo.openingDate → opening_date (YYYY-MM-DD)
+            if ( ! empty( $open_info_raw['openingDate'] ) && is_array( $open_info_raw['openingDate'] ) ) {
+                $opening_year  = isset( $open_info_raw['openingDate']['year'] ) ? (int) $open_info_raw['openingDate']['year'] : 0;
+                $opening_month = isset( $open_info_raw['openingDate']['month'] ) ? (int) $open_info_raw['openingDate']['month'] : 0;
+                $opening_day   = isset( $open_info_raw['openingDate']['day'] ) ? (int) $open_info_raw['openingDate']['day'] : 0;
+
+                if ( $opening_year > 0 && $opening_month > 0 && $opening_day > 0 ) {
+                    update_post_meta(
+                        $post_id,
+                        'opening_date',
+                        sprintf( '%04d-%02d-%02d', $opening_year, $opening_month, $opening_day )
+                    );
+                }
+            }
         }
 
         // ── Detectar ALWAYS_OPEN (24/7) desde openInfo.openingHoursType ──────────
