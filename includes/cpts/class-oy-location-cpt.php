@@ -169,6 +169,25 @@ public function __construct() {
         }
     }
 
+        /**
+     * ✅ Metabox externo: Información Básica
+     * Archivo: includes/cpts/metaboxes/class-oy-location-basic-info-metabox.php
+     *
+     * Centraliza los campos manuales base de la ubicación:
+     * - Descripción (GMB)
+     * - Fecha de apertura
+     * - Categoría principal (manual)
+     * - Rango de precios
+     */
+    $basic_info_metabox_file = dirname( __FILE__ ) . '/metaboxes/class-oy-location-basic-info-metabox.php';
+    if ( file_exists( $basic_info_metabox_file ) ) {
+        require_once $basic_info_metabox_file;
+
+        if ( class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
+            new OY_Location_Basic_Info_Metabox();
+        }
+    }
+
     /**
      * ✅ Metabox externo: Dirección y Geolocalización
      * Archivo: includes/cpts/metaboxes/class-oy-location-address-metabox.php
@@ -390,19 +409,14 @@ public function add_meta_boxes() {
         'high'
     );
 
-    // 2. Basic Information
-    add_meta_box(
-        'oy_location_basic_info',
-        __( 'Información Básica', 'lealez' ),
-        array( $this, 'render_basic_info_meta_box' ),
-        $this->post_type,
-        'normal',
-        'high'
-    );
+    // 2. Información Básica → GESTIONADO EXCLUSIVAMENTE por OY_Location_Basic_Info_Metabox
+    // Archivo: includes/cpts/metaboxes/class-oy-location-basic-info-metabox.php
+    // NO registrar aquí para evitar duplicación. El metabox conserva el mismo ID
+    // 'oy_location_basic_info' para mantener la posición guardada por el usuario.
 
-    // 3. Address and Geolocation → MOVIDO a OY_Location_Address_Metabox (metaboxes/class-oy-location-address-metabox.php)
-    //    Se omite aquí para evitar registro duplicado. El nuevo metabox conserva
-    //    el mismo ID 'oy_location_address' para mantener la posición guardada por el usuario.
+    // 3. Address and Geolocation → MOVIDO a OY_Location_Address_Metabox
+    // Archivo: includes/cpts/metaboxes/class-oy-location-address-metabox.php
+    // NO registrar aquí para evitar duplicación.
 
     // 4. Contact Information
     add_meta_box(
@@ -414,21 +428,13 @@ public function add_meta_boxes() {
         'default'
     );
 
-// 5. Business Hours → GESTIONADO EXCLUSIVAMENTE por OY_Location_Hours_Metabox
+    // 5. Business Hours → GESTIONADO EXCLUSIVAMENTE por OY_Location_Hours_Metabox
     // Archivo: includes/cpts/metaboxes/class-oy-location-hours-metabox.php
-    // La clase se instancia en el constructor (ver arriba) y registra su propio
-    // add_meta_box('oy_location_hours', ...) vía add_action('add_meta_boxes').
-    // NO registrar aquí para evitar duplicación que bloquea el render del metabox.
+    // NO registrar aquí para evitar duplicación.
 
-    // 6. Attributes and Features
-    add_meta_box(
-        'oy_location_attributes',
-        __( 'Atributos y Características', 'lealez' ),
-        array( $this, 'render_attributes_meta_box' ),
-        $this->post_type,
-        'normal',
-        'default'
-    );
+    // 6. Atributos y Características → ELIMINADO
+    // Los campos manuales google_primary_category y price_range fueron movidos al
+    // metabox externo "Información Básica", por lo que este metabox deja de registrarse.
 
     // 7. Loyalty Program Settings
     add_meta_box(
@@ -1920,10 +1926,17 @@ public function render_gmb_meta_box( $post ) {
         $gmb_import_on_save = '1';
     }
 
-    // Existing meta
+    // Existing meta + campos locales reubicados desde "Información Básica"
     $gmb_location_id           = get_post_meta( $post->ID, 'gmb_location_id', true );
     $gmb_account_id            = get_post_meta( $post->ID, 'gmb_account_id', true );
     $gmb_verified              = get_post_meta( $post->ID, 'gmb_verified', true );
+
+    $location_code             = get_post_meta( $post->ID, 'location_code', true );
+    $location_status           = get_post_meta( $post->ID, 'location_status', true );
+
+    if ( empty( $location_status ) ) {
+        $location_status = 'active';
+    }
 
     // ✅ Verification API RAW fields
     $gmb_verification_state    = get_post_meta( $post->ID, 'gmb_verification_state', true );
@@ -1998,6 +2011,7 @@ public function render_gmb_meta_box( $post ) {
         </tr>
 
         <tr>
+        <tr>
             <th scope="row">
                 <label for="gmb_account_id"><?php _e( 'GMB Account ID', 'lealez' ); ?></label>
             </th>
@@ -2010,6 +2024,40 @@ public function render_gmb_meta_box( $post ) {
                        readonly>
                 <p class="description">
                     <?php _e( 'Se guarda como el account resource name que corresponde a la ubicación.', 'lealez' ); ?>
+                </p>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
+                <label for="location_code"><?php _e( 'Código de Ubicación', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <input type="text"
+                       name="location_code"
+                       id="location_code"
+                       value="<?php echo esc_attr( $location_code ); ?>"
+                       class="regular-text"
+                       placeholder="<?php esc_attr_e( 'Ej: STB-MDE-001', 'lealez' ); ?>">
+                <p class="description">
+                    <?php _e( 'Código único interno para identificar esta ubicación. Si Google devuelve <code>storeCode</code>, el botón "Importar Ahora" lo seguirá poblando automáticamente.', 'lealez' ); ?>
+                </p>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
+                <label for="location_status"><?php _e( 'Activo / Estado', 'lealez' ); ?></label>
+            </th>
+            <td>
+                <select name="location_status" id="location_status" class="regular-text">
+                    <option value="active" <?php selected( $location_status, 'active' ); ?>><?php _e( 'Activa', 'lealez' ); ?></option>
+                    <option value="inactive" <?php selected( $location_status, 'inactive' ); ?>><?php _e( 'Inactiva', 'lealez' ); ?></option>
+                    <option value="temporarily_closed" <?php selected( $location_status, 'temporarily_closed' ); ?>><?php _e( 'Cerrada Temporalmente', 'lealez' ); ?></option>
+                    <option value="permanently_closed" <?php selected( $location_status, 'permanently_closed' ); ?>><?php _e( 'Cerrada Permanentemente', 'lealez' ); ?></option>
+                </select>
+                <p class="description">
+                    <?php _e( 'Estado operativo local de la ficha. Se movió aquí para que la identificación interna y la vinculación con Google Business Profile queden en el mismo metabox.', 'lealez' ); ?>
                 </p>
             </td>
         </tr>
