@@ -3847,6 +3847,275 @@ public static function push_location_address( $business_id, $location_name, arra
         return self::get_location_snapshot( $business_id, $location_name );
     }
 
+
+    /**
+     * Obtiene un snapshot de los campos base editables desde el metabox de
+     * Información Básica.
+     *
+     * Campos consultados:
+     * - profile.description
+     * - openInfo.openingDate
+     * - categories
+     * - metadata.hasPendingEdits
+     * - metadata.hasGoogleUpdated
+     *
+     * @param int    $business_id   WP post ID del oy_business.
+     * @param string $location_name Resource name "locations/XXXX" o "accounts/X/locations/Y".
+     * @return array|WP_Error
+     */
+    public static function get_location_basic_info_snapshot( $business_id, $location_name ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        if ( 0 !== strpos( $location_name, 'locations/' ) ) {
+            if ( preg_match( '#(locations/[^/]+)$#', $location_name, $m ) ) {
+                $location_name = $m[1];
+            } else {
+                return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+            }
+        }
+
+        $read_masks = array(
+            'profile,openInfo,categories,metadata.hasPendingEdits,metadata.hasGoogleUpdated',
+            'profile,openInfo,metadata.hasPendingEdits,metadata.hasGoogleUpdated',
+            'profile,metadata.hasPendingEdits,metadata.hasGoogleUpdated',
+            'profile,openInfo',
+            'profile',
+        );
+
+        $last_error = null;
+
+        foreach ( $read_masks as $mask ) {
+            $result = self::make_request(
+                $business_id,
+                '/' . $location_name,
+                self::$business_api_base,
+                'GET',
+                array(),
+                false,
+                array(
+                    'readMask' => $mask,
+                )
+            );
+
+            if ( ! is_wp_error( $result ) ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log(
+                        $business_id,
+                        'success',
+                        'Basic info snapshot succeeded with readMask.',
+                        array(
+                            'location' => $location_name,
+                            'readMask' => $mask,
+                        )
+                    );
+                }
+
+                return is_array( $result ) ? $result : array();
+            }
+
+            $last_error = $result;
+
+            if ( ! self::is_field_mask_error( $result ) ) {
+                return $result;
+            }
+        }
+
+        return $last_error ?: new WP_Error( 'gmb_basic_info_snapshot_error', __( 'No se pudo obtener el snapshot de Información Básica.', 'lealez' ) );
+    }
+
+    /**
+     * Envía (PATCH) la Información Básica soportada a GBP.
+     *
+     * Campos soportados en esta primera versión:
+     * - profile.description
+     * - openInfo.openingDate
+     *
+     * Se omiten intencionalmente:
+     * - categories.primaryCategory   → requiere flujo dinámico categories.list/categories.batchGet
+     * - priceRange                  → no está homologado aún en este proyecto
+     *
+     * @param int    $business_id
+     * @param string $location_name
+     * @param array  $basic_info_data
+     * @return array|WP_Error
+     */
+    public static function push_location_basic_info( $business_id, $location_name, array $basic_info_data ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        if ( 0 !== strpos( $location_name, 'locations/' ) ) {
+            if ( preg_match( '#(locations/[^/]+)$#', $location_name, $m ) ) {
+                $location_name = $m[1];
+            } else {
+                return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+            }
+        }
+
+        if ( Lealez_GMB_OAuth::is_token_expired( $business_id ) ) {
+            $refresh = Lealez_GMB_OAuth::refresh_access_token( $business_id );
+            if ( is_wp_error( $refresh ) ) {
+                return $refresh;
+            }
+        }
+
+        $tokens = Lealez_GMB_Encryption::get_tokens( $business_id );
+        if ( ! $tokens ) {
+            return new WP_Error( 'no_tokens', __( 'No se encontraron tokens válidos.', 'lealez' ) );
+        }
+
+        $body        = array();
+        $update_mask = array();
+        $submitted   = array();
+
+        $description = isset( $basic_info_data['location_short_description'] )
+            ? sanitize_textarea_field( (string) $basic_info_data['location_short_description'] )
+            : '';
+
+        if ( function_exists( 'mb_substr' ) ) {
+            $description = mb_substr( $description, 0, 750 );
+        } else {
+            $description = substr( $description, 0, 750 );
+        }
+
+        if ( '' !== trim( $description ) ) {
+            $body['profile'] = array(
+                'description' => $description,
+            );
+            $submitted['profile'] = $body['profile'];
+            $update_mask[] = 'profile.description';
+        }
+
+        $opening_date = isset( $basic_info_data['opening_date'] )
+            ? sanitize_text_field( (string) $basic_info_data['opening_date'] )
+            : '';
+
+        if ( '' !== $opening_date ) {
+            if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $opening_date ) ) {
+                return new WP_Error( 'invalid_opening_date', __( 'opening_date debe venir en formato YYYY-MM-DD.', 'lealez' ) );
+            }
+
+            list( $year, $month, $day ) = array_map( 'intval', explode( '-', $opening_date ) );
+
+            $body['openInfo'] = array(
+                'openingDate' => array(
+                    'year'  => $year,
+                    'month' => $month,
+                    'day'   => $day,
+                ),
+            );
+            $submitted['openInfo'] = $body['openInfo'];
+            $update_mask[] = 'openInfo.openingDate';
+        }
+
+        if ( empty( $update_mask ) ) {
+            return new WP_Error( 'nothing_to_push', __( 'No hay campos soportados para enviar a GMB.', 'lealez' ) );
+        }
+
+        $update_mask     = array_values( array_unique( $update_mask ) );
+        $update_mask_str = implode( ',', $update_mask );
+        $url             = self::$business_api_base . '/' . $location_name . '?updateMask=' . rawurlencode( $update_mask_str );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] push_location_basic_info → PATCH %s | mask=%s | body=%s',
+                $location_name,
+                $update_mask_str,
+                wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+            ) );
+        }
+
+        $response = wp_remote_request( $url, array(
+            'method'  => 'PATCH',
+            'timeout' => 45,
+            'headers' => array(
+                'Authorization'             => 'Bearer ' . $tokens['access_token'],
+                'Content-Type'              => 'application/json',
+                'X-GOOG-API-FORMAT-VERSION' => '2',
+            ),
+            'body' => wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $code      = wp_remote_retrieve_response_code( $response );
+        $raw_body  = wp_remote_retrieve_body( $response );
+        $body_data = json_decode( $raw_body, true );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] push_location_basic_info ← HTTP %d | body=%s',
+                $code,
+                substr( $raw_body, 0, 500 )
+            ) );
+        }
+
+        if ( $code < 200 || $code >= 300 ) {
+            $violations = array();
+            if ( isset( $body_data['error']['details'] ) && is_array( $body_data['error']['details'] ) ) {
+                foreach ( $body_data['error']['details'] as $detail ) {
+                    if ( isset( $detail['fieldViolations'] ) && is_array( $detail['fieldViolations'] ) ) {
+                        $violations = array_merge( $violations, $detail['fieldViolations'] );
+                    }
+                }
+            }
+
+            $msg = isset( $body_data['error']['message'] ) ? (string) $body_data['error']['message'] : "HTTP {$code}";
+            return new WP_Error(
+                'gmb_patch_error',
+                $msg,
+                array(
+                    'code'             => $code,
+                    'body'             => $body_data,
+                    'raw_body'         => $raw_body,
+                    'field_violations' => $violations,
+                    'update_mask'      => $update_mask_str,
+                    'submitted'        => $submitted,
+                )
+            );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Basic info PATCH accepted by Google.',
+                array(
+                    'location'    => $location_name,
+                    'update_mask' => $update_mask_str,
+                )
+            );
+        }
+
+        return array(
+            'patch_response' => is_array( $body_data ) ? $body_data : array(),
+            'update_mask'    => $update_mask_str,
+            'submitted'      => $submitted,
+        );
+    }
+
+    /**
+     * Consulta el estado actual de Información Básica durante el polling.
+     *
+     * @param int    $business_id
+     * @param string $location_name
+     * @return array|WP_Error
+     */
+    public static function poll_location_basic_info_status( $business_id, $location_name ) {
+        return self::get_location_basic_info_snapshot( $business_id, $location_name );
+    }
+
+
 // =========================================================================
     // LOCAL POSTS (GBP Posts / Publicaciones) — My Business API v4
     // =========================================================================
