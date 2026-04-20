@@ -3849,6 +3849,150 @@ public static function push_location_address( $business_id, $location_name, arra
 
 
     /**
+     * Busca categorías oficiales de Google Business Profile para autocomplete.
+     *
+     * Usa Business Information API v1 → categories.list.
+     *
+     * @param int    $business_id
+     * @param string $search_term
+     * @param string $region_code
+     * @param string $language_code
+     * @param int    $page_size
+     * @return array|WP_Error
+     */
+    public static function search_business_categories( $business_id, $search_term, $region_code = 'CO', $language_code = 'es', $page_size = 20 ) {
+        $business_id   = absint( $business_id );
+        $search_term   = sanitize_text_field( (string) $search_term );
+        $region_code   = strtoupper( substr( preg_replace( '/[^A-Za-z]/', '', (string) $region_code ), 0, 2 ) );
+        $language_code = str_replace( '_', '-', trim( (string) $language_code ) );
+        $page_size     = max( 1, min( 100, (int) $page_size ) );
+
+        if ( ! $business_id ) {
+            return new WP_Error( 'invalid_business_id', __( 'business_id inválido para buscar categorías.', 'lealez' ) );
+        }
+
+        if ( function_exists( 'mb_strlen' ) ) {
+            $term_length = mb_strlen( $search_term );
+        } else {
+            $term_length = strlen( $search_term );
+        }
+
+        if ( $term_length < 2 ) {
+            return array(
+                'categories'   => array(),
+                'regionCode'   => $region_code ? $region_code : 'CO',
+                'languageCode' => $language_code ? $language_code : 'es',
+            );
+        }
+
+        if ( '' === $region_code ) {
+            $region_code = 'CO';
+        }
+
+        if ( ! preg_match( '/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/', $language_code ) ) {
+            $language_code = strtolower( substr( preg_replace( '/[^A-Za-z]/', '', $language_code ), 0, 2 ) );
+        }
+
+        if ( '' === $language_code ) {
+            $language_code = 'es';
+        }
+
+        $attempts = array(
+            array(
+                'regionCode'   => $region_code,
+                'languageCode' => $language_code,
+            ),
+        );
+
+        $language_base = strtolower( substr( $language_code, 0, 2 ) );
+        if ( $language_base && $language_base !== strtolower( $language_code ) ) {
+            $attempts[] = array(
+                'regionCode'   => $region_code,
+                'languageCode' => $language_base,
+            );
+        }
+
+        if ( 'CO' !== $region_code || 'es' !== strtolower( $language_base ) ) {
+            $attempts[] = array(
+                'regionCode'   => 'CO',
+                'languageCode' => 'es',
+            );
+        }
+
+        $seen_attempts = array();
+        $last_error    = null;
+
+        foreach ( $attempts as $attempt ) {
+            $attempt_key = $attempt['regionCode'] . '|' . $attempt['languageCode'];
+            if ( isset( $seen_attempts[ $attempt_key ] ) ) {
+                continue;
+            }
+            $seen_attempts[ $attempt_key ] = true;
+
+            $result = self::make_request(
+                $business_id,
+                '/categories',
+                self::$business_api_base,
+                'GET',
+                array(),
+                true,
+                array(
+                    'regionCode'   => $attempt['regionCode'],
+                    'languageCode' => $attempt['languageCode'],
+                    'filter'       => 'displayName=' . $search_term,
+                    'pageSize'     => $page_size,
+                    'view'         => 'BASIC',
+                )
+            );
+
+            if ( is_wp_error( $result ) ) {
+                $last_error = $result;
+                continue;
+            }
+
+            $items = array();
+            $seen  = array();
+
+            if ( ! empty( $result['categories'] ) && is_array( $result['categories'] ) ) {
+                foreach ( $result['categories'] as $category ) {
+                    if ( ! is_array( $category ) ) {
+                        continue;
+                    }
+
+                    $name = isset( $category['name'] ) ? sanitize_text_field( (string) $category['name'] ) : '';
+                    $display_name = isset( $category['displayName'] ) ? sanitize_text_field( (string) $category['displayName'] ) : '';
+
+                    if ( '' === $name || '' === $display_name ) {
+                        continue;
+                    }
+
+                    $dedupe_key = strtolower( $name );
+                    if ( isset( $seen[ $dedupe_key ] ) ) {
+                        continue;
+                    }
+                    $seen[ $dedupe_key ] = true;
+
+                    $items[] = array(
+                        'name'         => $name,
+                        'displayName'  => $display_name,
+                        'languageCode' => isset( $category['languageCode'] ) ? sanitize_text_field( (string) $category['languageCode'] ) : $attempt['languageCode'],
+                    );
+                }
+            }
+
+            return array(
+                'categories'   => array_values( $items ),
+                'regionCode'   => $attempt['regionCode'],
+                'languageCode' => $attempt['languageCode'],
+            );
+        }
+
+        return $last_error ? $last_error : new WP_Error( 'gmb_categories_search_error', __( 'No se pudieron obtener categorías de Google Business Profile.', 'lealez' ) );
+    }
+
+
+
+    /**
      * Obtiene un snapshot de los campos base editables desde el metabox de
      * Información Básica.
      *
@@ -3944,6 +4088,23 @@ public static function push_location_address( $business_id, $location_name, arra
      * @param array  $basic_info_data
      * @return array|WP_Error
      */
+    
+    /**
+     * Envía (PATCH) la Información Básica soportada a GBP.
+     *
+     * Campos soportados:
+     * - profile.description
+     * - openInfo.openingDate
+     * - categories (primaryCategory preservando additionalCategories actuales)
+     *
+     * Se omite intencionalmente:
+     * - priceRange → no está homologado aún en este proyecto
+     *
+     * @param int    $business_id
+     * @param string $location_name
+     * @param array  $basic_info_data
+     * @return array|WP_Error
+     */
     public static function push_location_basic_info( $business_id, $location_name, array $basic_info_data ) {
         $business_id   = absint( $business_id );
         $location_name = trim( (string) $location_name );
@@ -4014,6 +4175,69 @@ public static function push_location_address( $business_id, $location_name, arra
             );
             $submitted['openInfo'] = $body['openInfo'];
             $update_mask[] = 'openInfo.openingDate';
+        }
+
+        $primary_category_name = isset( $basic_info_data['google_primary_category_name'] )
+            ? trim( sanitize_text_field( (string) $basic_info_data['google_primary_category_name'] ) )
+            : '';
+
+        $primary_category_display = isset( $basic_info_data['google_primary_category'] )
+            ? sanitize_text_field( (string) $basic_info_data['google_primary_category'] )
+            : '';
+
+        if ( '' !== $primary_category_name ) {
+            if ( 0 !== strpos( $primary_category_name, 'categories/' ) ) {
+                return new WP_Error( 'invalid_google_primary_category_name', __( 'El resource name de la categoría principal no es válido.', 'lealez' ) );
+            }
+
+            $current_categories = isset( $basic_info_data['current_categories'] ) && is_array( $basic_info_data['current_categories'] )
+                ? $basic_info_data['current_categories']
+                : array();
+
+            $additional_categories = array();
+            $seen_additional       = array();
+
+            if ( isset( $current_categories['additionalCategories'] ) && is_array( $current_categories['additionalCategories'] ) ) {
+                foreach ( $current_categories['additionalCategories'] as $category ) {
+                    if ( ! is_array( $category ) ) {
+                        continue;
+                    }
+
+                    $name = isset( $category['name'] ) ? trim( sanitize_text_field( (string) $category['name'] ) ) : '';
+                    if ( '' === $name || $name === $primary_category_name ) {
+                        continue;
+                    }
+
+                    if ( isset( $seen_additional[ $name ] ) ) {
+                        continue;
+                    }
+                    $seen_additional[ $name ] = true;
+
+                    $additional_categories[] = array(
+                        'name' => $name,
+                    );
+                }
+            }
+
+            $body['categories'] = array(
+                'primaryCategory'      => array(
+                    'name' => $primary_category_name,
+                ),
+                'additionalCategories' => array_values( $additional_categories ),
+            );
+
+            $submitted['categories'] = array(
+                'primaryCategory'      => array(
+                    'name' => $primary_category_name,
+                ),
+                'additionalCategories' => array_values( $additional_categories ),
+            );
+
+            if ( '' !== $primary_category_display ) {
+                $submitted['categories']['primaryCategory']['displayName'] = $primary_category_display;
+            }
+
+            $update_mask[] = 'categories';
         }
 
         if ( empty( $update_mask ) ) {
@@ -4103,6 +4327,7 @@ public static function push_location_address( $business_id, $location_name, arra
             'submitted'      => $submitted,
         );
     }
+
 
     /**
      * Consulta el estado actual de Información Básica durante el polling.
