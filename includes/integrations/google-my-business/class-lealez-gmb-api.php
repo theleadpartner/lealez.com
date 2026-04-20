@@ -418,6 +418,132 @@ public static function get_minutes_until_next_refresh( $business_id ) {
     return (int) ceil( $remaining_seconds / 60 );
 }
 
+        /**
+     * Busca categorías oficiales de Google Business Profile para autocomplete.
+     *
+     * Fuente:
+     * Business Information API v1 → GET /v1/categories
+     *
+     * Devuelve categorías normalizadas con:
+     * - name        => ID canónico de Google (ej: categories/gcid:bank)
+     * - displayName => Nombre legible localizado
+     *
+     * @param int    $business_id   ID del post oy_business con tokens OAuth.
+     * @param string $search_term   Texto digitado por el usuario.
+     * @param string $region_code   ISO 3166-1 alpha-2. Ej: CO.
+     * @param string $language_code BCP-47 o idioma base. Ej: es.
+     * @param int    $page_size     Máximo de resultados a devolver.
+     * @return array|WP_Error
+     */
+    public static function list_business_categories( $business_id, $search_term = '', $region_code = 'CO', $language_code = 'es', $page_size = 10 ) {
+        $business_id   = absint( $business_id );
+        $search_term   = trim( (string) $search_term );
+        $region_code   = strtoupper( substr( trim( (string) $region_code ), 0, 2 ) );
+        $language_code = trim( (string) $language_code );
+        $page_size     = max( 1, min( 20, (int) $page_size ) );
+
+        $query_len = function_exists( 'mb_strlen' ) ? mb_strlen( $search_term ) : strlen( $search_term );
+
+        if ( ! $business_id ) {
+            return new WP_Error(
+                'invalid_business_id',
+                __( 'Business ID inválido para listar categorías.', 'lealez' )
+            );
+        }
+
+        if ( $query_len < 2 ) {
+            return array();
+        }
+
+        if ( '' === $region_code ) {
+            $region_code = 'CO';
+        }
+
+        if ( '' === $language_code ) {
+            $language_code = 'es';
+        }
+
+        $query_args = array(
+            'regionCode'   => $region_code,
+            'languageCode' => $language_code,
+            'searchTerm'   => $search_term,
+            'pageSize'     => $page_size,
+        );
+
+        $result = self::make_request(
+            $business_id,
+            '/categories',
+            self::$business_api_base,
+            'GET',
+            array(),
+            true,
+            $query_args
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log(
+                    $business_id,
+                    'warning',
+                    'No se pudieron listar categorías GBP.',
+                    array(
+                        'search_term'   => $search_term,
+                        'region_code'   => $region_code,
+                        'language_code' => $language_code,
+                        'error'         => $result->get_error_message(),
+                        'error_code'    => $result->get_error_code(),
+                    )
+                );
+            }
+
+            return $result;
+        }
+
+        $categories = array();
+        $seen       = array();
+
+        if ( ! empty( $result['categories'] ) && is_array( $result['categories'] ) ) {
+            foreach ( $result['categories'] as $category ) {
+                if ( ! is_array( $category ) ) {
+                    continue;
+                }
+
+                $name         = isset( $category['name'] ) ? sanitize_text_field( (string) $category['name'] ) : '';
+                $display_name = isset( $category['displayName'] ) ? sanitize_text_field( (string) $category['displayName'] ) : '';
+
+                if ( '' === $name && '' === $display_name ) {
+                    continue;
+                }
+
+                $dedupe_key = strtolower( $name . '|' . $display_name );
+                if ( isset( $seen[ $dedupe_key ] ) ) {
+                    continue;
+                }
+                $seen[ $dedupe_key ] = true;
+
+                $categories[] = array(
+                    'name'        => $name,
+                    'displayName' => $display_name,
+                );
+            }
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'success',
+                sprintf( 'Categorías GBP encontradas: %d', count( $categories ) ),
+                array(
+                    'search_term'   => $search_term,
+                    'region_code'   => $region_code,
+                    'language_code' => $language_code,
+                )
+            );
+        }
+
+        return $categories;
+    }
+
 
     /**
  * Detect if a WP_Error returned by make_request() is caused by an invalid field mask / readMask.
