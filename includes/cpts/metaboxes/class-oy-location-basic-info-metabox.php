@@ -125,58 +125,141 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
          *
          * @return array
          */
-        private function build_basic_info_payload_from_request() {
-            $description = isset( $_POST['location_short_description'] )
-                ? sanitize_textarea_field( wp_unslash( $_POST['location_short_description'] ) )
-                : '';
+private function build_basic_info_payload_from_request() {
+    $description = isset( $_POST['location_short_description'] )
+        ? sanitize_textarea_field( wp_unslash( $_POST['location_short_description'] ) )
+        : '';
 
-            if ( function_exists( 'mb_substr' ) ) {
-                $description = mb_substr( $description, 0, 750 );
-            } else {
-                $description = substr( $description, 0, 750 );
-            }
+    if ( function_exists( 'mb_substr' ) ) {
+        $description = mb_substr( $description, 0, 750 );
+    } else {
+        $description = substr( $description, 0, 750 );
+    }
 
-            $opening_date = isset( $_POST['opening_date'] )
-                ? sanitize_text_field( wp_unslash( $_POST['opening_date'] ) )
-                : '';
+    $opening_date = $this->normalize_opening_date_from_request(
+        isset( $_POST['opening_date'] ) ? wp_unslash( $_POST['opening_date'] ) : '',
+        isset( $_POST['opening_date_year'] ) ? wp_unslash( $_POST['opening_date_year'] ) : '',
+        isset( $_POST['opening_date_month'] ) ? wp_unslash( $_POST['opening_date_month'] ) : '',
+        isset( $_POST['opening_date_day'] ) ? wp_unslash( $_POST['opening_date_day'] ) : ''
+    );
 
-            if ( '' !== $opening_date && ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $opening_date ) ) {
-                $opening_date = '';
-            }
+    $google_primary_category = isset( $_POST['google_primary_category'] )
+        ? sanitize_text_field( wp_unslash( $_POST['google_primary_category'] ) )
+        : '';
 
-            $google_primary_category = isset( $_POST['google_primary_category'] )
-                ? sanitize_text_field( wp_unslash( $_POST['google_primary_category'] ) )
-                : '';
+    $google_primary_category_name = isset( $_POST['google_primary_category_name'] )
+        ? $this->normalize_google_category_name( wp_unslash( $_POST['google_primary_category_name'] ) )
+        : '';
 
-            $google_primary_category_name = isset( $_POST['google_primary_category_name'] )
-                ? $this->normalize_google_category_name( wp_unslash( $_POST['google_primary_category_name'] ) )
-                : '';
+    if ( '' === $google_primary_category ) {
+        $google_primary_category_name = '';
+    }
 
-            if ( '' === $google_primary_category ) {
-                $google_primary_category_name = '';
-            }
+    $google_additional_categories = isset( $_POST['google_additional_categories_json'] )
+        ? $this->normalize_google_additional_categories( wp_unslash( $_POST['google_additional_categories_json'] ) )
+        : array();
 
-            $google_additional_categories = isset( $_POST['google_additional_categories_json'] )
-                ? $this->normalize_google_additional_categories( wp_unslash( $_POST['google_additional_categories_json'] ) )
-                : array();
+    $price_range = isset( $_POST['price_range'] )
+        ? sanitize_text_field( wp_unslash( $_POST['price_range'] ) )
+        : '';
 
-            $price_range = isset( $_POST['price_range'] )
-                ? sanitize_text_field( wp_unslash( $_POST['price_range'] ) )
-                : '';
+    if ( ! in_array( $price_range, array( '', '1', '2', '3', '4' ), true ) ) {
+        $price_range = '';
+    }
 
-            if ( ! in_array( $price_range, array( '', '1', '2', '3', '4' ), true ) ) {
-                $price_range = '';
-            }
+    return array(
+        'location_short_description'   => $description,
+        'opening_date'                 => $opening_date,
+        'google_primary_category'      => $google_primary_category,
+        'google_primary_category_name' => $google_primary_category_name,
+        'google_additional_categories' => $google_additional_categories,
+        'price_range'                  => $price_range,
+    );
+}
 
-            return array(
-                'location_short_description'   => $description,
-                'opening_date'                 => $opening_date,
-                'google_primary_category'      => $google_primary_category,
-                'google_primary_category_name' => $google_primary_category_name,
-                'google_additional_categories' => $google_additional_categories,
-                'price_range'                  => $price_range,
-            );
-        }
+
+/**
+ * Normaliza la fecha de apertura recibida desde el formulario.
+ *
+ * Acepta:
+ * - opening_date en formato YYYY-MM-DD
+ * - opening_date_year / opening_date_month / opening_date_day
+ *
+ * Si la fecha es parcial o inválida, devuelve cadena vacía.
+ *
+ * @param mixed $opening_date_raw
+ * @param mixed $year_raw
+ * @param mixed $month_raw
+ * @param mixed $day_raw
+ * @return string
+ */
+private function normalize_opening_date_from_request( $opening_date_raw, $year_raw = '', $month_raw = '', $day_raw = '' ) {
+    $opening_date_raw = sanitize_text_field( (string) $opening_date_raw );
+    $year_raw         = sanitize_text_field( (string) $year_raw );
+    $month_raw        = sanitize_text_field( (string) $month_raw );
+    $day_raw          = sanitize_text_field( (string) $day_raw );
+
+    if ( '' !== $year_raw || '' !== $month_raw || '' !== $day_raw ) {
+        return self::build_opening_date_from_parts( $year_raw, $month_raw, $day_raw );
+    }
+
+    return self::normalize_opening_date_for_compare( $opening_date_raw );
+}
+
+/**
+ * Construye una fecha YYYY-MM-DD válida a partir de sus partes.
+ *
+ * @param mixed $year_raw
+ * @param mixed $month_raw
+ * @param mixed $day_raw
+ * @return string
+ */
+private static function build_opening_date_from_parts( $year_raw, $month_raw, $day_raw ) {
+    $year  = (int) preg_replace( '/[^0-9]/', '', (string) $year_raw );
+    $month = (int) preg_replace( '/[^0-9]/', '', (string) $month_raw );
+    $day   = (int) preg_replace( '/[^0-9]/', '', (string) $day_raw );
+
+    if ( ! $year && ! $month && ! $day ) {
+        return '';
+    }
+
+    if ( $year <= 0 || $month <= 0 || $day <= 0 ) {
+        return '';
+    }
+
+    if ( ! checkdate( $month, $day, $year ) ) {
+        return '';
+    }
+
+    return sprintf( '%04d-%02d-%02d', $year, $month, $day );
+}
+
+/**
+ * Divide una fecha YYYY-MM-DD en sus partes para el render del formulario.
+ *
+ * @param mixed $value
+ * @return array
+ */
+private static function split_opening_date_parts( $value ) {
+    $normalized = self::normalize_opening_date_for_compare( $value );
+
+    if ( '' === $normalized ) {
+        return array(
+            'year'  => '',
+            'month' => '',
+            'day'   => '',
+        );
+    }
+
+    list( $year, $month, $day ) = explode( '-', $normalized );
+
+    return array(
+        'year'  => $year,
+        'month' => $month,
+        'day'   => $day,
+    );
+}
+        
 
         /**
          * Normaliza el resource name de una categoría de GBP.
@@ -800,33 +883,109 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         </td>
                     </tr>
 
-                    <tr>
-                        <th scope="row">
-                            <label for="opening_date"><?php _e( 'Fecha de Apertura', 'lealez' ); ?></label>
-                        </th>
-                        <td>
-                            <input
-                                type="date"
-                                name="opening_date"
-                                id="opening_date"
-                                value="<?php echo esc_attr( $opening_date ); ?>"
-                                class="regular-text"
-                                data-oy-basic-field="1"
-                                readonly="readonly"
-                                disabled="disabled"
-                            >
-                            <?php if ( '' !== $gmb_opening_date ) : ?>
-                                <p class="description">
-                                    <?php
-                                    printf(
-                                        esc_html__( 'Última fecha detectada desde Google: %s', 'lealez' ),
-                                        esc_html( $gmb_opening_date )
-                                    );
-                                    ?>
-                                </p>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
+<tr>
+    <th scope="row">
+        <label for="opening_date_year"><?php _e( 'Fecha de Apertura', 'lealez' ); ?></label>
+    </th>
+    <td>
+        <?php
+        $opening_date_parts  = self::split_opening_date_parts( $opening_date );
+        $opening_year_value  = (string) $opening_date_parts['year'];
+        $opening_month_value = (string) $opening_date_parts['month'];
+        $opening_day_value   = (string) $opening_date_parts['day'];
+        $current_year        = (int) gmdate( 'Y' );
+        $year_start          = max( 1800, $current_year + 1 );
+        $month_labels        = array(
+            '01' => __( 'Enero', 'lealez' ),
+            '02' => __( 'Febrero', 'lealez' ),
+            '03' => __( 'Marzo', 'lealez' ),
+            '04' => __( 'Abril', 'lealez' ),
+            '05' => __( 'Mayo', 'lealez' ),
+            '06' => __( 'Junio', 'lealez' ),
+            '07' => __( 'Julio', 'lealez' ),
+            '08' => __( 'Agosto', 'lealez' ),
+            '09' => __( 'Septiembre', 'lealez' ),
+            '10' => __( 'Octubre', 'lealez' ),
+            '11' => __( 'Noviembre', 'lealez' ),
+            '12' => __( 'Diciembre', 'lealez' ),
+        );
+        ?>
+        <input
+            type="hidden"
+            name="opening_date"
+            id="opening_date"
+            value="<?php echo esc_attr( $opening_date ); ?>"
+        >
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; max-width:760px;">
+            <select
+                name="opening_date_year"
+                id="opening_date_year"
+                class="regular-text"
+                data-oy-basic-field="1"
+                data-oy-opening-part="year"
+                disabled="disabled"
+                style="max-width:150px;"
+            >
+                <option value=""><?php esc_html_e( 'Año', 'lealez' ); ?></option>
+                <?php for ( $year = $year_start; $year >= 1800; $year-- ) : ?>
+                    <option value="<?php echo esc_attr( $year ); ?>" <?php selected( $opening_year_value, (string) $year ); ?>>
+                        <?php echo esc_html( $year ); ?>
+                    </option>
+                <?php endfor; ?>
+            </select>
+
+            <select
+                name="opening_date_month"
+                id="opening_date_month"
+                class="regular-text"
+                data-oy-basic-field="1"
+                data-oy-opening-part="month"
+                disabled="disabled"
+                style="max-width:180px;"
+            >
+                <option value=""><?php esc_html_e( 'Mes', 'lealez' ); ?></option>
+                <?php foreach ( $month_labels as $month_value => $month_label ) : ?>
+                    <option value="<?php echo esc_attr( $month_value ); ?>" <?php selected( $opening_month_value, (string) $month_value ); ?>>
+                        <?php echo esc_html( $month_label ); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+
+            <select
+                name="opening_date_day"
+                id="opening_date_day"
+                class="regular-text"
+                data-oy-basic-field="1"
+                data-oy-opening-part="day"
+                disabled="disabled"
+                style="max-width:120px;"
+            >
+                <option value=""><?php esc_html_e( 'Día', 'lealez' ); ?></option>
+                <?php for ( $day = 1; $day <= 31; $day++ ) : $day_value = sprintf( '%02d', $day ); ?>
+                    <option value="<?php echo esc_attr( $day_value ); ?>" <?php selected( $opening_day_value, $day_value ); ?>>
+                        <?php echo esc_html( $day ); ?>
+                    </option>
+                <?php endfor; ?>
+            </select>
+        </div>
+
+        <p class="description" id="oy-opening-date-help">
+            <?php _e( 'La fecha se edita con el mismo modelo de GMB: Año, Mes y Día. Solo se guardará y publicará cuando los 3 valores formen una fecha válida.', 'lealez' ); ?>
+        </p>
+
+        <?php if ( '' !== $gmb_opening_date ) : ?>
+            <p class="description">
+                <?php
+                printf(
+                    esc_html__( 'Última fecha detectada desde Google: %s', 'lealez' ),
+                    esc_html( $gmb_opening_date )
+                );
+                ?>
+            </p>
+        <?php endif; ?>
+    </td>
+</tr>
 
                     <tr>
                         <th scope="row">
@@ -1880,6 +2039,88 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         return JSON.parse(JSON.stringify(value == null ? null : value));
                     }
 
+                    function padOpeningDatePart(value) {
+    value = String(value == null ? '' : value).replace(/[^0-9]/g, '');
+    if (!value) { return ''; }
+    return value.length === 1 ? ('0' + value) : value;
+}
+
+function buildNormalizedOpeningDate(year, month, day) {
+    year = String(year == null ? '' : year).replace(/[^0-9]/g, '');
+    month = padOpeningDatePart(month);
+    day = padOpeningDatePart(day);
+
+    if (!year && !month && !day) {
+        return '';
+    }
+
+    if (!year || !month || !day) {
+        return '';
+    }
+
+    var y = parseInt(year, 10);
+    var m = parseInt(month, 10);
+    var d = parseInt(day, 10);
+
+    if (!y || !m || !d) {
+        return '';
+    }
+
+    var test = new Date(y, m - 1, d);
+    if (test.getFullYear() !== y || (test.getMonth() + 1) !== m || test.getDate() !== d) {
+        return '';
+    }
+
+    return String(y).padStart(4, '0') + '-' + month + '-' + day;
+}
+
+function syncOpeningDateHiddenField() {
+    var year = $('#opening_date_year').val() || '';
+    var month = $('#opening_date_month').val() || '';
+    var day = $('#opening_date_day').val() || '';
+    var normalized = buildNormalizedOpeningDate(year, month, day);
+
+    $('#opening_date').val(normalized);
+
+    var $help = $('#oy-opening-date-help');
+    if (!$help.length) { return; }
+
+    if (!year && !month && !day) {
+        $help.html('La fecha se edita con el mismo modelo de GMB: Año, Mes y Día. Solo se guardará y publicará cuando los 3 valores formen una fecha válida.');
+        $help.css('color', '');
+        return;
+    }
+
+    if (!normalized) {
+        $help.html('La fecha de apertura todavía no es válida. Completa Año, Mes y Día con una combinación real.');
+        $help.css('color', '#b32d2e');
+        return;
+    }
+
+    $help.html('Fecha lista para guardar y publicar en GMB: <code>' + escapeHtml(normalized) + '</code>.');
+    $help.css('color', '#008a20');
+}
+
+function setOpeningDateSelectorsFromValue(value) {
+    value = String(value == null ? '' : value);
+    var match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) {
+        $('#opening_date_year').val('');
+        $('#opening_date_month').val('');
+        $('#opening_date_day').val('');
+        $('#opening_date').val('');
+        syncOpeningDateHiddenField();
+        return;
+    }
+
+    $('#opening_date_year').val(match[1]);
+    $('#opening_date_month').val(match[2]);
+    $('#opening_date_day').val(match[3]);
+    $('#opening_date').val(match[1] + '-' + match[2] + '-' + match[3]);
+    syncOpeningDateHiddenField();
+}
+
                     function setStatus(message, type) {
                         var $box = $('#oy-basic-info-inline-status');
                         if (!$box.length) { return; }
@@ -2319,16 +2560,21 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         $row.data('searchTimer', timer);
                     }
 
-                    function captureState() {
-                        return {
-                            location_short_description: $('#location_short_description').val() || '',
-                            opening_date: $('#opening_date').val() || '',
-                            google_primary_category: $('#google_primary_category').val() || '',
-                            google_primary_category_name: $('#google_primary_category_name').val() || '',
-                            google_additional_categories: cloneValue(getAdditionalCategoriesFromDom()),
-                            price_range: $('#price_range').val() || ''
-                        };
-                    }
+function captureState() {
+    syncOpeningDateHiddenField();
+
+    return {
+        location_short_description: $('#location_short_description').val() || '',
+        opening_date: $('#opening_date').val() || '',
+        opening_date_year: $('#opening_date_year').val() || '',
+        opening_date_month: $('#opening_date_month').val() || '',
+        opening_date_day: $('#opening_date_day').val() || '',
+        google_primary_category: $('#google_primary_category').val() || '',
+        google_primary_category_name: $('#google_primary_category_name').val() || '',
+        google_additional_categories: cloneValue(getAdditionalCategoriesFromDom()),
+        price_range: $('#price_range').val() || ''
+    };
+}
 
                     function statesEqual(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
@@ -2378,26 +2624,26 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         setStatus('Modo edición activado. Guarda el metabox antes de usar "Enviar a GMB".', 'info');
                     }
 
-                    function cancelEditMode() {
-                        if (!editorState.baseline) editorState.baseline = captureState();
-                        $('#location_short_description').val(editorState.baseline.location_short_description);
-                        $('#opening_date').val(editorState.baseline.opening_date);
-                        $('#google_primary_category').val(editorState.baseline.google_primary_category);
-                        $('#google_primary_category_name').val(editorState.baseline.google_primary_category_name || '');
-                        $('#google_primary_category').data('selectedLabel', (editorState.baseline.google_primary_category_name ? editorState.baseline.google_primary_category : ''));
-                        renderAdditionalCategoryRows(editorState.baseline.google_additional_categories || []);
-                        $('#price_range').val(editorState.baseline.price_range);
-                        hideCategorySuggestions();
-                        hideAdditionalCategorySuggestions();
-                        updateDescriptionCounter();
-                        renderCategorySelectionState();
-                        renderAdditionalCategoriesSelectionState();
-                        editorState.enabled = false;
-                        editorState.dirty = false;
-                        editorState.saving = false;
-                        updateUiState();
-                        setStatus('Edición cancelada. Se restauró el último estado guardado localmente.', 'warning');
-                    }
+function cancelEditMode() {
+    if (!editorState.baseline) editorState.baseline = captureState();
+    $('#location_short_description').val(editorState.baseline.location_short_description);
+    setOpeningDateSelectorsFromValue(editorState.baseline.opening_date);
+    $('#google_primary_category').val(editorState.baseline.google_primary_category);
+    $('#google_primary_category_name').val(editorState.baseline.google_primary_category_name || '');
+    $('#google_primary_category').data('selectedLabel', (editorState.baseline.google_primary_category_name ? editorState.baseline.google_primary_category : ''));
+    renderAdditionalCategoryRows(editorState.baseline.google_additional_categories || []);
+    $('#price_range').val(editorState.baseline.price_range);
+    hideCategorySuggestions();
+    hideAdditionalCategorySuggestions();
+    updateDescriptionCounter();
+    renderCategorySelectionState();
+    renderAdditionalCategoriesSelectionState();
+    editorState.enabled = false;
+    editorState.dirty = false;
+    editorState.saving = false;
+    updateUiState();
+    setStatus('Edición cancelada. Se restauró el último estado guardado localmente.', 'warning');
+}
 
                     function updateDescriptionCounter() {
                         var val = $('#location_short_description').val() || '';
@@ -2569,144 +2815,153 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         }
                     }
 
-                    function saveMetabox() {
-                        if (editorState.saving || !editorState.enabled) return;
-                        editorState.saving = true;
-                        updateUiState();
-                        setStatus('Guardando cambios locales...', 'info');
+function saveMetabox() {
+    if (editorState.saving || !editorState.enabled) return;
+    editorState.saving = true;
+    updateUiState();
+    setStatus('Guardando cambios locales...', 'info');
 
-                        var beforeState = editorState.baseline ? cloneValue(editorState.baseline) : captureState();
-                        var additionalCategoriesJson = JSON.stringify(getAdditionalCategoriesFromDom());
+    var beforeState = editorState.baseline ? cloneValue(editorState.baseline) : captureState();
+    var additionalCategoriesJson = JSON.stringify(getAdditionalCategoriesFromDom());
 
-                        $.post(AJAX_URL, {
-                            action: 'oy_save_basic_info_metabox',
-                            nonce: SAVE_NONCE,
-                            post_id: POST_ID,
-                            location_short_description: $('#location_short_description').val() || '',
-                            opening_date: $('#opening_date').val() || '',
-                            google_primary_category: $('#google_primary_category').val() || '',
-                            google_primary_category_name: $('#google_primary_category_name').val() || '',
-                            google_additional_categories_json: additionalCategoriesJson,
-                            price_range: $('#price_range').val() || ''
-                        }).done(function(response) {
-                            if (!response || !response.success) {
-                                var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo guardar el metabox.';
-                                setStatus(msg, 'error');
-                                addLogEntry({ action:'manual_metabox_save_error', error_message:msg, response: response && response.data ? response.data : response }, buildDiff(beforeState, captureState()), 'push_error');
-                                return;
-                            }
+    $.post(AJAX_URL, {
+        action: 'oy_save_basic_info_metabox',
+        nonce: SAVE_NONCE,
+        post_id: POST_ID,
+        location_short_description: $('#location_short_description').val() || '',
+        opening_date: $('#opening_date').val() || '',
+        opening_date_year: $('#opening_date_year').val() || '',
+        opening_date_month: $('#opening_date_month').val() || '',
+        opening_date_day: $('#opening_date_day').val() || '',
+        google_primary_category: $('#google_primary_category').val() || '',
+        google_primary_category_name: $('#google_primary_category_name').val() || '',
+        google_additional_categories_json: additionalCategoriesJson,
+        price_range: $('#price_range').val() || ''
+    }).done(function(response) {
+        if (!response || !response.success) {
+            var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo guardar el metabox.';
+            setStatus(msg, 'error');
+            addLogEntry({ action:'manual_metabox_save_error', error_message:msg, response: response && response.data ? response.data : response }, buildDiff(beforeState, captureState()), 'push_error');
+            return;
+        }
 
-                            var afterState = captureState();
-                            addLogEntry({ action:'manual_metabox_save', response: response && response.data ? response.data : response }, buildDiff(beforeState, afterState), 'manual_save');
+        var afterState = captureState();
+        addLogEntry({ action:'manual_metabox_save', response: response && response.data ? response.data : response }, buildDiff(beforeState, afterState), 'manual_save');
 
-                            editorState.baseline = afterState;
-                            editorState.enabled = false;
-                            editorState.dirty = false;
-                            localPending = true;
-                            lastManualLabel = response.data && response.data.save_meta && response.data.save_meta.at_label ? response.data.save_meta.at_label : lastManualLabel;
+        editorState.baseline = afterState;
+        editorState.enabled = false;
+        editorState.dirty = false;
+        localPending = true;
+        lastManualLabel = response.data && response.data.save_meta && response.data.save_meta.at_label ? response.data.save_meta.at_label : lastManualLabel;
 
-                            if (response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
+        if (response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
 
-                            updateUiState();
-                            setStatus(response.data && response.data.message ? response.data.message : 'Metabox guardado localmente.', 'success');
-                        }).fail(function(xhr) {
-                            var msg = 'Error de red al guardar el metabox.';
-                            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) msg = xhr.responseJSON.data.message;
-                            setStatus(msg, 'error');
-                            addLogEntry({ action:'manual_metabox_save_network_error', error_message:msg }, buildDiff(beforeState, captureState()), 'push_error');
-                        }).always(function() {
-                            editorState.saving = false;
-                            updateUiState();
-                        });
-                    }
+        updateUiState();
+        setStatus(response.data && response.data.message ? response.data.message : 'Metabox guardado localmente.', 'success');
+    }).fail(function(xhr) {
+        var msg = 'Error de red al guardar el metabox.';
+        if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) msg = xhr.responseJSON.data.message;
+        setStatus(msg, 'error');
+        addLogEntry({ action:'manual_metabox_save_network_error', error_message:msg }, buildDiff(beforeState, captureState()), 'push_error');
+    }).always(function() {
+        editorState.saving = false;
+        updateUiState();
+    });
+}
 
-                    function bindDirtyWatchers() {
-                        $(document).on('input.oyBasicInfo change.oyBasicInfo', '#location_short_description, #opening_date, #price_range', function() {
-                            if (!editorState.enabled) return;
-                            updateDescriptionCounter();
-                            refreshDirtyState();
-                        });
+function bindDirtyWatchers() {
+    $(document).on('input.oyBasicInfo change.oyBasicInfo', '#location_short_description, #price_range', function() {
+        if (!editorState.enabled) return;
+        updateDescriptionCounter();
+        refreshDirtyState();
+    });
 
-                        $(document).on('input.oyBasicInfo', '#google_primary_category', function() {
-                            if (!editorState.enabled) { return; }
-                            queuePrimaryCategorySearch();
-                            refreshDirtyState();
-                        });
+    $(document).on('change.oyBasicInfo', '#opening_date_year, #opening_date_month, #opening_date_day', function() {
+        syncOpeningDateHiddenField();
+        if (!editorState.enabled) return;
+        refreshDirtyState();
+    });
 
-                        $(document).on('focus.oyBasicInfo', '#google_primary_category', function() {
-                            if (!editorState.enabled) { return; }
-                            if (getCategoryDisplayValue() && getCategoryDisplayValue().length >= 2 && !getCategoryResourceName()) {
-                                queuePrimaryCategorySearch();
-                            }
-                        });
+    $(document).on('input.oyBasicInfo', '#google_primary_category', function() {
+        if (!editorState.enabled) { return; }
+        queuePrimaryCategorySearch();
+        refreshDirtyState();
+    });
 
-                        $(document).on('blur.oyBasicInfo', '#google_primary_category', function() {
-                            setTimeout(function() { hideCategorySuggestions(); }, 180);
-                        });
+    $(document).on('focus.oyBasicInfo', '#google_primary_category', function() {
+        if (!editorState.enabled) { return; }
+        if (getCategoryDisplayValue() && getCategoryDisplayValue().length >= 2 && !getCategoryResourceName()) {
+            queuePrimaryCategorySearch();
+        }
+    });
 
-                        $(document).on('click.oyBasicInfo', '.oy-basic-category-option', function(event) {
-                            event.preventDefault();
-                            selectCategorySuggestion({
-                                displayName: $(this).data('label') || '',
-                                name: $(this).data('name') || ''
-                            });
-                        });
+    $(document).on('blur.oyBasicInfo', '#google_primary_category', function() {
+        setTimeout(function() { hideCategorySuggestions(); }, 180);
+    });
 
-                        $(document).on('input.oyBasicInfo', '.oy-basic-additional-category-label', function() {
-                            if (!editorState.enabled) { return; }
-                            var $row = $(this).closest('.oy-basic-additional-category-row');
-                            queueAdditionalCategorySearch($row);
-                            refreshDirtyState();
-                        });
+    $(document).on('click.oyBasicInfo', '.oy-basic-category-option', function(event) {
+        event.preventDefault();
+        selectCategorySuggestion({
+            displayName: $(this).data('label') || '',
+            name: $(this).data('name') || ''
+        });
+    });
 
-                        $(document).on('focus.oyBasicInfo', '.oy-basic-additional-category-label', function() {
-                            if (!editorState.enabled) { return; }
-                            var $row = $(this).closest('.oy-basic-additional-category-row');
-                            var text = $.trim($(this).val() || '');
-                            var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
-                            if (text.length >= 2 && !name) {
-                                queueAdditionalCategorySearch($row);
-                            }
-                        });
+    $(document).on('input.oyBasicInfo', '.oy-basic-additional-category-label', function() {
+        if (!editorState.enabled) { return; }
+        var $row = $(this).closest('.oy-basic-additional-category-row');
+        queueAdditionalCategorySearch($row);
+        refreshDirtyState();
+    });
 
-                        $(document).on('blur.oyBasicInfo', '.oy-basic-additional-category-label', function() {
-                            var $row = $(this).closest('.oy-basic-additional-category-row');
-                            setTimeout(function() { hideAdditionalCategorySuggestions($row); }, 180);
-                        });
+    $(document).on('focus.oyBasicInfo', '.oy-basic-additional-category-label', function() {
+        if (!editorState.enabled) { return; }
+        var $row = $(this).closest('.oy-basic-additional-category-row');
+        var text = $.trim($(this).val() || '');
+        var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
+        if (text.length >= 2 && !name) {
+            queueAdditionalCategorySearch($row);
+        }
+    });
 
-                        $(document).on('click.oyBasicInfo', '.oy-basic-additional-category-option', function(event) {
-                            event.preventDefault();
-                            var $row = $(this).closest('.oy-basic-additional-category-row');
-                            selectAdditionalCategorySuggestion($row, {
-                                displayName: $(this).data('label') || '',
-                                name: $(this).data('name') || ''
-                            });
-                        });
+    $(document).on('blur.oyBasicInfo', '.oy-basic-additional-category-label', function() {
+        var $row = $(this).closest('.oy-basic-additional-category-row');
+        setTimeout(function() { hideAdditionalCategorySuggestions($row); }, 180);
+    });
 
-                        $(document).on('click.oyBasicInfo', '.oy-basic-additional-category-remove', function(event) {
-                            event.preventDefault();
-                            if (!editorState.enabled) { return; }
-                            $(this).closest('.oy-basic-additional-category-row').remove();
-                            reindexAdditionalCategoryRows();
-                            syncAdditionalCategoriesInputFromDom();
-                            renderAdditionalCategoriesSelectionState();
-                            refreshDirtyState();
-                        });
+    $(document).on('click.oyBasicInfo', '.oy-basic-additional-category-option', function(event) {
+        event.preventDefault();
+        var $row = $(this).closest('.oy-basic-additional-category-row');
+        selectAdditionalCategorySuggestion($row, {
+            displayName: $(this).data('label') || '',
+            name: $(this).data('name') || ''
+        });
+    });
 
-                        $(document).on('click.oyBasicInfo', '#oy-basic-additional-category-add', function(event) {
-                            event.preventDefault();
-                            if (!editorState.enabled) { return; }
-                            if (!$.trim(getCategoryDisplayValue())) {
-                                setStatus('Define primero la Categoría Principal antes de agregar categorías adicionales.', 'warning');
-                                return;
-                            }
-                            var $row = addAdditionalCategoryRow({ displayName:'', name:'' });
-                            refreshDirtyState();
-                            if ($row && $row.length) {
-                                $row.find('.oy-basic-additional-category-label').trigger('focus');
-                            }
-                        });
-                    }
+    $(document).on('click.oyBasicInfo', '.oy-basic-additional-category-remove', function(event) {
+        event.preventDefault();
+        if (!editorState.enabled) { return; }
+        $(this).closest('.oy-basic-additional-category-row').remove();
+        reindexAdditionalCategoryRows();
+        syncAdditionalCategoriesInputFromDom();
+        renderAdditionalCategoriesSelectionState();
+        refreshDirtyState();
+    });
+
+    $(document).on('click.oyBasicInfo', '#oy-basic-additional-category-add', function(event) {
+        event.preventDefault();
+        if (!editorState.enabled) { return; }
+        if (!$.trim(getCategoryDisplayValue())) {
+            setStatus('Define primero la Categoría Principal antes de agregar categorías adicionales.', 'warning');
+            return;
+        }
+        var $row = addAdditionalCategoryRow({ displayName:'', name:'' });
+        refreshDirtyState();
+        if ($row && $row.length) {
+            $row.find('.oy-basic-additional-category-label').trigger('focus');
+        }
+    });
+}
 
                     function guardCptSaveButtons() {
                         document.addEventListener('click', function(event) {
@@ -2847,48 +3102,50 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         });
                     }
 
-                    $(document).ready(function() {
-                        if (!$('#oy_location_basic_info').length) return;
+$(document).ready(function() {
+    if (!$('#oy_location_basic_info').length) return;
 
-                        if ($('#google_primary_category_name').val()) {
-                            $('#google_primary_category').data('selectedLabel', $('#google_primary_category').val() || '');
-                        }
+    if ($('#google_primary_category_name').val()) {
+        $('#google_primary_category').data('selectedLabel', $('#google_primary_category').val() || '');
+    }
 
-                        $('#oy-basic-additional-categories-list .oy-basic-additional-category-row').each(function() {
-                            var $row = $(this);
-                            var label = $.trim($row.find('.oy-basic-additional-category-label').val() || '');
-                            var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
-                            if (name && label) {
-                                $row.find('.oy-basic-additional-category-label').data('selectedLabel', label);
-                            }
-                        });
+    $('#oy-basic-additional-categories-list .oy-basic-additional-category-row').each(function() {
+        var $row = $(this);
+        var label = $.trim($row.find('.oy-basic-additional-category-label').val() || '');
+        var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
+        if (name && label) {
+            $row.find('.oy-basic-additional-category-label').data('selectedLabel', label);
+        }
+    });
 
-                        if (!$('#oy-basic-additional-categories-list .oy-basic-additional-category-row').length) {
-                            var initialRows = parseJsonSafe($('#oy-basic-additional-categories-list').attr('data-initial-json') || $('#google_additional_categories_json').val(), []);
-                            if (initialRows.length) {
-                                renderAdditionalCategoryRows(initialRows);
-                            } else {
-                                syncAdditionalCategoriesInputFromDom();
-                            }
-                        } else {
-                            syncAdditionalCategoriesInputFromDom();
-                        }
+    if (!$('#oy-basic-additional-categories-list .oy-basic-additional-category-row').length) {
+        var initialRows = parseJsonSafe($('#oy-basic-additional-categories-list').attr('data-initial-json') || $('#google_additional_categories_json').val(), []);
+        if (initialRows.length) {
+            renderAdditionalCategoryRows(initialRows);
+        } else {
+            syncAdditionalCategoriesInputFromDom();
+        }
+    } else {
+        syncAdditionalCategoriesInputFromDom();
+    }
 
-                        editorState.baseline = captureState();
-                        updateDescriptionCounter();
-                        updateUiState();
-                        renderCategorySelectionState();
-                        renderAdditionalCategoriesSelectionState();
-                        renderLog();
+    syncOpeningDateHiddenField();
 
-                        if (lastManualLabel) setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info');
-                        else if (localPending) setStatus('Hay cambios locales pendientes por publicar en GMB.', 'info');
+    editorState.baseline = captureState();
+    updateDescriptionCounter();
+    updateUiState();
+    renderCategorySelectionState();
+    renderAdditionalCategoriesSelectionState();
+    renderLog();
 
-                        bindDirtyWatchers();
-                        bindButtons();
-                        guardCptSaveButtons();
-                        guardExternalButtons();
-                    });
+    if (lastManualLabel) setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info');
+    else if (localPending) setStatus('Hay cambios locales pendientes por publicar en GMB.', 'info');
+
+    bindDirtyWatchers();
+    bindButtons();
+    guardCptSaveButtons();
+    guardExternalButtons();
+});
                 })(jQuery);
             </script>
             <?php
