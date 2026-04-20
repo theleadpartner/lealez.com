@@ -4194,10 +4194,52 @@ public static function push_location_address( $business_id, $location_name, arra
                 ? $basic_info_data['current_categories']
                 : array();
 
+            $submitted_additional = isset( $basic_info_data['google_additional_categories'] ) && is_array( $basic_info_data['google_additional_categories'] )
+                ? $basic_info_data['google_additional_categories']
+                : null;
+
             $additional_categories = array();
+            $submitted_additional_categories = array();
             $seen_additional       = array();
 
-            if ( isset( $current_categories['additionalCategories'] ) && is_array( $current_categories['additionalCategories'] ) ) {
+            if ( is_array( $submitted_additional ) ) {
+                foreach ( $submitted_additional as $category ) {
+                    if ( ! is_array( $category ) ) {
+                        continue;
+                    }
+
+                    $name = isset( $category['name'] ) ? trim( sanitize_text_field( (string) $category['name'] ) ) : '';
+                    if ( '' === $name || $name === $primary_category_name ) {
+                        continue;
+                    }
+
+                    if ( 0 !== strpos( $name, 'categories/' ) ) {
+                        return new WP_Error( 'invalid_google_additional_category_name', __( 'Una categoría adicional no tiene un resource name válido.', 'lealez' ) );
+                    }
+
+                    if ( isset( $seen_additional[ $name ] ) ) {
+                        continue;
+                    }
+                    $seen_additional[ $name ] = true;
+
+                    $additional_categories[] = array(
+                        'name' => $name,
+                    );
+
+                    $submitted_item = array(
+                        'name' => $name,
+                    );
+
+                    if ( isset( $category['displayName'] ) ) {
+                        $display_name = sanitize_text_field( (string) $category['displayName'] );
+                        if ( '' !== $display_name ) {
+                            $submitted_item['displayName'] = $display_name;
+                        }
+                    }
+
+                    $submitted_additional_categories[] = $submitted_item;
+                }
+            } elseif ( isset( $current_categories['additionalCategories'] ) && is_array( $current_categories['additionalCategories'] ) ) {
                 foreach ( $current_categories['additionalCategories'] as $category ) {
                     if ( ! is_array( $category ) ) {
                         continue;
@@ -4216,6 +4258,19 @@ public static function push_location_address( $business_id, $location_name, arra
                     $additional_categories[] = array(
                         'name' => $name,
                     );
+
+                    $submitted_item = array(
+                        'name' => $name,
+                    );
+
+                    if ( isset( $category['displayName'] ) ) {
+                        $display_name = sanitize_text_field( (string) $category['displayName'] );
+                        if ( '' !== $display_name ) {
+                            $submitted_item['displayName'] = $display_name;
+                        }
+                    }
+
+                    $submitted_additional_categories[] = $submitted_item;
                 }
             }
 
@@ -4230,7 +4285,7 @@ public static function push_location_address( $business_id, $location_name, arra
                 'primaryCategory'      => array(
                     'name' => $primary_category_name,
                 ),
-                'additionalCategories' => array_values( $additional_categories ),
+                'additionalCategories' => array_values( $submitted_additional_categories ),
             );
 
             if ( '' !== $primary_category_display ) {
