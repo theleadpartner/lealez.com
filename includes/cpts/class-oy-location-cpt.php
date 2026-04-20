@@ -4361,18 +4361,25 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
             }
 
             $additional = isset( $categories['additionalCategories'] ) && is_array( $categories['additionalCategories'] ) ? $categories['additionalCategories'] : array();
-            if ( ! empty( $additional ) ) {
-                $out = array();
-                foreach ( $additional as $c ) {
-                    if ( is_array( $c ) ) {
-                        $out[] = array(
-                            'name'        => isset( $c['name'] ) ? sanitize_text_field( (string) $c['name'] ) : '',
-                            'displayName' => isset( $c['displayName'] ) ? sanitize_text_field( (string) $c['displayName'] ) : '',
-                        );
-                    }
+            $out = array();
+            $seen_additional = array();
+            foreach ( $additional as $c ) {
+                if ( ! is_array( $c ) ) {
+                    continue;
                 }
-                update_post_meta( $post_id, 'gmb_additional_categories', $out );
+
+                $name = isset( $c['name'] ) ? sanitize_text_field( (string) $c['name'] ) : '';
+                if ( '' === $name || isset( $seen_additional[ $name ] ) ) {
+                    continue;
+                }
+                $seen_additional[ $name ] = true;
+
+                $out[] = array(
+                    'name'        => $name,
+                    'displayName' => isset( $c['displayName'] ) ? sanitize_text_field( (string) $c['displayName'] ) : '',
+                );
             }
+            update_post_meta( $post_id, 'gmb_additional_categories', array_values( $out ) );
         }
 
 // latlng (RAW + map)
