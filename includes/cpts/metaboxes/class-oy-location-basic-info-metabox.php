@@ -156,6 +156,10 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 $google_primary_category_name = '';
             }
 
+            $google_additional_categories = isset( $_POST['google_additional_categories_json'] )
+                ? $this->normalize_google_additional_categories( wp_unslash( $_POST['google_additional_categories_json'] ) )
+                : array();
+
             $price_range = isset( $_POST['price_range'] )
                 ? sanitize_text_field( wp_unslash( $_POST['price_range'] ) )
                 : '';
@@ -169,10 +173,10 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 'opening_date'                 => $opening_date,
                 'google_primary_category'      => $google_primary_category,
                 'google_primary_category_name' => $google_primary_category_name,
+                'google_additional_categories' => $google_additional_categories,
                 'price_range'                  => $price_range,
             );
         }
-
 
         /**
          * Normaliza el resource name de una categoría de GBP.
@@ -192,6 +196,199 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             }
 
             return $value;
+        }
+
+        /**
+         * Normaliza una fila de categoría para uso local del metabox.
+         *
+         * @param mixed $item
+         * @return array|null
+         */
+        private function normalize_google_category_item( $item ) {
+            $display_name  = '';
+            $resource_name = '';
+
+            if ( is_string( $item ) ) {
+                $display_name = sanitize_text_field( trim( $item ) );
+            } elseif ( is_array( $item ) ) {
+                $display_name = isset( $item['displayName'] )
+                    ? sanitize_text_field( trim( (string) $item['displayName'] ) )
+                    : '';
+
+                if ( '' === $display_name && isset( $item['label'] ) ) {
+                    $display_name = sanitize_text_field( trim( (string) $item['label'] ) );
+                }
+
+                if ( '' === $display_name && isset( $item['text'] ) ) {
+                    $display_name = sanitize_text_field( trim( (string) $item['text'] ) );
+                }
+
+                if ( '' === $display_name && isset( $item['name'] ) ) {
+                    $display_name = sanitize_text_field( trim( (string) $item['name'] ) );
+                }
+
+                if ( isset( $item['name'] ) ) {
+                    $resource_name = $this->normalize_google_category_name( $item['name'] );
+                }
+            }
+
+            if ( '' === $display_name && '' === $resource_name ) {
+                return null;
+            }
+
+            if ( '' === $display_name && '' !== $resource_name ) {
+                $display_name = $resource_name;
+            }
+
+            return array(
+                'displayName' => $display_name,
+                'name'        => $resource_name,
+            );
+        }
+
+        /**
+         * Normaliza el listado de categorías adicionales guardadas localmente.
+         *
+         * @param mixed $raw_value
+         * @return array
+         */
+        private function normalize_google_additional_categories( $raw_value ) {
+            if ( is_string( $raw_value ) ) {
+                $decoded   = json_decode( trim( $raw_value ), true );
+                $raw_value = is_array( $decoded ) ? $decoded : array();
+            }
+
+            if ( ! is_array( $raw_value ) ) {
+                return array();
+            }
+
+            $normalized = array();
+            $seen       = array();
+
+            foreach ( $raw_value as $item ) {
+                $category = $this->normalize_google_category_item( $item );
+                if ( ! is_array( $category ) ) {
+                    continue;
+                }
+
+                $display_name  = (string) $category['displayName'];
+                $resource_name = (string) $category['name'];
+                $dedupe_key    = '' !== $resource_name
+                    ? 'name:' . strtolower( $resource_name )
+                    : 'display:' . strtolower( $display_name );
+
+                if ( isset( $seen[ $dedupe_key ] ) ) {
+                    continue;
+                }
+                $seen[ $dedupe_key ] = true;
+
+                $normalized[] = $category;
+
+                if ( count( $normalized ) >= 20 ) {
+                    break;
+                }
+            }
+
+            return array_values( $normalized );
+        }
+
+        /**
+         * Devuelve las categorías adicionales efectivas del editor.
+         *
+         * @param int $post_id
+         * @return array
+         */
+        private function get_effective_google_additional_categories( $post_id ) {
+            $post_id     = absint( $post_id );
+            $initialized = (bool) get_post_meta( $post_id, 'google_additional_categories_initialized', true );
+            $local_items = $this->normalize_google_additional_categories( get_post_meta( $post_id, 'google_additional_categories', true ) );
+
+            if ( $initialized || ! empty( $local_items ) ) {
+                return $local_items;
+            }
+
+            return $this->normalize_google_additional_categories( get_post_meta( $post_id, 'gmb_additional_categories', true ) );
+        }
+
+        /**
+         * Convierte un listado de categorías a una cadena legible para logs/UI.
+         *
+         * @param mixed $categories
+         * @return string
+         */
+        private function format_google_categories_for_display( $categories ) {
+            $categories = $this->normalize_google_additional_categories( $categories );
+
+            if ( empty( $categories ) ) {
+                return '';
+            }
+
+            $labels = array();
+
+            foreach ( $categories as $category ) {
+                $label = isset( $category['displayName'] ) ? trim( (string) $category['displayName'] ) : '';
+                $name  = isset( $category['name'] ) ? trim( (string) $category['name'] ) : '';
+
+                if ( '' === $label && '' !== $name ) {
+                    $label = $name;
+                }
+
+                if ( '' === $label ) {
+                    continue;
+                }
+
+                if ( '' === $name ) {
+                    $label .= ' (sin vincular)';
+                }
+
+                $labels[] = $label;
+            }
+
+            return implode( ' | ', $labels );
+        }
+
+        /**
+         * Devuelve una colección comparable de keys de categorías adicionales.
+         *
+         * @param mixed $categories
+         * @return array
+         */
+        private static function get_additional_category_comparison_keys( $categories ) {
+            if ( is_string( $categories ) ) {
+                $decoded    = json_decode( trim( $categories ), true );
+                $categories = is_array( $decoded ) ? $decoded : array();
+            }
+
+            if ( ! is_array( $categories ) ) {
+                return array();
+            }
+
+            $items = array();
+
+            foreach ( $categories as $category ) {
+                if ( ! is_array( $category ) ) {
+                    continue;
+                }
+
+                $name         = isset( $category['name'] ) ? trim( sanitize_text_field( (string) $category['name'] ) ) : '';
+                $display_name = isset( $category['displayName'] ) ? trim( sanitize_text_field( (string) $category['displayName'] ) ) : '';
+
+                $key = '' !== $name ? 'name:' . strtolower( $name ) : '';
+                if ( '' === $key && '' !== $display_name ) {
+                    $key = 'display:' . strtolower( $display_name );
+                }
+
+                if ( '' === $key ) {
+                    continue;
+                }
+
+                $items[] = $key;
+            }
+
+            $items = array_values( array_unique( $items ) );
+            sort( $items );
+
+            return $items;
         }
 
         /**
@@ -340,10 +537,16 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 return array();
             }
 
+            $additional_categories = $this->normalize_google_additional_categories(
+                isset( $payload['google_additional_categories'] ) ? $payload['google_additional_categories'] : array()
+            );
+
             update_post_meta( $post_id, 'location_short_description',   (string) ( $payload['location_short_description'] ?? '' ) );
             update_post_meta( $post_id, 'opening_date',                 (string) ( $payload['opening_date'] ?? '' ) );
             update_post_meta( $post_id, 'google_primary_category',      (string) ( $payload['google_primary_category'] ?? '' ) );
             update_post_meta( $post_id, 'google_primary_category_name', (string) ( $payload['google_primary_category_name'] ?? '' ) );
+            update_post_meta( $post_id, 'google_additional_categories', array_values( $additional_categories ) );
+            update_post_meta( $post_id, 'google_additional_categories_initialized', '1' );
             update_post_meta( $post_id, 'price_range',                  (string) ( $payload['price_range'] ?? '' ) );
 
             $now_ts   = current_time( 'timestamp' );
@@ -420,6 +623,52 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
         }
 
         /**
+         * Renderiza una fila editable de categoría adicional.
+         *
+         * @param array $category
+         * @param int   $index
+         * @return string
+         */
+        private function render_basic_info_additional_category_row( array $category, $index ) {
+            $display_name  = isset( $category['displayName'] ) ? (string) $category['displayName'] : '';
+            $resource_name = isset( $category['name'] ) ? (string) $category['name'] : '';
+
+            ob_start();
+            ?>
+            <div class="oy-basic-additional-category-row" data-row-index="<?php echo esc_attr( (int) $index ); ?>" style="position:relative; display:flex; gap:8px; align-items:flex-start; margin-bottom:8px;">
+                <div style="flex:1; position:relative; min-width:0;">
+                    <input
+                        type="text"
+                        class="regular-text oy-basic-additional-category-label"
+                        value="<?php echo esc_attr( $display_name ); ?>"
+                        data-oy-basic-field="1"
+                        readonly="readonly"
+                        autocomplete="off"
+                        placeholder="<?php esc_attr_e( 'Escribe para buscar una categoría oficial de Google', 'lealez' ); ?>"
+                        style="width:100%;"
+                    >
+                    <input
+                        type="hidden"
+                        class="oy-basic-additional-category-name"
+                        value="<?php echo esc_attr( $resource_name ); ?>"
+                    >
+                    <div class="oy-basic-additional-category-suggestions" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:1000; background:#fff; border:1px solid #c3c4c7; border-top:none; box-shadow:0 8px 18px rgba(0,0,0,.08); max-height:260px; overflow:auto;"></div>
+                </div>
+                <button
+                    type="button"
+                    class="button-link-delete oy-basic-additional-category-remove"
+                    data-oy-basic-field="1"
+                    disabled="disabled"
+                    style="padding-top:6px; white-space:nowrap; color:#b32d2e; text-decoration:none;"
+                >
+                    <?php _e( 'Quitar', 'lealez' ); ?>
+                </button>
+            </div>
+            <?php
+            return (string) ob_get_clean();
+        }
+
+        /**
          * Render del metabox.
          *
          * @param WP_Post $post
@@ -443,6 +692,10 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
 
             $gmb_primary_category_name         = (string) get_post_meta( $post->ID, 'gmb_primary_category_name', true );
             $gmb_primary_category_display_name = (string) get_post_meta( $post->ID, 'gmb_primary_category_display_name', true );
+            $gmb_additional_categories         = $this->normalize_google_additional_categories( get_post_meta( $post->ID, 'gmb_additional_categories', true ) );
+            $editor_additional_categories      = $this->get_effective_google_additional_categories( $post->ID );
+            $editor_additional_categories_json = wp_json_encode( $editor_additional_categories, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+            $gmb_additional_categories_text    = $this->format_google_categories_for_display( $gmb_additional_categories );
 
             if ( '' === $manual_primary_cat_name && '' !== $gmb_primary_category_name ) {
                 $manual_primary_cat_name = $gmb_primary_category_name;
@@ -498,9 +751,10 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         <li><?php _e( 'Descripción (GMB)', 'lealez' ); ?></li>
                         <li><?php _e( 'Fecha de Apertura', 'lealez' ); ?></li>
                         <li><?php _e( 'Categoría Principal', 'lealez' ); ?></li>
+                        <li><?php _e( 'Categorías Adicionales', 'lealez' ); ?></li>
                     </ul>
                     <p style="margin:8px 0 0;">
-                        <?php _e( 'La categoría ahora usa autocomplete dinámico con las categorías oficiales de Google Business Profile. Para publicar en Google, debes escoger una sugerencia válida del predictivo. El Rango de Precios se sigue guardando solo localmente.', 'lealez' ); ?>
+                        <?php _e( 'La categoría principal y las categorías adicionales usan autocomplete dinámico con las categorías oficiales de Google Business Profile. Para publicar en Google, cada categoría debe escogerse desde una sugerencia válida del predictivo. El Rango de Precios se sigue guardando solo localmente.', 'lealez' ); ?>
                     </p>
                 </div>
 
@@ -635,6 +889,58 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                                     <?php if ( '' !== $gmb_primary_category_name ) : ?>
                                         <div style="margin-top:4px;"><code><?php echo esc_html( $gmb_primary_category_name ); ?></code></div>
                                     <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <th scope="row">
+                            <label for="oy-basic-additional-categories-list"><?php _e( 'Categorías Adicionales', 'lealez' ); ?></label>
+                        </th>
+                        <td>
+                            <input
+                                type="hidden"
+                                name="google_additional_categories_json"
+                                id="google_additional_categories_json"
+                                value="<?php echo esc_attr( $editor_additional_categories_json ); ?>"
+                            >
+
+                            <div id="oy-basic-additional-categories-list" data-initial-json="<?php echo esc_attr( $editor_additional_categories_json ); ?>" style="max-width:720px;">
+                                <?php
+                                if ( ! empty( $editor_additional_categories ) ) {
+                                    foreach ( array_values( $editor_additional_categories ) as $index => $category_item ) {
+                                        echo $this->render_basic_info_additional_category_row( $category_item, $index );
+                                    }
+                                }
+                                ?>
+                            </div>
+
+                            <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                                <button
+                                    type="button"
+                                    id="oy-basic-additional-category-add"
+                                    class="button"
+                                    data-oy-basic-field="1"
+                                    disabled="disabled"
+                                >
+                                    <?php _e( 'Agregar categoría adicional', 'lealez' ); ?>
+                                </button>
+                                <span style="font-size:12px; color:#666;">
+                                    <?php _e( 'Cada categoría adicional debe escogerse desde el predictivo oficial de Google.', 'lealez' ); ?>
+                                </span>
+                            </div>
+
+                            <p class="description" style="margin-top:8px;">
+                                <?php _e( 'Primero define la Categoría Principal y luego agrega las categorías adicionales que también representen al negocio. Si una fila tiene texto pero no resource name oficial, no podrá publicarse en GMB.', 'lealez' ); ?>
+                            </p>
+
+                            <div id="oy-basic-additional-categories-selected-meta" style="margin-top:8px;"></div>
+
+                            <?php if ( '' !== $gmb_additional_categories_text ) : ?>
+                                <div style="margin-top:8px; padding:10px 12px; background:#f6f7f7; border:1px solid #dcdcde;">
+                                    <div><strong><?php _e( 'Categorías adicionales actuales en GMB:', 'lealez' ); ?></strong></div>
+                                    <div style="margin-top:6px;"><?php echo esc_html( $gmb_additional_categories_text ); ?></div>
                                 </div>
                             <?php endif; ?>
                         </td>
@@ -860,6 +1166,7 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 'opening_date'                 => (string) get_post_meta( $post_id, 'opening_date', true ),
                 'google_primary_category'      => (string) get_post_meta( $post_id, 'google_primary_category', true ),
                 'google_primary_category_name' => (string) get_post_meta( $post_id, 'google_primary_category_name', true ),
+                'google_additional_categories' => $this->get_effective_google_additional_categories( $post_id ),
                 'price_range'                  => (string) get_post_meta( $post_id, 'price_range', true ),
             );
         }
@@ -894,9 +1201,15 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     ? (string) $primary_category['displayName']
                     : (string) ( $primary_category['name'] ?? '' );
                 $local['google_primary_category_name'] = (string) ( $primary_category['name'] ?? '' );
-            } else {
+            } elseif ( array_key_exists( 'categories', $snapshot ) ) {
                 $local['google_primary_category'] = '';
                 $local['google_primary_category_name'] = '';
+            }
+
+            if ( isset( $snapshot['categories']['additionalCategories'] ) ) {
+                $local['google_additional_categories'] = $this->normalize_google_additional_categories( $snapshot['categories']['additionalCategories'] );
+            } elseif ( isset( $snapshot['categories'] ) && is_array( $snapshot['categories'] ) ) {
+                $local['google_additional_categories'] = array();
             }
 
             return $local;
@@ -934,6 +1247,10 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     ? (string) $primary_category['displayName']
                     : (string) ( $primary_category['name'] ?? '' );
                 $local['google_primary_category_name'] = (string) ( $primary_category['name'] ?? '' );
+            }
+
+            if ( isset( $submitted['categories']['additionalCategories'] ) ) {
+                $local['google_additional_categories'] = $this->normalize_google_additional_categories( $submitted['categories']['additionalCategories'] );
             }
 
             return $local;
@@ -988,12 +1305,27 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 $before_checks[]    = ( $current_date === $before_date );
             }
 
-            if ( '' !== $submitted_cat_name ) {
-                $submitted_checks[] = ( $current_cat_name === $submitted_cat_name );
-                $before_checks[]    = ( $current_cat_name === $before_cat_name );
-            } elseif ( '' !== $submitted_cat_text ) {
-                $submitted_checks[] = ( $current_cat_text === $submitted_cat_text );
-                $before_checks[]    = ( $current_cat_text === $before_cat_text );
+            if ( isset( $job['submitted']['categories'] ) && is_array( $job['submitted']['categories'] ) ) {
+                $submitted_additional = self::get_additional_category_comparison_keys( $job['submitted']['categories']['additionalCategories'] ?? array() );
+                $before_additional    = self::get_additional_category_comparison_keys( $job['snapshot_before']['categories']['additionalCategories'] ?? array() );
+                $current_additional   = self::get_additional_category_comparison_keys( $current['categories']['additionalCategories'] ?? array() );
+
+                $submitted_category_applied = true;
+                $before_category_same       = true;
+
+                if ( '' !== $submitted_cat_name ) {
+                    $submitted_category_applied = $submitted_category_applied && ( $current_cat_name === $submitted_cat_name );
+                    $before_category_same       = $before_category_same && ( $current_cat_name === $before_cat_name );
+                } elseif ( '' !== $submitted_cat_text ) {
+                    $submitted_category_applied = $submitted_category_applied && ( $current_cat_text === $submitted_cat_text );
+                    $before_category_same       = $before_category_same && ( $current_cat_text === $before_cat_text );
+                }
+
+                $submitted_category_applied = $submitted_category_applied && ( $current_additional === $submitted_additional );
+                $before_category_same       = $before_category_same && ( $current_additional === $before_additional );
+
+                $submitted_checks[] = $submitted_category_applied;
+                $before_checks[]    = $before_category_same;
             }
 
             if ( empty( $submitted_checks ) ) {
@@ -1008,7 +1340,7 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 return 'rejected';
             }
 
-            if ( '' === $current_desc && '' === $current_date && '' === $current_cat_name && '' === $current_cat_text ) {
+            if ( '' === $current_desc && '' === $current_date && '' === $current_cat_name && '' === $current_cat_text && empty( self::get_additional_category_comparison_keys( $current['categories']['additionalCategories'] ?? array() ) ) ) {
                 return 'pending_review';
             }
 
@@ -1086,16 +1418,21 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             $primary_category_display   = (string) get_post_meta( $post_id, 'google_primary_category', true );
             $primary_category_name      = $this->normalize_google_category_name( get_post_meta( $post_id, 'google_primary_category_name', true ) );
             $fallback_gmb_category_name = $this->normalize_google_category_name( get_post_meta( $post_id, 'gmb_primary_category_name', true ) );
+            $additional_initialized     = (bool) get_post_meta( $post_id, 'google_additional_categories_initialized', true );
+            $local_additional           = $this->normalize_google_additional_categories( get_post_meta( $post_id, 'google_additional_categories', true ) );
+            $gmb_additional             = $this->normalize_google_additional_categories( get_post_meta( $post_id, 'gmb_additional_categories', true ) );
+            $effective_additional       = ( $additional_initialized || ! empty( $local_additional ) ) ? $local_additional : $gmb_additional;
 
             if ( '' === $primary_category_name && '' !== $primary_category_display && $primary_category_display === (string) get_post_meta( $post_id, 'gmb_primary_category_display_name', true ) ) {
                 $primary_category_name = $fallback_gmb_category_name;
             }
 
             $payload = array(
-                'location_short_description' => $description,
-                'opening_date'               => $opening_date,
-                'google_primary_category'    => $primary_category_display,
+                'location_short_description'   => $description,
+                'opening_date'                 => $opening_date,
+                'google_primary_category'      => $primary_category_display,
                 'google_primary_category_name' => $primary_category_name,
+                'google_additional_categories' => $effective_additional,
             );
 
             if ( '' !== trim( $primary_category_display ) && '' === trim( $primary_category_name ) ) {
@@ -1106,15 +1443,34 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         'before' => $this->get_basic_info_local_snapshot( $post_id ),
                         'after'  => $this->get_basic_info_local_snapshot( $post_id ),
                         'raw'    => array(
-                            'action'                 => 'push_basic_info_invalid_category_selection',
+                            'action'                  => 'push_basic_info_invalid_category_selection',
                             'google_primary_category' => $primary_category_display,
                         ),
                     ),
                 ) );
             }
 
-            if ( '' === trim( $description ) && '' === trim( $opening_date ) && '' === trim( $primary_category_name ) ) {
-                wp_send_json_error( array( 'message' => __( 'No hay Descripción, Fecha de Apertura ni Categoría Principal válidas para enviar a GMB.', 'lealez' ) ) );
+            foreach ( $effective_additional as $category_item ) {
+                $category_text = isset( $category_item['displayName'] ) ? trim( (string) $category_item['displayName'] ) : '';
+                $category_name = isset( $category_item['name'] ) ? trim( (string) $category_item['name'] ) : '';
+                if ( '' !== $category_text && '' === $category_name ) {
+                    wp_send_json_error( array(
+                        'message'    => __( 'Hay una Categoría Adicional con texto local pero sin selección oficial de Google. Selecciona una sugerencia válida del predictivo en cada fila antes de publicar.', 'lealez' ),
+                        'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                        'log_context' => array(
+                            'before' => $this->get_basic_info_local_snapshot( $post_id ),
+                            'after'  => $this->get_basic_info_local_snapshot( $post_id ),
+                            'raw'    => array(
+                                'action'                       => 'push_basic_info_invalid_additional_category_selection',
+                                'google_additional_categories' => $effective_additional,
+                            ),
+                        ),
+                    ) );
+                }
+            }
+
+            if ( '' === trim( $description ) && '' === trim( $opening_date ) && '' === trim( $primary_category_name ) && empty( $effective_additional ) ) {
+                wp_send_json_error( array( 'message' => __( 'No hay Descripción, Fecha de Apertura ni categorías válidas para enviar a GMB.', 'lealez' ) ) );
             }
 
             $snapshot = Lealez_GMB_API::get_location_basic_info_snapshot( $business_id, $location_name );
@@ -1175,10 +1531,11 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, is_array( $snapshot ) ? $snapshot : array() ),
                     'after'  => $this->get_basic_info_local_snapshot( $post_id ),
                     'raw'    => array(
-                        'action'           => 'push_basic_info_error',
-                        'error_message'    => $result->get_error_message(),
-                        'field_violations' => $violations,
-                        'error_data'       => is_array( $err_data ) ? $err_data : array(),
+                        'action'            => 'push_basic_info_error',
+                        'error_message'     => $result->get_error_message(),
+                        'field_violations'  => $violations,
+                        'error_data'        => is_array( $err_data ) ? $err_data : array(),
+                        'submitted_payload' => $payload,
                     ),
                 );
 
@@ -1237,8 +1594,8 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             wp_schedule_single_event( $now_ts + 60, 'oy_poll_basic_info_push_status', array( $post_id ) );
 
             wp_send_json_success( array(
-                'message'    => __( 'Cambio enviado a Google Business Profile. Estado: pendiente de revisión por Google. El sistema lo verificará automáticamente.', 'lealez' ),
-                'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                'message'     => __( 'Cambio enviado a Google Business Profile. Estado: pendiente de revisión por Google. El sistema lo verificará automáticamente.', 'lealez' ),
+                'panel_html'  => $this->render_basic_info_push_panel( $post_id ),
                 'log_context' => array(
                     'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $snapshot ),
                     'after'  => $this->build_basic_info_log_snapshot_from_submitted_payload( $post_id, $job['submitted'] ),
@@ -1275,17 +1632,19 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 wp_send_json_error( array( 'message' => __( 'No hay push registrado para esta ubicación.', 'lealez' ) ) );
             }
 
+            $snapshot_before = array(
+                'profile'    => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
+                'openInfo'   => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
+                'categories' => isset( $job['snapshot_before']['categories'] ) && is_array( $job['snapshot_before']['categories'] ) ? $job['snapshot_before']['categories'] : array(),
+            );
+
             if ( in_array( $job['status'] ?? '', array( 'applied', 'rejected', 'google_override', 'timeout', 'cancelled' ), true ) ) {
                 wp_send_json_success( array(
-                    'message'    => __( 'El cambio ya está resuelto.', 'lealez' ),
-                    'status'     => $job['status'],
-                    'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                    'message'     => __( 'El cambio ya está resuelto.', 'lealez' ),
+                    'status'      => $job['status'],
+                    'panel_html'  => $this->render_basic_info_push_panel( $post_id ),
                     'log_context' => array(
-                        'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array(
-                            'profile'    => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
-                            'openInfo'   => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
-                            'categories' => isset( $job['snapshot_before']['categories'] ) && is_array( $job['snapshot_before']['categories'] ) ? $job['snapshot_before']['categories'] : array(),
-                        ) ),
+                        'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $snapshot_before ),
                         'after'  => $this->build_basic_info_log_snapshot_from_submitted_payload( $post_id, isset( $job['submitted'] ) && is_array( $job['submitted'] ) ? $job['submitted'] : array() ),
                         'raw'    => array(
                             'action' => 'manual_check_already_resolved',
@@ -1306,14 +1665,10 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
 
             if ( is_wp_error( $current ) ) {
                 wp_send_json_error( array(
-                    'message'    => __( 'Error al consultar GMB: ', 'lealez' ) . $current->get_error_message(),
-                    'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                    'message'     => __( 'Error al consultar GMB: ', 'lealez' ) . $current->get_error_message(),
+                    'panel_html'  => $this->render_basic_info_push_panel( $post_id ),
                     'log_context' => array(
-                        'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array(
-                            'profile'    => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
-                            'openInfo'   => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
-                            'categories' => isset( $job['snapshot_before']['categories'] ) && is_array( $job['snapshot_before']['categories'] ) ? $job['snapshot_before']['categories'] : array(),
-                        ) ),
+                        'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $snapshot_before ),
                         'after'  => $this->get_basic_info_local_snapshot( $post_id ),
                         'raw'    => array(
                             'action'        => 'manual_check_error',
@@ -1356,14 +1711,11 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             }
 
             wp_send_json_success( array(
-                'message'    => '',
-                'status'     => $new_status,
-                'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                'message'     => '',
+                'status'      => $new_status,
+                'panel_html'  => $this->render_basic_info_push_panel( $post_id ),
                 'log_context' => array(
-                    'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array(
-                        'profile'  => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
-                        'openInfo' => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
-                    ) ),
+                    'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $snapshot_before ),
                     'after'  => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $current ),
                     'raw'    => array(
                         'action'           => 'manual_check_basic_info_status',
@@ -1516,8 +1868,17 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         { key: 'location_short_description', label: 'Descripción (GMB)' },
                         { key: 'opening_date', label: 'Fecha de Apertura' },
                         { key: 'google_primary_category', label: 'Categoría Principal' },
+                        { key: 'google_additional_categories', label: 'Categorías Adicionales' },
                         { key: 'price_range', label: 'Rango de Precios' }
                     ];
+
+                    function escapeHtml(value) {
+                        return $('<div/>').text(value == null ? '' : String(value)).html();
+                    }
+
+                    function cloneValue(value) {
+                        return JSON.parse(JSON.stringify(value == null ? null : value));
+                    }
 
                     function setStatus(message, type) {
                         var $box = $('#oy-basic-info-inline-status');
@@ -1546,6 +1907,16 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         $slot.html('<div style="padding:10px 12px; background:'+bg+'; border-left:4px solid '+border+';">'+message+'</div>');
                     }
 
+                    function parseJsonSafe(value, fallback) {
+                        if (!value) { return cloneValue(fallback); }
+                        try {
+                            var parsed = JSON.parse(value);
+                            return Array.isArray(parsed) ? parsed : cloneValue(fallback);
+                        } catch (err) {
+                            return cloneValue(fallback);
+                        }
+                    }
+
                     function getCategoryDisplayValue() {
                         return $('#google_primary_category').val() || '';
                     }
@@ -1554,8 +1925,54 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         return $('#google_primary_category_name').val() || '';
                     }
 
+                    function normalizeCategoryItem(item) {
+                        var out = { displayName: '', name: '' };
+                        if (!item) { return out; }
+                        if (typeof item === 'string') {
+                            out.displayName = item;
+                            return out;
+                        }
+                        if (typeof item === 'object') {
+                            out.displayName = item.displayName || item.label || item.text || item.name || '';
+                            out.name = item.name || '';
+                        }
+                        return out;
+                    }
+
+                    function formatCategoriesForDiff(value) {
+                        var items = [];
+                        if (Array.isArray(value)) {
+                            items = value;
+                        } else if (typeof value === 'string' && value.trim()) {
+                            items = parseJsonSafe(value, []);
+                        }
+                        if (!Array.isArray(items) || !items.length) { return ''; }
+                        return items.map(function(item) {
+                            var normalized = normalizeCategoryItem(item);
+                            if (!normalized.displayName && normalized.name) {
+                                normalized.displayName = normalized.name;
+                            }
+                            if (!normalized.displayName) { return ''; }
+                            return normalized.displayName + (normalized.name ? '' : ' (sin vincular)');
+                        }).filter(Boolean).join(' | ');
+                    }
+
+                    function valueToText(fieldKey, value) {
+                        if (fieldKey === 'price_range') return formatPriceRange(value);
+                        if (fieldKey === 'google_additional_categories') return formatCategoriesForDiff(value);
+                        return String(value == null ? '' : value);
+                    }
+
                     function hideCategorySuggestions() {
                         $('#oy-basic-category-suggestions').hide().empty();
+                    }
+
+                    function hideAdditionalCategorySuggestions($row) {
+                        if ($row && $row.length) {
+                            $row.find('.oy-basic-additional-category-suggestions').hide().empty();
+                            return;
+                        }
+                        $('.oy-basic-additional-category-suggestions').hide().empty();
                     }
 
                     function renderCategorySelectionState() {
@@ -1572,8 +1989,8 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         if (name) {
                             $box.html(
                                 '<div style="padding:10px 12px; background:#edfaef; border:1px solid #b8dcbf;">' +
-                                    '<div><strong>Categoría lista para publicar en GMB:</strong> ' + $('<div/>').text(text).html() + '</div>' +
-                                    '<div style="margin-top:4px;"><code>' + $('<div/>').text(name).html() + '</code></div>' +
+                                    '<div><strong>Categoría lista para publicar en GMB:</strong> ' + escapeHtml(text) + '</div>' +
+                                    '<div style="margin-top:4px;"><code>' + escapeHtml(name) + '</code></div>' +
                                 '</div>'
                             );
                             return;
@@ -1606,12 +2023,167 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         renderCategorySelectionState();
                     }
 
+                    function syncAdditionalCategoriesInputFromDom() {
+                        var items = [];
+                        $('#oy-basic-additional-categories-list .oy-basic-additional-category-row').each(function() {
+                            var $row = $(this);
+                            var label = $.trim($row.find('.oy-basic-additional-category-label').val() || '');
+                            var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
+                            if (!label && !name) { return; }
+                            items.push({ displayName: label || name, name: name || '' });
+                        });
+                        $('#google_additional_categories_json').val(JSON.stringify(items));
+                        return items;
+                    }
+
+                    function getAdditionalCategoriesFromDom() {
+                        return syncAdditionalCategoriesInputFromDom();
+                    }
+
+                    function renderAdditionalCategoriesSelectionState() {
+                        var $box = $('#oy-basic-additional-categories-selected-meta');
+                        if (!$box.length) { return; }
+
+                        var items = getAdditionalCategoriesFromDom();
+                        if (!items.length) {
+                            $box.empty();
+                            return;
+                        }
+
+                        var valid = [];
+                        var invalid = [];
+
+                        items.forEach(function(item) {
+                            var normalized = normalizeCategoryItem(item);
+                            if (!normalized.displayName && normalized.name) {
+                                normalized.displayName = normalized.name;
+                            }
+                            if (!normalized.displayName) { return; }
+                            if (normalized.name) valid.push(normalized);
+                            else invalid.push(normalized);
+                        });
+
+                        var html = '';
+                        if (valid.length) {
+                            html += '<div style="padding:10px 12px; background:#edfaef; border:1px solid #b8dcbf; margin-bottom:8px;">' +
+                                '<div><strong>Categorías adicionales listas para publicar en GMB:</strong></div>' +
+                                '<ul style="margin:8px 0 0 18px; list-style:disc;">' +
+                                valid.map(function(item) {
+                                    return '<li>' + escapeHtml(item.displayName) + ' <code>' + escapeHtml(item.name) + '</code></li>';
+                                }).join('') +
+                                '</ul>' +
+                            '</div>';
+                        }
+
+                        if (invalid.length) {
+                            html += '<div style="padding:10px 12px; background:#fff8e5; border:1px solid #ecd58d;">' +
+                                '<div><strong>Hay categorías adicionales aún no vinculadas a Google:</strong></div>' +
+                                '<ul style="margin:8px 0 0 18px; list-style:disc;">' +
+                                invalid.map(function(item) {
+                                    return '<li>' + escapeHtml(item.displayName) + '</li>';
+                                }).join('') +
+                                '</ul>' +
+                                '<div style="margin-top:8px;">Selecciona una sugerencia oficial del predictivo en cada fila antes de publicar.</div>' +
+                            '</div>';
+                        }
+
+                        $box.html(html);
+                    }
+
+                    function clearAdditionalCategorySelectionIfTextChanged($row) {
+                        if (!$row || !$row.length) { return; }
+                        var $input = $row.find('.oy-basic-additional-category-label');
+                        var currentText = $.trim($input.val() || '');
+                        var selectedLabel = $input.data('selectedLabel') || '';
+
+                        if (!currentText) {
+                            $row.find('.oy-basic-additional-category-name').val('');
+                            $input.data('selectedLabel', '');
+                            syncAdditionalCategoriesInputFromDom();
+                            renderAdditionalCategoriesSelectionState();
+                            return;
+                        }
+
+                        if (selectedLabel && currentText !== selectedLabel) {
+                            $row.find('.oy-basic-additional-category-name').val('');
+                            $input.data('selectedLabel', '');
+                        }
+
+                        syncAdditionalCategoriesInputFromDom();
+                        renderAdditionalCategoriesSelectionState();
+                    }
+
+                    function createAdditionalCategoryRow(item, index) {
+                        var normalized = normalizeCategoryItem(item || {});
+                        var html = '' +
+                            '<div class="oy-basic-additional-category-row" data-row-index="'+ index +'" style="position:relative; display:flex; gap:8px; align-items:flex-start; margin-bottom:8px;">' +
+                                '<div style="flex:1; position:relative; min-width:0;">' +
+                                    '<input type="text" class="regular-text oy-basic-additional-category-label" value="'+ escapeHtml(normalized.displayName || '') +'" data-oy-basic-field="1" readonly="readonly" autocomplete="off" placeholder="Escribe para buscar una categoría oficial de Google" style="width:100%;">' +
+                                    '<input type="hidden" class="oy-basic-additional-category-name" value="'+ escapeHtml(normalized.name || '') +'">' +
+                                    '<div class="oy-basic-additional-category-suggestions" style="display:none; position:absolute; top:100%; left:0; right:0; z-index:1000; background:#fff; border:1px solid #c3c4c7; border-top:none; box-shadow:0 8px 18px rgba(0,0,0,.08); max-height:260px; overflow:auto;"></div>' +
+                                '</div>' +
+                                '<button type="button" class="button-link-delete oy-basic-additional-category-remove" data-oy-basic-field="1" disabled="disabled" style="padding-top:6px; white-space:nowrap; color:#b32d2e; text-decoration:none;">Quitar</button>' +
+                            '</div>';
+                        var $row = $(html);
+                        if (normalized.name) {
+                            $row.find('.oy-basic-additional-category-label').data('selectedLabel', normalized.displayName || normalized.name);
+                        }
+                        return $row;
+                    }
+
+                    function reindexAdditionalCategoryRows() {
+                        $('#oy-basic-additional-categories-list .oy-basic-additional-category-row').each(function(index) {
+                            $(this).attr('data-row-index', index);
+                        });
+                    }
+
+                    function renderAdditionalCategoryRows(items) {
+                        var $list = $('#oy-basic-additional-categories-list');
+                        if (!$list.length) { return; }
+                        $list.empty();
+                        (Array.isArray(items) ? items : []).forEach(function(item, index) {
+                            $list.append(createAdditionalCategoryRow(item, index));
+                        });
+                        reindexAdditionalCategoryRows();
+                        syncAdditionalCategoriesInputFromDom();
+                        renderAdditionalCategoriesSelectionState();
+                    }
+
+                    function addAdditionalCategoryRow(item) {
+                        var $list = $('#oy-basic-additional-categories-list');
+                        if (!$list.length) { return; }
+                        var $row = createAdditionalCategoryRow(item || {}, $list.find('.oy-basic-additional-category-row').length);
+                        $list.append($row);
+                        reindexAdditionalCategoryRows();
+                        syncAdditionalCategoriesInputFromDom();
+                        renderAdditionalCategoriesSelectionState();
+                        updateUiState();
+                        return $row;
+                    }
+
+                    function hasInvalidAdditionalCategories() {
+                        return getAdditionalCategoriesFromDom().some(function(item) {
+                            var normalized = normalizeCategoryItem(item);
+                            return !!normalized.displayName && !normalized.name;
+                        });
+                    }
+
                     function selectCategorySuggestion(item) {
                         if (!item || !item.name) { return; }
                         $('#google_primary_category').val(item.displayName || item.name).data('selectedLabel', item.displayName || item.name);
                         $('#google_primary_category_name').val(item.name || '');
                         hideCategorySuggestions();
                         renderCategorySelectionState();
+                        refreshDirtyState();
+                    }
+
+                    function selectAdditionalCategorySuggestion($row, item) {
+                        if (!$row || !$row.length || !item || !item.name) { return; }
+                        $row.find('.oy-basic-additional-category-label').val(item.displayName || item.name).data('selectedLabel', item.displayName || item.name);
+                        $row.find('.oy-basic-additional-category-name').val(item.name || '');
+                        hideAdditionalCategorySuggestions($row);
+                        syncAdditionalCategoriesInputFromDom();
+                        renderAdditionalCategoriesSelectionState();
                         refreshDirtyState();
                     }
 
@@ -1629,13 +2201,12 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             var label = item && item.displayName ? item.displayName : (item && item.name ? item.name : '');
                             var code = item && item.name ? item.name : '';
                             if (!label || !code) { return; }
-
                             html += '<button type="button" class="oy-basic-category-option" ' +
-                                'data-label="' + $('<div/>').text(label).html().replace(/"/g, '&quot;') + '" ' +
-                                'data-name="' + $('<div/>').text(code).html().replace(/"/g, '&quot;') + '" ' +
+                                'data-label="' + escapeHtml(label).replace(/"/g, '&quot;') + '" ' +
+                                'data-name="' + escapeHtml(code).replace(/"/g, '&quot;') + '" ' +
                                 'style="display:block; width:100%; text-align:left; padding:10px 12px; border:none; border-top:1px solid #f0f0f1; background:#fff; cursor:pointer;">' +
-                                    '<div style="font-weight:600; color:#1d2327;">' + $('<div/>').text(label).html() + '</div>' +
-                                    '<div style="margin-top:3px; font-size:11px; color:#666;"><code>' + $('<div/>').text(code).html() + '</code></div>' +
+                                    '<div style="font-weight:600; color:#1d2327;">' + escapeHtml(label) + '</div>' +
+                                    '<div style="margin-top:3px; font-size:11px; color:#666;"><code>' + escapeHtml(code) + '</code></div>' +
                                 '</button>';
                         });
 
@@ -1647,7 +2218,39 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         $box.html(html).show();
                     }
 
-                    function requestCategorySuggestions(term) {
+                    function renderAdditionalCategorySuggestions($row, items) {
+                        if (!$row || !$row.length) { return; }
+                        var $box = $row.find('.oy-basic-additional-category-suggestions');
+                        if (!$box.length) { return; }
+
+                        if (!Array.isArray(items) || !items.length) {
+                            $box.html('<div style="padding:10px 12px; font-size:12px; color:#666;">No se encontraron categorías oficiales de Google para ese texto.</div>').show();
+                            return;
+                        }
+
+                        var html = '';
+                        items.forEach(function(item) {
+                            var label = item && item.displayName ? item.displayName : (item && item.name ? item.name : '');
+                            var code = item && item.name ? item.name : '';
+                            if (!label || !code) { return; }
+                            html += '<button type="button" class="oy-basic-additional-category-option" ' +
+                                'data-label="' + escapeHtml(label).replace(/"/g, '&quot;') + '" ' +
+                                'data-name="' + escapeHtml(code).replace(/"/g, '&quot;') + '" ' +
+                                'style="display:block; width:100%; text-align:left; padding:10px 12px; border:none; border-top:1px solid #f0f0f1; background:#fff; cursor:pointer;">' +
+                                    '<div style="font-weight:600; color:#1d2327;">' + escapeHtml(label) + '</div>' +
+                                    '<div style="margin-top:3px; font-size:11px; color:#666;"><code>' + escapeHtml(code) + '</code></div>' +
+                                '</button>';
+                        });
+
+                        if (!html) {
+                            $box.html('<div style="padding:10px 12px; font-size:12px; color:#666;">No se encontraron categorías oficiales de Google para ese texto.</div>').show();
+                            return;
+                        }
+
+                        $box.html(html).show();
+                    }
+
+                    function requestCategorySuggestions(term, onSuccess) {
                         if (categorySearchXhr && typeof categorySearchXhr.abort === 'function') {
                             categorySearchXhr.abort();
                         }
@@ -1661,14 +2264,18 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             if (!response || !response.success) {
                                 var msg = response && response.data && response.data.message ? response.data.message : 'No se pudieron cargar las categorías de Google.';
                                 hideCategorySuggestions();
+                                hideAdditionalCategorySuggestions();
                                 setStatus(msg, 'error');
                                 return;
                             }
 
-                            renderCategorySuggestions(response.data && response.data.items ? response.data.items : []);
+                            if (typeof onSuccess === 'function') {
+                                onSuccess(response.data && response.data.items ? response.data.items : []);
+                            }
                         }).fail(function(xhr, status) {
                             if (status === 'abort') { return; }
                             hideCategorySuggestions();
+                            hideAdditionalCategorySuggestions();
                             var msg = 'Error de red al consultar categorías de Google.';
                             if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
                                 msg = xhr.responseJSON.data.message;
@@ -1679,24 +2286,37 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         });
                     }
 
-                    function queueCategorySearch() {
+                    function queuePrimaryCategorySearch() {
                         if (!editorState.enabled) { return; }
-
                         var term = getCategoryDisplayValue();
                         clearSelectedCategoryIfTextChanged();
-
                         if (!term || term.length < 2) {
                             hideCategorySuggestions();
                             return;
                         }
-
-                        if (categorySearchTimer) {
-                            clearTimeout(categorySearchTimer);
-                        }
-
+                        if (categorySearchTimer) { clearTimeout(categorySearchTimer); }
                         categorySearchTimer = setTimeout(function() {
-                            requestCategorySuggestions(term);
+                            requestCategorySuggestions(term, function(items) { renderCategorySuggestions(items); });
                         }, 250);
+                    }
+
+                    function queueAdditionalCategorySearch($row) {
+                        if (!editorState.enabled || !$row || !$row.length) { return; }
+                        var term = $.trim($row.find('.oy-basic-additional-category-label').val() || '');
+                        clearAdditionalCategorySelectionIfTextChanged($row);
+                        if (!term || term.length < 2) {
+                            hideAdditionalCategorySuggestions($row);
+                            return;
+                        }
+                        var timer = $row.data('searchTimer');
+                        if (timer) { clearTimeout(timer); }
+                        timer = setTimeout(function() {
+                            requestCategorySuggestions(term, function(items) {
+                                hideCategorySuggestions();
+                                renderAdditionalCategorySuggestions($row, items);
+                            });
+                        }, 250);
+                        $row.data('searchTimer', timer);
                     }
 
                     function captureState() {
@@ -1705,6 +2325,7 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             opening_date: $('#opening_date').val() || '',
                             google_primary_category: $('#google_primary_category').val() || '',
                             google_primary_category_name: $('#google_primary_category_name').val() || '',
+                            google_additional_categories: cloneValue(getAdditionalCategoriesFromDom()),
                             price_range: $('#price_range').val() || ''
                         };
                     }
@@ -1736,6 +2357,8 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         $('#oy-basic-info-editor-cancel').toggle(editorState.enabled);
                         $('#oy-basic-info-editor-save').prop('disabled', !editorState.enabled || !editorState.dirty || editorState.saving);
                         $('#oy-basic-info-editor-cancel').prop('disabled', editorState.saving);
+                        $('#oy-basic-additional-category-add').prop('disabled', !editorState.enabled || editorState.saving);
+                        $('.oy-basic-additional-category-remove').prop('disabled', !editorState.enabled || editorState.saving);
 
                         if (editorState.saving) $('#oy-basic-info-editor-state').text('Guardando metabox...');
                         else if (editorState.enabled && editorState.dirty) $('#oy-basic-info-editor-state').text('Tienes cambios locales sin guardar.');
@@ -1748,7 +2371,9 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         editorState.saving = false;
                         editorState.baseline = captureState();
                         hideCategorySuggestions();
+                        hideAdditionalCategorySuggestions();
                         renderCategorySelectionState();
+                        renderAdditionalCategoriesSelectionState();
                         refreshDirtyState();
                         setStatus('Modo edición activado. Guarda el metabox antes de usar "Enviar a GMB".', 'info');
                     }
@@ -1760,10 +2385,13 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         $('#google_primary_category').val(editorState.baseline.google_primary_category);
                         $('#google_primary_category_name').val(editorState.baseline.google_primary_category_name || '');
                         $('#google_primary_category').data('selectedLabel', (editorState.baseline.google_primary_category_name ? editorState.baseline.google_primary_category : ''));
+                        renderAdditionalCategoryRows(editorState.baseline.google_additional_categories || []);
                         $('#price_range').val(editorState.baseline.price_range);
                         hideCategorySuggestions();
+                        hideAdditionalCategorySuggestions();
                         updateDescriptionCounter();
                         renderCategorySelectionState();
+                        renderAdditionalCategoriesSelectionState();
                         editorState.enabled = false;
                         editorState.dirty = false;
                         editorState.saving = false;
@@ -1787,121 +2415,82 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : key;
                     }
 
-                    function valueToText(fieldKey, value) {
-                        if (fieldKey === 'price_range') return formatPriceRange(value);
-                        return String(value == null ? '' : value);
-                    }
-
                     function buildDiff(before, after) {
                         var rows = [];
                         FIELD_MAP.forEach(function(field) {
                             var bStr = valueToText(field.key, before && Object.prototype.hasOwnProperty.call(before, field.key) ? before[field.key] : '');
                             var aStr = valueToText(field.key, after && Object.prototype.hasOwnProperty.call(after, field.key) ? after[field.key] : '');
                             var rawBefore = String(bStr == null ? '' : bStr);
-                            var rawAfter  = String(aStr == null ? '' : aStr);
-                            var status = (rawBefore === rawAfter) ? 'unchanged' : ((!rawBefore || rawBefore.trim() === '') ? 'new' : 'changed');
-                            rows.push({ label: field.label, before: bStr, after: aStr, status: status });
+                            var rawAfter = String(aStr == null ? '' : aStr);
+                            if (rawBefore === rawAfter) {
+                                rows.push({ key: field.key, label: field.label, before: rawBefore, after: rawAfter, status: 'unchanged' });
+                            } else if (!rawBefore && rawAfter) {
+                                rows.push({ key: field.key, label: field.label, before: rawBefore, after: rawAfter, status: 'new' });
+                            } else {
+                                rows.push({ key: field.key, label: field.label, before: rawBefore, after: rawAfter, status: 'changed' });
+                            }
                         });
                         return rows;
                     }
 
-                    function loadLog() {
-                        try {
-                            var raw = localStorage.getItem(LS_KEY);
-                            if (!raw) return [];
-                            var parsed = JSON.parse(raw);
-                            return Array.isArray(parsed) ? parsed : [];
-                        } catch (e) { return []; }
+                    function getLog() {
+                        return parseJsonSafe(localStorage.getItem(LS_KEY), []);
                     }
 
-                    function saveLog(entries) {
-                        try {
-                            if (entries.length > MAX_LOG) entries = entries.slice(entries.length - MAX_LOG);
-                            localStorage.setItem(LS_KEY, JSON.stringify(entries));
-                        } catch (e) {}
+                    function setLog(entries) {
+                        localStorage.setItem(LS_KEY, JSON.stringify((entries || []).slice(0, MAX_LOG)));
                     }
 
                     function clearLog() {
-                        try { localStorage.removeItem(LS_KEY); } catch (e) {}
+                        localStorage.removeItem(LS_KEY);
                     }
 
-                    function addLogEntry(rawPayload, diff, source) {
-                        try {
-                            var now = new Date();
-                            var timestamp = now.toLocaleDateString('es-CO', {year:'numeric',month:'2-digit',day:'2-digit'}) + ' ' +
-                                            now.toLocaleTimeString('es-CO', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-                            var safeRaw = rawPayload;
-                            try { JSON.stringify(rawPayload); } catch (err) { safeRaw = { _serializeError: 'Objeto no serializable: ' + err.message }; }
-                            var entries = loadLog();
-                            entries.push({ timestamp: timestamp, raw: safeRaw, diff: Array.isArray(diff) ? diff : [], source: source || 'manual_save' });
-                            saveLog(entries);
-                            renderLog();
-                            if ($('#oy-basic-info-log-body').is(':hidden')) {
-                                $('#oy-basic-info-log-body').show();
-                                $('#oy-basic-info-log-header').css('borderBottomColor', '#dadce0');
-                                $('#oy-basic-info-log-toggle-icon').text('▼');
-                            }
-                        } catch (e) {
-                            if (window.console && window.console.error) console.error('[OY Basic Info Log] addLogEntry error:', e);
-                        }
-                    }
-
-                    function getSourceMeta(source) {
-                        var map = {
-                            manual_save:  { icon: '💾', label: ' · Guardado local' },
-                            push_to_gmb:  { icon: '🚀', label: ' · Enviar a GMB' },
-                            manual_check: { icon: '🔎', label: ' · Verificación manual' },
-                            push_error:   { icon: '❌', label: ' · Error al enviar' },
-                            check_error:  { icon: '⚠️', label: ' · Error al verificar' }
-                        };
-                        return map[source] || { icon: '🔵', label: ' · Acción del metabox' };
+                    function addLogEntry(raw, diff, actionType) {
+                        var log = getLog();
+                        log.unshift({
+                            at: new Date().toISOString(),
+                            action: actionType || (raw && raw.action ? raw.action : 'info'),
+                            diff: Array.isArray(diff) ? diff : [],
+                            raw: raw || {}
+                        });
+                        setLog(log);
+                        renderLog();
                     }
 
                     function renderLog() {
+                        var $container = $('#oy-basic-info-log-entries');
+                        if (!$container.length) { return; }
+                        var log = getLog();
+                        $container.empty();
+
+                        if (!log.length) {
+                            $container.html('<div style="padding:14px; color:#666; font-size:12px;">Aún no hay eventos registrados en el historial local del navegador.</div>');
+                            return;
+                        }
+
                         try {
-                            var entries = loadLog();
-                            var $container = $('#oy-basic-info-log-entries');
-                            if (!$container.length) return;
-                            $container.empty();
-
-                            if (!entries.length) {
-                                $container.append(
-                                    $('<p/>').css({ padding:'12px 16px', margin:0, fontSize:'12px', color:'#888', fontStyle:'italic' })
-                                        .text('Aún no hay acciones registradas. Guarda cambios locales o usa "Enviar a GMB" para empezar a construir el historial detallado.')
-                                );
-                                return;
-                            }
-
-                            var sorted = entries.slice().reverse();
-
-                            sorted.forEach(function(entry, idx) {
+                            log.forEach(function(entry, index) {
                                 var diff = Array.isArray(entry.diff) ? entry.diff : [];
-                                var changedCount = diff.filter(function(row){ return row.status === 'changed' || row.status === 'new'; }).length;
-                                var isFirst = idx === 0;
-                                var bgHeader = isFirst ? '#f0f7ff' : '#fff';
-                                var sourceMeta = getSourceMeta(entry.source);
-                                var hasError = entry.raw && (entry.raw.error || entry.raw._serializeError || entry.raw.error_message);
+                                var hasError = entry.raw && (entry.raw.error || entry.raw.error_message || entry.raw._serializeError);
+                                var title = entry.action || 'evento';
+                                var date = entry.at ? new Date(entry.at) : new Date();
+                                var dateLabel = isNaN(date.getTime()) ? String(entry.at || '') : date.toLocaleString();
 
-                                var $entry = $('<div/>').css({ borderBottom: '1px solid ' + (isFirst ? '#c3d4e6' : '#f0f0f0') });
-                                var $entryHeader = $('<div/>').css({
-                                    display:'flex', alignItems:'center', justifyContent:'space-between',
-                                    padding:'8px 14px', cursor:'pointer', userSelect:'none', background:bgHeader, gap:'10px'
-                                });
+                                var palette = {
+                                    manual_save: { bg:'#f6fff9', border:'#46b450', icon:'💾' },
+                                    push_to_gmb: { bg:'#eef6ff', border:'#2271b1', icon:'🚀' },
+                                    manual_check: { bg:'#fff8e5', border:'#dba617', icon:'🔎' },
+                                    push_error: { bg:'#fff5f5', border:'#dc3232', icon:'⚠️' },
+                                    check_error: { bg:'#fff5f5', border:'#dc3232', icon:'⚠️' }
+                                };
+                                var paletteCfg = palette[title] || { bg:'#fff', border:'#dcdcde', icon:'•' };
 
-                                var statusLabel, statusColor;
-                                if (hasError) { statusLabel = '❌ Error'; statusColor = '#dc3232'; }
-                                else if (!diff.length) { statusLabel = '⚠️ Sin datos de diff'; statusColor = '#999'; }
-                                else if (changedCount === 0) { statusLabel = '✅ Sin cambios'; statusColor = '#46b450'; }
-                                else { statusLabel = '✏️ ' + changedCount + ' campo' + (changedCount !== 1 ? 's' : '') + ' modificado' + (changedCount !== 1 ? 's' : ''); statusColor = '#e06800'; }
-
-                                $entryHeader.append(
-                                    $('<span/>').css({ fontSize:'11px', color:'#555', flex:'1', fontFamily:'monospace' })
-                                        .text(sourceMeta.icon + ' 🕐 ' + entry.timestamp + sourceMeta.label + (isFirst ? '  ← más reciente' : ''))
-                                );
-                                $entryHeader.append(
-                                    $('<span/>').css({ fontSize:'11px', fontWeight:'600', color:statusColor }).text(statusLabel)
-                                );
-                                var $toggleIcon = $('<span/>').css({ fontSize:'11px', color:'#aaa', marginLeft:'6px' }).text(isFirst ? '▼' : '▶');
+                                var $entry = $('<div/>').css({ borderLeft:'4px solid '+paletteCfg.border, background:paletteCfg.bg, margin:'0', borderBottom:'1px solid #f0f0f1' });
+                                var $entryHeader = $('<div/>').css({ padding:'10px 14px', cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px' });
+                                var headerText = paletteCfg.icon + ' ' + title + ' — ' + dateLabel;
+                                $('<div/>').css({ fontWeight:'600', color:'#1d2327', fontSize:'12px' }).text(headerText).appendTo($entryHeader);
+                                var isFirst = index === 0;
+                                var $toggleIcon = $('<span/>').css({ color:'#666', fontSize:'12px' }).text(isFirst ? '▼' : '▶');
                                 $entryHeader.append($toggleIcon);
 
                                 var $body = $('<div/>').css({ display:isFirst ? 'block' : 'none', padding:'0 14px 14px', background:'#fff' });
@@ -1986,7 +2575,8 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         updateUiState();
                         setStatus('Guardando cambios locales...', 'info');
 
-                        var beforeState = editorState.baseline ? $.extend({}, editorState.baseline) : captureState();
+                        var beforeState = editorState.baseline ? cloneValue(editorState.baseline) : captureState();
+                        var additionalCategoriesJson = JSON.stringify(getAdditionalCategoriesFromDom());
 
                         $.post(AJAX_URL, {
                             action: 'oy_save_basic_info_metabox',
@@ -1996,6 +2586,7 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             opening_date: $('#opening_date').val() || '',
                             google_primary_category: $('#google_primary_category').val() || '',
                             google_primary_category_name: $('#google_primary_category_name').val() || '',
+                            google_additional_categories_json: additionalCategoriesJson,
                             price_range: $('#price_range').val() || ''
                         }).done(function(response) {
                             if (!response || !response.success) {
@@ -2038,21 +2629,19 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
 
                         $(document).on('input.oyBasicInfo', '#google_primary_category', function() {
                             if (!editorState.enabled) { return; }
-                            queueCategorySearch();
+                            queuePrimaryCategorySearch();
                             refreshDirtyState();
                         });
 
                         $(document).on('focus.oyBasicInfo', '#google_primary_category', function() {
                             if (!editorState.enabled) { return; }
                             if (getCategoryDisplayValue() && getCategoryDisplayValue().length >= 2 && !getCategoryResourceName()) {
-                                queueCategorySearch();
+                                queuePrimaryCategorySearch();
                             }
                         });
 
                         $(document).on('blur.oyBasicInfo', '#google_primary_category', function() {
-                            setTimeout(function() {
-                                hideCategorySuggestions();
-                            }, 180);
+                            setTimeout(function() { hideCategorySuggestions(); }, 180);
                         });
 
                         $(document).on('click.oyBasicInfo', '.oy-basic-category-option', function(event) {
@@ -2061,6 +2650,61 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                                 displayName: $(this).data('label') || '',
                                 name: $(this).data('name') || ''
                             });
+                        });
+
+                        $(document).on('input.oyBasicInfo', '.oy-basic-additional-category-label', function() {
+                            if (!editorState.enabled) { return; }
+                            var $row = $(this).closest('.oy-basic-additional-category-row');
+                            queueAdditionalCategorySearch($row);
+                            refreshDirtyState();
+                        });
+
+                        $(document).on('focus.oyBasicInfo', '.oy-basic-additional-category-label', function() {
+                            if (!editorState.enabled) { return; }
+                            var $row = $(this).closest('.oy-basic-additional-category-row');
+                            var text = $.trim($(this).val() || '');
+                            var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
+                            if (text.length >= 2 && !name) {
+                                queueAdditionalCategorySearch($row);
+                            }
+                        });
+
+                        $(document).on('blur.oyBasicInfo', '.oy-basic-additional-category-label', function() {
+                            var $row = $(this).closest('.oy-basic-additional-category-row');
+                            setTimeout(function() { hideAdditionalCategorySuggestions($row); }, 180);
+                        });
+
+                        $(document).on('click.oyBasicInfo', '.oy-basic-additional-category-option', function(event) {
+                            event.preventDefault();
+                            var $row = $(this).closest('.oy-basic-additional-category-row');
+                            selectAdditionalCategorySuggestion($row, {
+                                displayName: $(this).data('label') || '',
+                                name: $(this).data('name') || ''
+                            });
+                        });
+
+                        $(document).on('click.oyBasicInfo', '.oy-basic-additional-category-remove', function(event) {
+                            event.preventDefault();
+                            if (!editorState.enabled) { return; }
+                            $(this).closest('.oy-basic-additional-category-row').remove();
+                            reindexAdditionalCategoryRows();
+                            syncAdditionalCategoriesInputFromDom();
+                            renderAdditionalCategoriesSelectionState();
+                            refreshDirtyState();
+                        });
+
+                        $(document).on('click.oyBasicInfo', '#oy-basic-additional-category-add', function(event) {
+                            event.preventDefault();
+                            if (!editorState.enabled) { return; }
+                            if (!$.trim(getCategoryDisplayValue())) {
+                                setStatus('Define primero la Categoría Principal antes de agregar categorías adicionales.', 'warning');
+                                return;
+                            }
+                            var $row = addAdditionalCategoryRow({ displayName:'', name:'' });
+                            refreshDirtyState();
+                            if ($row && $row.length) {
+                                $row.find('.oy-basic-additional-category-label').trigger('focus');
+                            }
                         });
                     }
 
@@ -2101,6 +2745,12 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             if (getCategoryDisplayValue() && !getCategoryResourceName()) {
                                 setPushStatus('La Categoría Principal debe seleccionarse desde el predictivo oficial antes de poder enviarse a GMB.', 'error');
                                 setStatus('Selecciona una categoría oficial del predictivo y guarda el metabox antes de publicar.', 'error');
+                                return;
+                            }
+
+                            if (hasInvalidAdditionalCategories()) {
+                                setPushStatus('Cada Categoría Adicional debe seleccionarse desde el predictivo oficial antes de poder enviarse a GMB.', 'error');
+                                setStatus('Corrige las categorías adicionales que aún no están vinculadas a Google, guarda el metabox y vuelve a intentar.', 'error');
                                 return;
                             }
 
@@ -2204,10 +2854,31 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             $('#google_primary_category').data('selectedLabel', $('#google_primary_category').val() || '');
                         }
 
+                        $('#oy-basic-additional-categories-list .oy-basic-additional-category-row').each(function() {
+                            var $row = $(this);
+                            var label = $.trim($row.find('.oy-basic-additional-category-label').val() || '');
+                            var name = $.trim($row.find('.oy-basic-additional-category-name').val() || '');
+                            if (name && label) {
+                                $row.find('.oy-basic-additional-category-label').data('selectedLabel', label);
+                            }
+                        });
+
+                        if (!$('#oy-basic-additional-categories-list .oy-basic-additional-category-row').length) {
+                            var initialRows = parseJsonSafe($('#oy-basic-additional-categories-list').attr('data-initial-json') || $('#google_additional_categories_json').val(), []);
+                            if (initialRows.length) {
+                                renderAdditionalCategoryRows(initialRows);
+                            } else {
+                                syncAdditionalCategoriesInputFromDom();
+                            }
+                        } else {
+                            syncAdditionalCategoriesInputFromDom();
+                        }
+
                         editorState.baseline = captureState();
                         updateDescriptionCounter();
                         updateUiState();
                         renderCategorySelectionState();
+                        renderAdditionalCategoriesSelectionState();
                         renderLog();
 
                         if (lastManualLabel) setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info');
