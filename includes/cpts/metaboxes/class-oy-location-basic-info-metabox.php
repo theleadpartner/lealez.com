@@ -275,6 +275,31 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             <div id="oy-basic-info-wrap">
                 <?php echo $this->render_basic_info_push_panel( $post->ID ); ?>
 
+                <div id="oy-basic-info-log-panel" style="margin-bottom:16px; border:1px solid #dadce0; border-radius:4px; overflow:hidden; background:#fff;">
+                    <div id="oy-basic-info-log-header" style="
+                        display:flex; align-items:center; justify-content:space-between;
+                        padding:8px 14px; background:#f6f7f7; cursor:pointer;
+                        border-bottom:1px solid transparent; user-select:none;
+                    ">
+                        <span style="font-size:13px; font-weight:600; color:#1d2327;">
+                            🔍 <?php _e( 'Log de Sincronización — Información Básica', 'lealez' ); ?>
+                        </span>
+                        <span id="oy-basic-info-log-toggle-icon" style="font-size:13px; color:#888; transition:transform .2s;">▶</span>
+                    </div>
+                    <div id="oy-basic-info-log-body" style="display:none;">
+                        <div id="oy-basic-info-log-entries"></div>
+                        <div style="padding:8px 14px; border-top:1px solid #f0f0f0; background:#fafafa; display:flex; gap:10px; align-items:center;">
+                            <button type="button" id="oy-basic-info-log-clear" class="button button-small"
+                                    style="font-size:11px; color:#dc3232; border-color:#dc3232;">
+                                🗑 <?php _e( 'Limpiar historial', 'lealez' ); ?>
+                            </button>
+                            <span style="font-size:11px; color:#aaa; font-style:italic;">
+                                <?php _e( 'Historial guardado en el navegador (localStorage). Máx 20 entradas.', 'lealez' ); ?>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
                 <div style="margin-bottom:14px; padding:12px 14px; background:#f6f7f7; border-left:4px solid #2271b1;">
                     <strong><?php _e( 'Campos que hoy se publican en GMB desde este metabox:', 'lealez' ); ?></strong>
                     <ul style="margin:8px 0 0 18px; list-style:disc;">
@@ -599,6 +624,57 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             return '';
         }
 
+        private function get_basic_info_local_snapshot( $post_id ) {
+            $post_id = absint( $post_id );
+
+            return array(
+                'location_short_description' => (string) get_post_meta( $post_id, 'location_short_description', true ),
+                'opening_date'               => (string) get_post_meta( $post_id, 'opening_date', true ),
+                'google_primary_category'    => (string) get_post_meta( $post_id, 'google_primary_category', true ),
+                'price_range'                => (string) get_post_meta( $post_id, 'price_range', true ),
+            );
+        }
+
+        /**
+         * Construye un snapshot comparable para el log visual usando un snapshot GMB.
+         *
+         * @param int   $post_id
+         * @param array $snapshot
+         * @return array
+         */
+        private function build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array $snapshot ) {
+            $local = $this->get_basic_info_local_snapshot( $post_id );
+
+            $local['location_short_description'] = isset( $snapshot['profile']['description'] )
+                ? (string) $snapshot['profile']['description']
+                : '';
+
+            $local['opening_date'] = self::normalize_opening_date_for_compare( $snapshot['openInfo']['openingDate'] ?? '' );
+
+            return $local;
+        }
+
+        /**
+         * Construye un snapshot comparable para el log visual usando el payload enviado a GMB.
+         *
+         * @param int   $post_id
+         * @param array $submitted
+         * @return array
+         */
+        private function build_basic_info_log_snapshot_from_submitted_payload( $post_id, array $submitted ) {
+            $local = $this->get_basic_info_local_snapshot( $post_id );
+
+            if ( isset( $submitted['profile']['description'] ) ) {
+                $local['location_short_description'] = (string) $submitted['profile']['description'];
+            }
+
+            if ( isset( $submitted['openInfo']['openingDate'] ) ) {
+                $local['opening_date'] = self::normalize_opening_date_for_compare( $submitted['openInfo']['openingDate'] );
+            }
+
+            return $local;
+        }
+
         /**
          * Determina el resultado del push comparando snapshots.
          *
@@ -690,30 +766,28 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
 
             if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_push_basic_info_gmb_' . $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
+                wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
             }
 
             if ( ! current_user_can( 'edit_post', $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
-            }
-
-            $post = get_post( $post_id );
-            if ( ! $post || 'oy_location' !== $post->post_type ) {
-                wp_send_json_error( array( 'message' => __( 'Post no válido o no es una oy_location.', 'lealez' ) ) );
+                wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
             }
 
             $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
             $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
 
-            if ( ! $business_id || '' === trim( $location_name ) ) {
-                wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada. Vincula primero en el metabox de Integración GMB.', 'lealez' ) ) );
+            if ( ! $business_id || ! $location_name ) {
+                wp_send_json_error( array(
+                    'message'    => __( 'Esta ubicación no tiene empresa/ubicación GMB vinculada.', 'lealez' ),
+                    'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                ) );
             }
 
-            if ( ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'push_location_basic_info' ) ) {
-                wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API::push_location_basic_info no disponible. Actualiza el plugin.', 'lealez' ) ) );
+            if ( ! class_exists( 'Lealez_GMB_API' ) ) {
+                wp_send_json_error( array( 'message' => __( 'La clase Lealez_GMB_API no está disponible.', 'lealez' ) ) );
             }
 
-            $description = (string) get_post_meta( $post_id, 'location_short_description', true );
+            $description  = (string) get_post_meta( $post_id, 'location_short_description', true );
             $opening_date = (string) get_post_meta( $post_id, 'opening_date', true );
 
             $payload = array(
@@ -734,13 +808,21 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             }
 
             if ( ! empty( $snapshot['metadata']['hasPendingEdits'] ) ) {
-                $current_job = get_post_meta( $post_id, 'gmb_basic_info_push_job', true );
+                $current_job    = get_post_meta( $post_id, 'gmb_basic_info_push_job', true );
                 $local_resolved = is_array( $current_job ) && in_array( $current_job['status'] ?? '', array( 'applied', 'rejected', 'google_override', 'timeout', 'error' ), true );
 
                 if ( ! $local_resolved ) {
                     wp_send_json_error( array(
                         'message'    => __( 'Google tiene un cambio de Información Básica en revisión. No se puede enviar otro hasta que se resuelva. Usa el botón "Verificar estado".', 'lealez' ),
                         'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                        'log_context' => array(
+                            'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $snapshot ),
+                            'after'  => $this->get_basic_info_local_snapshot( $post_id ),
+                            'raw'    => array(
+                                'action'   => 'push_basic_info_blocked_pending_edits',
+                                'snapshot' => $snapshot,
+                            ),
+                        ),
                     ) );
                 }
             }
@@ -748,9 +830,9 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             $result = Lealez_GMB_API::push_location_basic_info( $business_id, $location_name, $payload );
 
             if ( is_wp_error( $result ) ) {
-                $err_data     = $result->get_error_data();
-                $violations   = isset( $err_data['field_violations'] ) ? $err_data['field_violations'] : array();
-                $viol_txt     = '';
+                $err_data   = $result->get_error_data();
+                $violations = isset( $err_data['field_violations'] ) ? $err_data['field_violations'] : array();
+                $viol_txt   = '';
                 if ( ! empty( $violations ) ) {
                     foreach ( $violations as $v ) {
                         $viol_txt .= ' | ' . ( $v['field'] ?? '' ) . ': ' . ( $v['description'] ?? '' );
@@ -766,6 +848,17 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 if ( $raw_preview ) {
                     $response_arr['debug_raw'] = $raw_preview;
                 }
+
+                $response_arr['log_context'] = array(
+                    'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, is_array( $snapshot ) ? $snapshot : array() ),
+                    'after'  => $this->get_basic_info_local_snapshot( $post_id ),
+                    'raw'    => array(
+                        'action'           => 'push_basic_info_error',
+                        'error_message'    => $result->get_error_message(),
+                        'field_violations' => $violations,
+                        'error_data'       => is_array( $err_data ) ? $err_data : array(),
+                    ),
+                );
 
                 wp_send_json_error( $response_arr );
             }
@@ -822,6 +915,17 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
             wp_send_json_success( array(
                 'message'    => __( 'Cambio enviado a Google Business Profile. Estado: pendiente de revisión por Google. El sistema lo verificará automáticamente.', 'lealez' ),
                 'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                'log_context' => array(
+                    'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $snapshot ),
+                    'after'  => $this->build_basic_info_log_snapshot_from_submitted_payload( $post_id, $job['submitted'] ),
+                    'raw'    => array(
+                        'action'          => 'push_basic_info_to_gmb',
+                        'update_mask'     => $job['update_mask'],
+                        'patch_response'  => isset( $result['patch_response'] ) && is_array( $result['patch_response'] ) ? $result['patch_response'] : array(),
+                        'snapshot_before' => $job['snapshot_before'],
+                        'submitted'       => $job['submitted'],
+                    ),
+                ),
             ) );
         }
 
@@ -852,6 +956,17 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     'message'    => __( 'El cambio ya está resuelto.', 'lealez' ),
                     'status'     => $job['status'],
                     'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                    'log_context' => array(
+                        'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array(
+                            'profile'  => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
+                            'openInfo' => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
+                        ) ),
+                        'after'  => $this->build_basic_info_log_snapshot_from_submitted_payload( $post_id, isset( $job['submitted'] ) && is_array( $job['submitted'] ) ? $job['submitted'] : array() ),
+                        'raw'    => array(
+                            'action' => 'manual_check_already_resolved',
+                            'job'    => $job,
+                        ),
+                    ),
                 ) );
             }
 
@@ -868,6 +983,18 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 wp_send_json_error( array(
                     'message'    => __( 'Error al consultar GMB: ', 'lealez' ) . $current->get_error_message(),
                     'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                    'log_context' => array(
+                        'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array(
+                            'profile'  => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
+                            'openInfo' => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
+                        ) ),
+                        'after'  => $this->get_basic_info_local_snapshot( $post_id ),
+                        'raw'    => array(
+                            'action'        => 'manual_check_error',
+                            'error_message' => $current->get_error_message(),
+                            'error_data'    => $current->get_error_data(),
+                        ),
+                    ),
                 ) );
             }
 
@@ -906,6 +1033,20 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                 'message'    => '',
                 'status'     => $new_status,
                 'panel_html' => $this->render_basic_info_push_panel( $post_id ),
+                'log_context' => array(
+                    'before' => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, array(
+                        'profile'  => isset( $job['snapshot_before']['profile'] ) && is_array( $job['snapshot_before']['profile'] ) ? $job['snapshot_before']['profile'] : array(),
+                        'openInfo' => isset( $job['snapshot_before']['openInfo'] ) && is_array( $job['snapshot_before']['openInfo'] ) ? $job['snapshot_before']['openInfo'] : array(),
+                    ) ),
+                    'after'  => $this->build_basic_info_log_snapshot_from_gmb_snapshot( $post_id, $current ),
+                    'raw'    => array(
+                        'action'           => 'manual_check_basic_info_status',
+                        'status'           => $new_status,
+                        'metadata'         => isset( $current['metadata'] ) && is_array( $current['metadata'] ) ? $current['metadata'] : array(),
+                        'current_snapshot' => $current,
+                        'submitted'        => isset( $job['submitted'] ) && is_array( $job['submitted'] ) ? $job['submitted'] : array(),
+                    ),
+                ),
             ) );
         }
 
@@ -1039,66 +1180,40 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     var AJAX_URL = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
                     var lastManualLabel = <?php echo wp_json_encode( $last_manual_label ); ?>;
                     var localPending = <?php echo $local_pending ? 'true' : 'false'; ?>;
+                    var LS_KEY = 'oy_basic_info_log_' + POST_ID;
+                    var MAX_LOG = 20;
+
+                    var FIELD_MAP = [
+                        { key: 'location_short_description', label: 'Descripción (GMB)' },
+                        { key: 'opening_date', label: 'Fecha de Apertura' },
+                        { key: 'google_primary_category', label: 'Categoría Principal (manual)' },
+                        { key: 'price_range', label: 'Rango de Precios' }
+                    ];
 
                     function setStatus(message, type) {
                         var $box = $('#oy-basic-info-inline-status');
-                        if (!$box.length) {
-                            return;
-                        }
-
-                        if (!message) {
-                            $box.hide().empty();
-                            return;
-                        }
-
-                        var border = '#2271b1';
-                        var bg = '#eef6ff';
-                        if (type === 'error') {
-                            border = '#d63638';
-                            bg = '#fff1f0';
-                        } else if (type === 'success') {
-                            border = '#00a32a';
-                            bg = '#edfaef';
-                        } else if (type === 'warning') {
-                            border = '#dba617';
-                            bg = '#fff8e5';
-                        }
-
-                        $box
-                            .show()
-                            .html('<div style="padding:10px 12px; background:'+bg+'; border-left:4px solid '+border+';">'+message+'</div>');
+                        if (!$box.length) { return; }
+                        if (!message) { $box.hide().empty(); return; }
+                        var border = '#2271b1', bg = '#eef6ff';
+                        if (type === 'error') { border = '#d63638'; bg = '#fff1f0'; }
+                        else if (type === 'success') { border = '#00a32a'; bg = '#edfaef'; }
+                        else if (type === 'warning') { border = '#dba617'; bg = '#fff8e5'; }
+                        $box.show().html('<div style="padding:10px 12px; background:'+bg+'; border-left:4px solid '+border+';">'+message+'</div>');
                     }
 
                     function setPushStatus(message, type) {
                         var $panel = $('#oy-basic-info-push-panel');
-                        if (!$panel.length) {
-                            return;
-                        }
-
+                        if (!$panel.length) { return; }
                         var $slot = $panel.find('.oy-basic-info-push-inline-message');
                         if (!$slot.length) {
                             $slot = $('<div class="oy-basic-info-push-inline-message" style="padding:0 14px 14px;"></div>');
                             $panel.append($slot);
                         }
-
-                        if (!message) {
-                            $slot.empty();
-                            return;
-                        }
-
-                        var border = '#2271b1';
-                        var bg = '#eef6ff';
-                        if (type === 'error') {
-                            border = '#d63638';
-                            bg = '#fff1f0';
-                        } else if (type === 'success') {
-                            border = '#00a32a';
-                            bg = '#edfaef';
-                        } else if (type === 'warning') {
-                            border = '#dba617';
-                            bg = '#fff8e5';
-                        }
-
+                        if (!message) { $slot.empty(); return; }
+                        var border = '#2271b1', bg = '#eef6ff';
+                        if (type === 'error') { border = '#d63638'; bg = '#fff1f0'; }
+                        else if (type === 'success') { border = '#00a32a'; bg = '#edfaef'; }
+                        else if (type === 'warning') { border = '#dba617'; bg = '#fff8e5'; }
                         $slot.html('<div style="padding:10px 12px; background:'+bg+'; border-left:4px solid '+border+';">'+message+'</div>');
                     }
 
@@ -1111,24 +1226,15 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                         };
                     }
 
-                    function statesEqual(a, b) {
-                        return JSON.stringify(a) === JSON.stringify(b);
-                    }
+                    function statesEqual(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 
                     function setFieldsEnabled(enabled) {
                         var $fields = $('[data-oy-basic-field="1"]');
-
                         $fields.each(function() {
                             var $field = $(this);
-
                             if ($field.is('textarea') || ($field.is('input') && $field.attr('type') !== 'date')) {
-                                if (enabled) {
-                                    $field.removeAttr('readonly');
-                                } else {
-                                    $field.attr('readonly', 'readonly');
-                                }
+                                enabled ? $field.removeAttr('readonly') : $field.attr('readonly', 'readonly');
                             }
-
                             if ($field.is('select') || ($field.is('input') && $field.attr('type') === 'date')) {
                                 $field.prop('disabled', !enabled);
                             }
@@ -1136,34 +1242,22 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     }
 
                     function refreshDirtyState() {
-                        if (!editorState.enabled) {
-                            editorState.dirty = false;
-                        } else {
-                            editorState.dirty = !statesEqual(editorState.baseline, captureState());
-                        }
-
+                        editorState.dirty = editorState.enabled ? !statesEqual(editorState.baseline, captureState()) : false;
                         updateUiState();
                     }
 
                     function updateUiState() {
                         setFieldsEnabled(editorState.enabled && !editorState.saving);
-
                         $('#oy-basic-info-editor-start').toggle(!editorState.enabled && !editorState.saving);
                         $('#oy-basic-info-editor-save').toggle(editorState.enabled);
                         $('#oy-basic-info-editor-cancel').toggle(editorState.enabled);
-
                         $('#oy-basic-info-editor-save').prop('disabled', !editorState.enabled || !editorState.dirty || editorState.saving);
                         $('#oy-basic-info-editor-cancel').prop('disabled', editorState.saving);
 
-                        if (editorState.saving) {
-                            $('#oy-basic-info-editor-state').text('Guardando metabox...');
-                        } else if (editorState.enabled && editorState.dirty) {
-                            $('#oy-basic-info-editor-state').text('Tienes cambios locales sin guardar.');
-                        } else if (editorState.enabled) {
-                            $('#oy-basic-info-editor-state').text('Modo edición activo.');
-                        } else {
-                            $('#oy-basic-info-editor-state').text('Modo lectura.');
-                        }
+                        if (editorState.saving) $('#oy-basic-info-editor-state').text('Guardando metabox...');
+                        else if (editorState.enabled && editorState.dirty) $('#oy-basic-info-editor-state').text('Tienes cambios locales sin guardar.');
+                        else if (editorState.enabled) $('#oy-basic-info-editor-state').text('Modo edición activo.');
+                        else $('#oy-basic-info-editor-state').text('Modo lectura.');
                     }
 
                     function beginEditMode() {
@@ -1175,17 +1269,12 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     }
 
                     function cancelEditMode() {
-                        if (!editorState.baseline) {
-                            editorState.baseline = captureState();
-                        }
-
+                        if (!editorState.baseline) editorState.baseline = captureState();
                         $('#location_short_description').val(editorState.baseline.location_short_description);
                         $('#opening_date').val(editorState.baseline.opening_date);
                         $('#google_primary_category').val(editorState.baseline.google_primary_category);
                         $('#price_range').val(editorState.baseline.price_range);
-
                         updateDescriptionCounter();
-
                         editorState.enabled = false;
                         editorState.dirty = false;
                         editorState.saving = false;
@@ -1200,20 +1289,215 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     }
 
                     function replacePushPanel(html) {
-                        if (!html) {
-                            return;
+                        if (html) { $('#oy-basic-info-push-panel').replaceWith(html); }
+                    }
+
+                    function formatPriceRange(value) {
+                        var map = {'':'No especificado','1':'$ - Económico','2':'$$ - Moderado','3':'$$$ - Caro','4':'$$$$ - Muy Caro'};
+                        var key = String(value == null ? '' : value);
+                        return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : key;
+                    }
+
+                    function valueToText(fieldKey, value) {
+                        if (fieldKey === 'price_range') return formatPriceRange(value);
+                        return String(value == null ? '' : value);
+                    }
+
+                    function buildDiff(before, after) {
+                        var rows = [];
+                        FIELD_MAP.forEach(function(field) {
+                            var bStr = valueToText(field.key, before && Object.prototype.hasOwnProperty.call(before, field.key) ? before[field.key] : '');
+                            var aStr = valueToText(field.key, after && Object.prototype.hasOwnProperty.call(after, field.key) ? after[field.key] : '');
+                            var rawBefore = String(bStr == null ? '' : bStr);
+                            var rawAfter  = String(aStr == null ? '' : aStr);
+                            var status = (rawBefore === rawAfter) ? 'unchanged' : ((!rawBefore || rawBefore.trim() === '') ? 'new' : 'changed');
+                            rows.push({ label: field.label, before: bStr, after: aStr, status: status });
+                        });
+                        return rows;
+                    }
+
+                    function loadLog() {
+                        try {
+                            var raw = localStorage.getItem(LS_KEY);
+                            if (!raw) return [];
+                            var parsed = JSON.parse(raw);
+                            return Array.isArray(parsed) ? parsed : [];
+                        } catch (e) { return []; }
+                    }
+
+                    function saveLog(entries) {
+                        try {
+                            if (entries.length > MAX_LOG) entries = entries.slice(entries.length - MAX_LOG);
+                            localStorage.setItem(LS_KEY, JSON.stringify(entries));
+                        } catch (e) {}
+                    }
+
+                    function clearLog() {
+                        try { localStorage.removeItem(LS_KEY); } catch (e) {}
+                    }
+
+                    function addLogEntry(rawPayload, diff, source) {
+                        try {
+                            var now = new Date();
+                            var timestamp = now.toLocaleDateString('es-CO', {year:'numeric',month:'2-digit',day:'2-digit'}) + ' ' +
+                                            now.toLocaleTimeString('es-CO', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+                            var safeRaw = rawPayload;
+                            try { JSON.stringify(rawPayload); } catch (err) { safeRaw = { _serializeError: 'Objeto no serializable: ' + err.message }; }
+                            var entries = loadLog();
+                            entries.push({ timestamp: timestamp, raw: safeRaw, diff: Array.isArray(diff) ? diff : [], source: source || 'manual_save' });
+                            saveLog(entries);
+                            renderLog();
+                            if ($('#oy-basic-info-log-body').is(':hidden')) {
+                                $('#oy-basic-info-log-body').show();
+                                $('#oy-basic-info-log-header').css('borderBottomColor', '#dadce0');
+                                $('#oy-basic-info-log-toggle-icon').text('▼');
+                            }
+                        } catch (e) {
+                            if (window.console && window.console.error) console.error('[OY Basic Info Log] addLogEntry error:', e);
                         }
-                        $('#oy-basic-info-push-panel').replaceWith(html);
+                    }
+
+                    function getSourceMeta(source) {
+                        var map = {
+                            manual_save:  { icon: '💾', label: ' · Guardado local' },
+                            push_to_gmb:  { icon: '🚀', label: ' · Enviar a GMB' },
+                            manual_check: { icon: '🔎', label: ' · Verificación manual' },
+                            push_error:   { icon: '❌', label: ' · Error al enviar' },
+                            check_error:  { icon: '⚠️', label: ' · Error al verificar' }
+                        };
+                        return map[source] || { icon: '🔵', label: ' · Acción del metabox' };
+                    }
+
+                    function renderLog() {
+                        try {
+                            var entries = loadLog();
+                            var $container = $('#oy-basic-info-log-entries');
+                            if (!$container.length) return;
+                            $container.empty();
+
+                            if (!entries.length) {
+                                $container.append(
+                                    $('<p/>').css({ padding:'12px 16px', margin:0, fontSize:'12px', color:'#888', fontStyle:'italic' })
+                                        .text('Aún no hay acciones registradas. Guarda cambios locales o usa "Enviar a GMB" para empezar a construir el historial detallado.')
+                                );
+                                return;
+                            }
+
+                            var sorted = entries.slice().reverse();
+
+                            sorted.forEach(function(entry, idx) {
+                                var diff = Array.isArray(entry.diff) ? entry.diff : [];
+                                var changedCount = diff.filter(function(row){ return row.status === 'changed' || row.status === 'new'; }).length;
+                                var isFirst = idx === 0;
+                                var bgHeader = isFirst ? '#f0f7ff' : '#fff';
+                                var sourceMeta = getSourceMeta(entry.source);
+                                var hasError = entry.raw && (entry.raw.error || entry.raw._serializeError || entry.raw.error_message);
+
+                                var $entry = $('<div/>').css({ borderBottom: '1px solid ' + (isFirst ? '#c3d4e6' : '#f0f0f0') });
+                                var $entryHeader = $('<div/>').css({
+                                    display:'flex', alignItems:'center', justifyContent:'space-between',
+                                    padding:'8px 14px', cursor:'pointer', userSelect:'none', background:bgHeader, gap:'10px'
+                                });
+
+                                var statusLabel, statusColor;
+                                if (hasError) { statusLabel = '❌ Error'; statusColor = '#dc3232'; }
+                                else if (!diff.length) { statusLabel = '⚠️ Sin datos de diff'; statusColor = '#999'; }
+                                else if (changedCount === 0) { statusLabel = '✅ Sin cambios'; statusColor = '#46b450'; }
+                                else { statusLabel = '✏️ ' + changedCount + ' campo' + (changedCount !== 1 ? 's' : '') + ' modificado' + (changedCount !== 1 ? 's' : ''); statusColor = '#e06800'; }
+
+                                $entryHeader.append(
+                                    $('<span/>').css({ fontSize:'11px', color:'#555', flex:'1', fontFamily:'monospace' })
+                                        .text(sourceMeta.icon + ' 🕐 ' + entry.timestamp + sourceMeta.label + (isFirst ? '  ← más reciente' : ''))
+                                );
+                                $entryHeader.append(
+                                    $('<span/>').css({ fontSize:'11px', fontWeight:'600', color:statusColor }).text(statusLabel)
+                                );
+                                var $toggleIcon = $('<span/>').css({ fontSize:'11px', color:'#aaa', marginLeft:'6px' }).text(isFirst ? '▼' : '▶');
+                                $entryHeader.append($toggleIcon);
+
+                                var $body = $('<div/>').css({ display:isFirst ? 'block' : 'none', padding:'0 14px 14px', background:'#fff' });
+                                $entryHeader.on('click', function(){ $body.toggle(); $toggleIcon.text($body.is(':visible') ? '▼' : '▶'); });
+
+                                if (diff.length) {
+                                    var $table = $('<table/>').css({ width:'100%', borderCollapse:'collapse', fontSize:'11px', marginTop:'10px', marginBottom:'10px' });
+                                    $('<thead/>').append(
+                                        $('<tr/>').append(
+                                            $('<th/>').css({ textAlign:'left', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555', width:'160px' }).text('Campo'),
+                                            $('<th/>').css({ textAlign:'left', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555' }).text('Antes'),
+                                            $('<th/>').css({ textAlign:'left', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555' }).text('Después'),
+                                            $('<th/>').css({ textAlign:'center', padding:'5px 8px', background:'#f6f7f7', borderBottom:'2px solid #e5e5e5', color:'#555', width:'100px' }).text('Estado')
+                                        )
+                                    ).appendTo($table);
+
+                                    var $tbody = $('<tbody/>');
+                                    diff.forEach(function(row) {
+                                        var cfgMap = {
+                                            unchanged: { rowBg:'#fff',    bColor:'#aaa',    aColor:'#aaa',    icon:'—',  iColor:'#ccc'    },
+                                            new:       { rowBg:'#f6fff9', bColor:'#aaa',    aColor:'#276749', icon:'🆕', iColor:'#276749' },
+                                            changed:   { rowBg:'#fffbea', bColor:'#dc3232', aColor:'#2271b1', icon:'✏️', iColor:'#e06800' }
+                                        };
+                                        var cfg = cfgMap[row.status] || cfgMap.unchanged;
+                                        var bText = row.before && String(row.before).trim() ? row.before : '(vacío)';
+                                        var aText = row.after  && String(row.after).trim()  ? row.after  : '(vacío)';
+                                        var $tr = $('<tr/>').css({ background: cfg.rowBg });
+                                        $('<td/>').css({ padding:'4px 8px', borderBottom:'1px solid #f3f3f3', fontWeight:'600', color:'#1d2327', whiteSpace:'nowrap' }).text(row.label).appendTo($tr);
+                                        $('<td/>').css({ padding:'4px 8px', borderBottom:'1px solid #f3f3f3', color:cfg.bColor, fontFamily:'monospace', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', textDecoration: row.status === 'changed' ? 'line-through' : 'none' }).attr('title', bText).text(bText).appendTo($tr);
+                                        $('<td/>').css({ padding:'4px 8px', borderBottom:'1px solid #f3f3f3', color:cfg.aColor, fontFamily:'monospace', fontWeight: row.status !== 'unchanged' ? '600' : '400', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }).attr('title', aText).text(aText).appendTo($tr);
+                                        $('<td/>').css({ padding:'4px 8px', borderBottom:'1px solid #f3f3f3', textAlign:'center', color:cfg.iColor, fontSize:'13px' }).text(cfg.icon).appendTo($tr);
+                                        $tbody.append($tr);
+                                    });
+                                    $table.append($tbody);
+                                    $body.append($table);
+                                }
+
+                                try {
+                                    var rawStr = JSON.stringify(entry.raw, null, 2);
+                                    if (rawStr && rawStr !== 'null' && rawStr !== 'undefined') {
+                                        var $rawToggleBtn = $('<button type="button"/>').addClass('button-link').css({
+                                            fontSize:'11px', color:'#1a73e8', padding:'0', border:'none', background:'transparent',
+                                            cursor:'pointer', textDecoration:'underline', display:'block', marginBottom:'6px'
+                                        }).text('📡 Ver payload / respuesta completa ▶');
+
+                                        var $rawPre = $('<pre/>').css({
+                                            display:'none', background:'#1e1e2e', color:'#cdd6f4', padding:'10px', borderRadius:'4px',
+                                            fontSize:'10px', lineHeight:'1.6', maxHeight:'240px', overflowY:'auto',
+                                            whiteSpace:'pre-wrap', wordBreak:'break-all', marginBottom:'8px', fontFamily:'monospace'
+                                        }).text(rawStr);
+
+                                        $rawToggleBtn.on('click', function() {
+                                            $rawPre.toggle();
+                                            $(this).text($rawPre.is(':visible') ? '📡 Ocultar payload / respuesta ▼' : '📡 Ver payload / respuesta completa ▶');
+                                        });
+
+                                        $body.append($rawToggleBtn).append($rawPre);
+                                    }
+                                } catch (err) {
+                                    $body.append($('<p/>').css({ fontSize:'11px', color:'#888' }).text('(payload no serializable)'));
+                                }
+
+                                if (hasError) {
+                                    var errorText = entry.raw.error || entry.raw._serializeError || entry.raw.error_message || 'Error desconocido';
+                                    $body.append(
+                                        $('<p/>').css({ margin:'8px 0 0', fontSize:'11px', color:'#dc3232', fontStyle:'italic', padding:'6px 8px', background:'#fff5f5', borderRadius:'3px', border:'1px solid #f5c6c6' })
+                                            .text('⚠️ ' + errorText)
+                                    );
+                                }
+
+                                $entry.append($entryHeader).append($body);
+                                $container.append($entry);
+                            });
+                        } catch (err) {
+                            if (window.console && window.console.error) console.error('[OY Basic Info Log] renderLog error:', err);
+                        }
                     }
 
                     function saveMetabox() {
-                        if (editorState.saving || !editorState.enabled) {
-                            return;
-                        }
-
+                        if (editorState.saving || !editorState.enabled) return;
                         editorState.saving = true;
                         updateUiState();
                         setStatus('Guardando cambios locales...', 'info');
+
+                        var beforeState = editorState.baseline ? $.extend({}, editorState.baseline) : captureState();
 
                         $.post(AJAX_URL, {
                             action: 'oy_save_basic_info_metabox',
@@ -1223,35 +1507,33 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             opening_date: $('#opening_date').val() || '',
                             google_primary_category: $('#google_primary_category').val() || '',
                             price_range: $('#price_range').val() || ''
-                        })
-                        .done(function(response) {
+                        }).done(function(response) {
                             if (!response || !response.success) {
                                 var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo guardar el metabox.';
                                 setStatus(msg, 'error');
+                                addLogEntry({ action:'manual_metabox_save_error', error_message:msg, response: response && response.data ? response.data : response }, buildDiff(beforeState, captureState()), 'push_error');
                                 return;
                             }
 
-                            editorState.baseline = captureState();
+                            var afterState = captureState();
+                            addLogEntry({ action:'manual_metabox_save', response: response && response.data ? response.data : response }, buildDiff(beforeState, afterState), 'manual_save');
+
+                            editorState.baseline = afterState;
                             editorState.enabled = false;
                             editorState.dirty = false;
                             localPending = true;
                             lastManualLabel = response.data && response.data.save_meta && response.data.save_meta.at_label ? response.data.save_meta.at_label : lastManualLabel;
 
-                            if (response.data && response.data.panel_html) {
-                                replacePushPanel(response.data.panel_html);
-                            }
+                            if (response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
 
                             updateUiState();
                             setStatus(response.data && response.data.message ? response.data.message : 'Metabox guardado localmente.', 'success');
-                        })
-                        .fail(function(xhr) {
+                        }).fail(function(xhr) {
                             var msg = 'Error de red al guardar el metabox.';
-                            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                                msg = xhr.responseJSON.data.message;
-                            }
+                            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) msg = xhr.responseJSON.data.message;
                             setStatus(msg, 'error');
-                        })
-                        .always(function() {
+                            addLogEntry({ action:'manual_metabox_save_network_error', error_message:msg }, buildDiff(beforeState, captureState()), 'push_error');
+                        }).always(function() {
                             editorState.saving = false;
                             updateUiState();
                         });
@@ -1259,9 +1541,7 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
 
                     function bindDirtyWatchers() {
                         $(document).on('input.oyBasicInfo change.oyBasicInfo', '#location_short_description, #opening_date, #google_primary_category, #price_range', function() {
-                            if (!editorState.enabled) {
-                                return;
-                            }
+                            if (!editorState.enabled) return;
                             updateDescriptionCounter();
                             refreshDirtyState();
                         });
@@ -1270,16 +1550,11 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     function guardCptSaveButtons() {
                         document.addEventListener('click', function(event) {
                             var saveButton = event.target.closest('#publish, #save-post');
-                            if (!saveButton) {
-                                return;
-                            }
-
+                            if (!saveButton) return;
                             if (editorState.enabled && editorState.dirty) {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                if (typeof event.stopImmediatePropagation === 'function') {
-                                    event.stopImmediatePropagation();
-                                }
+                                if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
                                 setStatus('Primero guarda los cambios del metabox de Información Básica antes de usar "Actualizar" o "Guardar borrador".', 'error');
                             }
                         }, true);
@@ -1291,9 +1566,7 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                             if (pushButton && editorState.enabled && editorState.dirty) {
                                 event.preventDefault();
                                 event.stopPropagation();
-                                if (typeof event.stopImmediatePropagation === 'function') {
-                                    event.stopImmediatePropagation();
-                                }
+                                if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
                                 setPushStatus('Primero guarda los cambios del metabox. "Enviar a GMB" usa únicamente lo que ya quedó guardado.', 'error');
                                 setStatus('Primero guarda los cambios del metabox.', 'error');
                             }
@@ -1301,121 +1574,115 @@ if ( ! class_exists( 'OY_Location_Basic_Info_Metabox' ) ) {
                     }
 
                     function bindButtons() {
-                        $(document).on('click.oyBasicInfo', '#oy-basic-info-editor-start', function(event) {
-                            event.preventDefault();
-                            beginEditMode();
-                        });
-
-                        $(document).on('click.oyBasicInfo', '#oy-basic-info-editor-cancel', function(event) {
-                            event.preventDefault();
-                            cancelEditMode();
-                        });
-
-                        $(document).on('click.oyBasicInfo', '#oy-basic-info-editor-save', function(event) {
-                            event.preventDefault();
-                            saveMetabox();
-                        });
+                        $(document).on('click.oyBasicInfo', '#oy-basic-info-editor-start', function(event){ event.preventDefault(); beginEditMode(); });
+                        $(document).on('click.oyBasicInfo', '#oy-basic-info-editor-cancel', function(event){ event.preventDefault(); cancelEditMode(); });
+                        $(document).on('click.oyBasicInfo', '#oy-basic-info-editor-save', function(event){ event.preventDefault(); saveMetabox(); });
 
                         $(document).on('click.oyBasicInfo', '#oy-push-basic-info-btn', function(event) {
                             event.preventDefault();
-
                             var $panel = $('#oy-basic-info-push-panel');
                             var pushNonce = $panel.data('push-nonce');
                             var postId = $panel.data('post-id');
-
                             setPushStatus('Enviando Información Básica a GMB...', 'info');
 
-                            $.post(AJAX_URL, {
-                                action: 'oy_push_basic_info_to_gmb',
-                                nonce: pushNonce,
-                                post_id: postId
-                            })
-                            .done(function(response) {
-                                if (!response || !response.success) {
-                                    var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo enviar a GMB.';
-                                    setPushStatus(msg, 'error');
-                                    if (response && response.data && response.data.panel_html) {
-                                        replacePushPanel(response.data.panel_html);
+                            $.post(AJAX_URL, { action:'oy_push_basic_info_to_gmb', nonce:pushNonce, post_id:postId })
+                                .done(function(response) {
+                                    if (!response || !response.success) {
+                                        var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo enviar a GMB.';
+                                        setPushStatus(msg, 'error');
+                                        if (response && response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
+                                        addLogEntry(
+                                            response && response.data && response.data.log_context && response.data.log_context.raw ? response.data.log_context.raw : { action:'push_basic_info_error', error_message:msg, response: response && response.data ? response.data : response },
+                                            response && response.data && response.data.log_context ? buildDiff(response.data.log_context.before || {}, response.data.log_context.after || {}) : [],
+                                            'push_error'
+                                        );
+                                        return;
                                     }
-                                    return;
-                                }
 
-                                localPending = true;
-                                if (response.data && response.data.panel_html) {
-                                    replacePushPanel(response.data.panel_html);
-                                }
-                                setPushStatus(response.data && response.data.message ? response.data.message : 'Enviado a GMB.', 'success');
-                            })
-                            .fail(function(xhr) {
-                                var msg = 'Error de red al enviar a GMB.';
-                                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                                    msg = xhr.responseJSON.data.message;
-                                }
-                                setPushStatus(msg, 'error');
-                            });
+                                    localPending = true;
+                                    if (response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
+                                    if (response.data && response.data.log_context) {
+                                        addLogEntry(response.data.log_context.raw || { action:'push_basic_info_to_gmb', response:response.data }, buildDiff(response.data.log_context.before || {}, response.data.log_context.after || {}), 'push_to_gmb');
+                                    }
+                                    setPushStatus(response.data && response.data.message ? response.data.message : 'Enviado a GMB.', 'success');
+                                })
+                                .fail(function(xhr) {
+                                    var msg = 'Error de red al enviar a GMB.';
+                                    if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) msg = xhr.responseJSON.data.message;
+                                    setPushStatus(msg, 'error');
+                                    addLogEntry({ action:'push_basic_info_network_error', error_message:msg }, [], 'push_error');
+                                });
                         });
 
                         $(document).on('click.oyBasicInfo', '#oy-check-basic-info-push-status-btn', function(event) {
                             event.preventDefault();
-
                             var $panel = $('#oy-basic-info-push-panel');
                             var checkNonce = $panel.data('check-nonce');
                             var postId = $panel.data('post-id');
-
                             setPushStatus('Verificando estado en Google...', 'info');
 
-                            $.post(AJAX_URL, {
-                                action: 'oy_check_basic_info_push_status',
-                                nonce: checkNonce,
-                                post_id: postId
-                            })
-                            .done(function(response) {
-                                if (!response || !response.success) {
-                                    var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo verificar el estado.';
-                                    setPushStatus(msg, 'error');
-                                    if (response && response.data && response.data.panel_html) {
-                                        replacePushPanel(response.data.panel_html);
+                            $.post(AJAX_URL, { action:'oy_check_basic_info_push_status', nonce:checkNonce, post_id:postId })
+                                .done(function(response) {
+                                    if (!response || !response.success) {
+                                        var msg = response && response.data && response.data.message ? response.data.message : 'No se pudo verificar el estado.';
+                                        setPushStatus(msg, 'error');
+                                        if (response && response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
+                                        addLogEntry(
+                                            response && response.data && response.data.log_context && response.data.log_context.raw ? response.data.log_context.raw : { action:'manual_check_error', error_message:msg, response: response && response.data ? response.data : response },
+                                            response && response.data && response.data.log_context ? buildDiff(response.data.log_context.before || {}, response.data.log_context.after || {}) : [],
+                                            'check_error'
+                                        );
+                                        return;
                                     }
-                                    return;
-                                }
 
-                                if (response.data && response.data.panel_html) {
-                                    replacePushPanel(response.data.panel_html);
-                                }
+                                    if (response.data && response.data.panel_html) replacePushPanel(response.data.panel_html);
+                                    if (response.data && response.data.log_context) {
+                                        addLogEntry(response.data.log_context.raw || { action:'manual_check_basic_info_status', response:response.data }, buildDiff(response.data.log_context.before || {}, response.data.log_context.after || {}), 'manual_check');
+                                    }
 
-                                if (response.data && response.data.status === 'applied') {
-                                    localPending = false;
-                                    setPushStatus('Google ya refleja los cambios enviados.', 'success');
-                                } else if (response.data && response.data.status === 'pending_review') {
-                                    setPushStatus('El cambio sigue pendiente de revisión por Google.', 'warning');
-                                } else {
-                                    setPushStatus('Estado actualizado: ' + (response.data && response.data.status ? response.data.status : 'sin dato'), 'info');
-                                }
-                            })
-                            .fail(function(xhr) {
-                                var msg = 'Error de red al verificar el estado.';
-                                if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                                    msg = xhr.responseJSON.data.message;
-                                }
-                                setPushStatus(msg, 'error');
-                            });
+                                    if (response.data && response.data.status === 'applied') {
+                                        localPending = false;
+                                        setPushStatus('Google ya refleja los cambios enviados.', 'success');
+                                    } else if (response.data && response.data.status === 'pending_review') {
+                                        setPushStatus('El cambio sigue pendiente de revisión por Google.', 'warning');
+                                    } else {
+                                        setPushStatus('Estado actualizado: ' + (response.data && response.data.status ? response.data.status : 'sin dato'), 'info');
+                                    }
+                                })
+                                .fail(function(xhr) {
+                                    var msg = 'Error de red al verificar el estado.';
+                                    if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) msg = xhr.responseJSON.data.message;
+                                    setPushStatus(msg, 'error');
+                                    addLogEntry({ action:'manual_check_network_error', error_message:msg }, [], 'check_error');
+                                });
+                        });
+
+                        $(document).on('click', '#oy-basic-info-log-header', function() {
+                            var $body = $('#oy-basic-info-log-body');
+                            var $icon = $('#oy-basic-info-log-toggle-icon');
+                            $body.toggle();
+                            $('#oy-basic-info-log-header').css('borderBottomColor', $body.is(':visible') ? '#dadce0' : 'transparent');
+                            $icon.text($body.is(':visible') ? '▼' : '▶');
+                        });
+
+                        $(document).on('click', '#oy-basic-info-log-clear', function(event) {
+                            event.stopPropagation();
+                            if (!confirm('<?php echo esc_js( __( '¿Borrar todo el historial detallado del metabox de Información Básica?', 'lealez' ) ); ?>')) return;
+                            clearLog();
+                            renderLog();
                         });
                     }
 
                     $(document).ready(function() {
-                        if (!$('#oy_location_basic_info').length) {
-                            return;
-                        }
+                        if (!$('#oy_location_basic_info').length) return;
 
                         editorState.baseline = captureState();
                         updateDescriptionCounter();
                         updateUiState();
+                        renderLog();
 
-                        if (lastManualLabel) {
-                            setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info');
-                        } else if (localPending) {
-                            setStatus('Hay cambios locales pendientes por publicar en GMB.', 'info');
-                        }
+                        if (lastManualLabel) setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info');
+                        else if (localPending) setStatus('Hay cambios locales pendientes por publicar en GMB.', 'info');
 
                         bindDirtyWatchers();
                         bindButtons();
