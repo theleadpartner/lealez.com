@@ -4072,6 +4072,47 @@ public static function push_location_address( $business_id, $location_name, arra
         return $last_error ?: new WP_Error( 'gmb_basic_info_snapshot_error', __( 'No se pudo obtener el snapshot de Información Básica.', 'lealez' ) );
     }
 
+
+/**
+ * Normaliza una fecha de apertura para el flujo de Información Básica.
+ *
+ * Acepta:
+ * - cadena YYYY-MM-DD
+ * - array con year/month/day
+ *
+ * @param mixed $value
+ * @return string
+ */
+private static function normalize_basic_info_opening_date( $value ) {
+    if ( is_string( $value ) ) {
+        $value = sanitize_text_field( $value );
+
+        if ( preg_match( '/^\d{4}-\d{2}-\d{2}$/', $value ) ) {
+            list( $year, $month, $day ) = array_map( 'intval', explode( '-', $value ) );
+
+            if ( checkdate( $month, $day, $year ) ) {
+                return sprintf( '%04d-%02d-%02d', $year, $month, $day );
+            }
+        }
+
+        return '';
+    }
+
+    if ( is_array( $value ) ) {
+        $year  = isset( $value['year'] ) ? (int) $value['year'] : 0;
+        $month = isset( $value['month'] ) ? (int) $value['month'] : 0;
+        $day   = isset( $value['day'] ) ? (int) $value['day'] : 0;
+
+        if ( $year > 0 && $month > 0 && $day > 0 && checkdate( $month, $day, $year ) ) {
+            return sprintf( '%04d-%02d-%02d', $year, $month, $day );
+        }
+    }
+
+    return '';
+}
+
+    
+
     /**
      * Envía (PATCH) la Información Básica soportada a GBP.
      *
@@ -4155,27 +4196,27 @@ public static function push_location_address( $business_id, $location_name, arra
             $update_mask[] = 'profile.description';
         }
 
-        $opening_date = isset( $basic_info_data['opening_date'] )
-            ? sanitize_text_field( (string) $basic_info_data['opening_date'] )
-            : '';
+$opening_date = isset( $basic_info_data['opening_date'] )
+    ? self::normalize_basic_info_opening_date( $basic_info_data['opening_date'] )
+    : '';
 
-        if ( '' !== $opening_date ) {
-            if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $opening_date ) ) {
-                return new WP_Error( 'invalid_opening_date', __( 'opening_date debe venir en formato YYYY-MM-DD.', 'lealez' ) );
-            }
+if ( isset( $basic_info_data['opening_date'] ) && '' === $opening_date && '' !== (string) $basic_info_data['opening_date'] ) {
+    return new WP_Error( 'invalid_opening_date', __( 'opening_date debe venir en formato YYYY-MM-DD y ser una fecha real.', 'lealez' ) );
+}
 
-            list( $year, $month, $day ) = array_map( 'intval', explode( '-', $opening_date ) );
+if ( '' !== $opening_date ) {
+    list( $year, $month, $day ) = array_map( 'intval', explode( '-', $opening_date ) );
 
-            $body['openInfo'] = array(
-                'openingDate' => array(
-                    'year'  => $year,
-                    'month' => $month,
-                    'day'   => $day,
-                ),
-            );
-            $submitted['openInfo'] = $body['openInfo'];
-            $update_mask[] = 'openInfo.openingDate';
-        }
+    $body['openInfo'] = array(
+        'openingDate' => array(
+            'year'  => $year,
+            'month' => $month,
+            'day'   => $day,
+        ),
+    );
+    $submitted['openInfo'] = $body['openInfo'];
+    $update_mask[] = 'openInfo.openingDate';
+}
 
         $primary_category_name = isset( $basic_info_data['google_primary_category_name'] )
             ? trim( sanitize_text_field( (string) $basic_info_data['google_primary_category_name'] ) )
