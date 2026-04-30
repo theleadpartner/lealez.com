@@ -96,6 +96,10 @@ public function __construct() {
     // en cualquier request donde WordPress dispare el cron, incluyendo frontend.
     add_action( 'oy_poll_address_push_status', array( 'OY_Location_Address_Metabox', 'cron_poll_address_push_status' ) );
 
+    // ✅ WP-Cron: polling de estado de push de contacto → GMB
+    // Registrado también en el CPT para que el hook esté disponible en requests de cron.
+    add_action( 'oy_poll_contact_push_status', array( 'OY_Location_Contact_Metabox', 'cron_poll_contact_push_status' ) );
+
     /**
      * ✅ Metabox externo: Fotos del propietario (GBP Media)
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-media-metabox.php
@@ -3446,14 +3450,19 @@ private function humanize_attribute_id( $attr_id ) {
         $address_local_pending = (bool) get_post_meta( $post_id, 'oy_address_local_pending_publish', true );
         $address_push_job      = get_post_meta( $post_id, 'gmb_address_push_job', true );
         $address_push_pending  = is_array( $address_push_job ) && in_array( (string) ( $address_push_job['status'] ?? '' ), array( 'pending_review', 'queued' ), true );
+        $contact_local_pending = (bool) get_post_meta( $post_id, 'oy_contact_local_pending_publish', true );
+        $contact_push_job      = get_post_meta( $post_id, 'gmb_contact_push_job', true );
+        $contact_push_pending  = is_array( $contact_push_job ) && in_array( (string) ( $contact_push_job['status'] ?? '' ), array( 'pending_review', 'queued' ), true );
 
         if ( $import_on_save === 1 && $business_id && ! empty( $location_name ) ) {
-            if ( $address_local_pending || $address_push_pending ) {
+            if ( $address_local_pending || $address_push_pending || $contact_local_pending || $contact_push_pending ) {
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                     error_log(
-                        '[OY Location] save_meta_boxes — import_on_save omitido para proteger cambios locales de Dirección y Geolocalización. '
-                        . 'local_pending=' . ( $address_local_pending ? '1' : '0' )
-                        . ' | push_pending=' . ( $address_push_pending ? '1' : '0' )
+                        '[OY Location] save_meta_boxes — import_on_save omitido para proteger cambios locales de Dirección, Geolocalización o Contacto. '
+                        . 'address_local_pending=' . ( $address_local_pending ? '1' : '0' )
+                        . ' | address_push_pending=' . ( $address_push_pending ? '1' : '0' )
+                        . ' | contact_local_pending=' . ( $contact_local_pending ? '1' : '0' )
+                        . ' | contact_push_pending=' . ( $contact_push_pending ? '1' : '0' )
                     );
                 }
             } else {
