@@ -61,6 +61,12 @@ class OY_Location_Contact_Metabox {
          * y el import-on-save del CPT principal sigue ejecutándose después en prioridad 20.
          */
         add_action( 'save_post_oy_location', array( $this, 'save_meta_box' ), 19, 2 );
+
+        add_action( 'wp_ajax_oy_sync_contact_from_gmb', array( $this, 'ajax_sync_contact_from_gmb' ) );
+        add_action( 'wp_ajax_oy_clear_contact_log', array( $this, 'ajax_clear_contact_log' ) );
+        add_action( 'wp_ajax_oy_push_contact_to_gmb', array( $this, 'ajax_push_contact_to_gmb' ) );
+        add_action( 'wp_ajax_oy_check_contact_push_status', array( $this, 'ajax_check_contact_push_status' ) );
+        add_action( 'oy_poll_contact_push_status', array( 'OY_Location_Contact_Metabox', 'cron_poll_contact_push_status' ) );
     }
 
     /**
@@ -76,6 +82,1094 @@ class OY_Location_Contact_Metabox {
             'default'
         );
     }
+
+    /**
+     * Devuelve la etiqueta de fecha/hora local para logs UI.
+     *
+     * @param int|null $timestamp Timestamp UNIX.
+     * @return string
+     */
+    private static function contact_datetime_label( $timestamp = null ) {
+        $timestamp = $timestamp ? (int) $timestamp : time();
+        return wp_date( 'Y-m-d H:i:s', $timestamp );
+    }
+
+    /**
+     * Normaliza URLs dinámicas guardadas en el metabox.
+     *
+     * @param mixed  $raw_entries Entradas crudas.
+     * @param string $default_type Tipo GMB por defecto.
+     * @return array
+     */
+    private function normalize_contact_url_entries( $raw_entries, $default_type = '' ) {
+        if ( ! is_array( $raw_entries ) ) {
+            return array();
+        }
+
+        $out  = array();
+        $seen = array();
+
+        foreach ( $raw_entries as $entry ) {
+            if ( is_string( $entry ) ) {
+                $entry = array( 'url' => $entry );
+            }
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+
+            $url = ! empty( $entry['url'] ) ? esc_url_raw( (string) $entry['url'] ) : '';
+            if ( '' === $url ) {
+                continue;
+            }
+
+            $key = strtolower( $url );
+            if ( isset( $seen[ $key ] ) ) {
+                continue;
+            }
+            $seen[ $key ] = true;
+
+            $out[] = array(
+                'url'      => $url,
+                'label'    => ! empty( $entry['label'] ) ? sanitize_text_field( (string) $entry['label'] ) : '',
+                'type'     => ! empty( $entry['type'] ) ? strtoupper( sanitize_text_field( (string) $entry['type'] ) ) : $default_type,
+                'from_gmb' => ! empty( $entry['from_gmb'] ) ? 1 : 0,
+            );
+        }
+
+        return $out;
+    }
+
+    /**
+     * Lee los datos actuales del metabox de Contacto desde post_meta.
+     *
+     * @param int $post_id Post ID.
+     * @return array
+     */
+    private function collect_local_contact_data( $post_id ) {
+        $post_id = absint( $post_id );
+
+        $additional_phones = get_post_meta( $post_id, 'gmb_phone_additional_list', true );
+        if ( ! is_array( $additional_phones ) ) {
+            $additional_phones = array();
+        }
+        $additional_phones = array_values( array_filter( array_map( 'sanitize_text_field', $additional_phones ) ) );
+
+        $gmb_social    = get_post_meta( $post_id, 'gmb_social_profiles_raw', true );
+        $manual_social = get_post_meta( $post_id, 'social_profiles_manual', true );
+        if ( ! is_array( $gmb_social ) ) {
+            $gmb_social = array();
+        }
+        if ( ! is_array( $manual_social ) ) {
+            $manual_social = array();
+        }
+
+        $social_profiles = array();
+        foreach ( array_merge( $gmb_social, $manual_social ) as $network => $url ) {
+            $network = sanitize_key( (string) $network );
+            $url     = esc_url_raw( (string) $url );
+            if ( '' !== $network && '' !== $url ) {
+                $social_profiles[ $network ] = $url;
+            }
+        }
+
+        return array(
+            'primaryPhone'     => sanitize_text_field( (string) get_post_meta( $post_id, 'location_phone', true ) ),
+            'additionalPhones' => $additional_phones,
+            'websiteUri'       => esc_url_raw( (string) get_post_meta( $post_id, 'location_website', true ) ),
+            'email'            => sanitize_email( (string) get_post_meta( $post_id, 'location_email', true ) ),
+            'chatUrl'          => esc_url_raw( (string) get_post_meta( $post_id, 'location_chat_url', true ) ),
+            'menuUrl'          => esc_url_raw( (string) get_post_meta( $post_id, 'location_menu_url', true ) ),
+            'bookingUrls'      => $this->normalize_contact_url_entries( get_post_meta( $post_id, 'location_booking_urls', true ), 'APPOINTMENT' ),
+            'orderUrls'        => $this->normalize_contact_url_entries( get_post_meta( $post_id, 'location_order_urls', true ), 'FOOD_ORDERING' ),
+            'socialProfiles'   => $social_profiles,
+        );
+    }
+
+    /**
+     * Normaliza un array para comparación estable.
+     *
+     * @param mixed $value Valor.
+     * @return mixed
+     */
+    private static function normalize_for_compare( $value ) {
+        if ( is_array( $value ) ) {
+            $is_assoc = array_keys( $value ) !== range( 0, count( $value ) - 1 );
+            $out      = array();
+            foreach ( $value as $k => $v ) {
+                $out[ $k ] = self::normalize_for_compare( $v );
+            }
+            if ( $is_assoc ) {
+                ksort( $out );
+            } else {
+                usort( $out, function( $a, $b ) {
+                    return strcmp( wp_json_encode( $a ), wp_json_encode( $b ) );
+                } );
+            }
+            return $out;
+        }
+        if ( is_string( $value ) ) {
+            return trim( $value );
+        }
+        return $value;
+    }
+
+    /**
+     * Genera diff legible entre dos snapshots de contacto.
+     *
+     * @param array $before Antes.
+     * @param array $after  Después.
+     * @return array
+     */
+    private function build_contact_diff( array $before, array $after ) {
+        $labels = array(
+            'primaryPhone'     => __( 'Teléfono principal', 'lealez' ),
+            'additionalPhones' => __( 'Teléfonos adicionales', 'lealez' ),
+            'websiteUri'       => __( 'Sitio web', 'lealez' ),
+            'email'            => __( 'Email manual', 'lealez' ),
+            'chatUrl'          => __( 'Usuario de chat', 'lealez' ),
+            'menuUrl'          => __( 'Vínculo del menú / servicios', 'lealez' ),
+            'bookingUrls'      => __( 'URLs de reservas', 'lealez' ),
+            'orderUrls'        => __( 'URLs para ordenar online', 'lealez' ),
+            'socialProfiles'   => __( 'Redes sociales', 'lealez' ),
+        );
+
+        $keys = array_values( array_unique( array_merge( array_keys( $before ), array_keys( $after ) ) ) );
+        $diff = array();
+
+        foreach ( $keys as $key ) {
+            $old = $before[ $key ] ?? null;
+            $new = $after[ $key ] ?? null;
+            if ( self::normalize_for_compare( $old ) === self::normalize_for_compare( $new ) ) {
+                continue;
+            }
+            $diff[] = array(
+                'field' => $key,
+                'label' => $labels[ $key ] ?? $key,
+                'old'   => $old,
+                'new'   => $new,
+            );
+        }
+
+        return $diff;
+    }
+
+    /**
+     * Agrega una entrada al log persistente del metabox Contacto.
+     *
+     * @param int    $post_id Post ID.
+     * @param string $event   Evento.
+     * @param string $status  Estado: success|warning|error|info.
+     * @param string $message Mensaje.
+     * @param array  $context Contexto adicional.
+     * @return void
+     */
+    private static function add_contact_log_entry( $post_id, $event, $status, $message, array $context = array() ) {
+        $post_id = absint( $post_id );
+        if ( ! $post_id ) {
+            return;
+        }
+
+        $entries = get_post_meta( $post_id, 'gmb_contact_sync_log', true );
+        if ( ! is_array( $entries ) ) {
+            $entries = array();
+        }
+
+        $user       = wp_get_current_user();
+        $user_login = ( $user instanceof WP_User && ! empty( $user->user_login ) ) ? $user->user_login : 'system';
+        $now        = time();
+
+        $entries[] = array(
+            'event'    => sanitize_key( $event ),
+            'status'   => sanitize_key( $status ),
+            'message'  => sanitize_text_field( (string) $message ),
+            'at'       => gmdate( 'Y-m-d\\TH:i:s\\Z', $now ),
+            'at_ts'    => $now,
+            'at_label' => self::contact_datetime_label( $now ),
+            'by'       => $user_login,
+            'context'  => $context,
+        );
+
+        if ( count( $entries ) > 80 ) {
+            $entries = array_slice( $entries, -80 );
+        }
+
+        update_post_meta( $post_id, 'gmb_contact_sync_log', $entries );
+    }
+
+    /**
+     * Extrae datos de contacto desde snapshot GMB crudo.
+     *
+     * @param array $snapshot Snapshot de Lealez_GMB_API::get_location_contact_snapshot().
+     * @return array
+     */
+    private static function extract_gmb_contact_data_from_snapshot( array $snapshot ) {
+        $phone_numbers = isset( $snapshot['phoneNumbers'] ) && is_array( $snapshot['phoneNumbers'] ) ? $snapshot['phoneNumbers'] : array();
+
+        $data = array(
+            'primaryPhone'     => ! empty( $phone_numbers['primaryPhone'] ) ? sanitize_text_field( (string) $phone_numbers['primaryPhone'] ) : '',
+            'additionalPhones' => array(),
+            'websiteUri'       => ! empty( $snapshot['websiteUri'] ) ? esc_url_raw( (string) $snapshot['websiteUri'] ) : '',
+            'email'            => '',
+            'chatUrl'          => '',
+            'menuUrl'          => '',
+            'bookingUrls'      => array(),
+            'orderUrls'        => array(),
+            'socialProfiles'   => array(),
+        );
+
+        if ( ! empty( $phone_numbers['additionalPhones'] ) && is_array( $phone_numbers['additionalPhones'] ) ) {
+            $data['additionalPhones'] = array_values( array_filter( array_map( 'sanitize_text_field', $phone_numbers['additionalPhones'] ) ) );
+        }
+
+        $attributes = isset( $snapshot['attributes'] ) && is_array( $snapshot['attributes'] ) ? $snapshot['attributes'] : array();
+        $social_uri_map = array(
+            'url_facebook'  => 'facebook',
+            'url_instagram' => 'instagram',
+            'url_twitter'   => 'twitter',
+            'url_linkedin'  => 'linkedin',
+            'url_youtube'   => 'youtube',
+            'url_tiktok'    => 'tiktok',
+            'url_pinterest' => 'pinterest',
+        );
+
+        foreach ( $attributes as $attr ) {
+            if ( ! is_array( $attr ) ) {
+                continue;
+            }
+
+            $attr_id_raw  = '';
+            $attr_name    = '';
+            if ( ! empty( $attr['attributeId'] ) ) {
+                $attr_id_raw = (string) $attr['attributeId'];
+                $attr_name   = $attr_id_raw;
+            } elseif ( ! empty( $attr['name'] ) ) {
+                $attr_name   = (string) $attr['name'];
+                $parts       = explode( '/attributes/', $attr_name );
+                $attr_id_raw = trim( end( $parts ), '/' );
+            }
+
+            $attr_id_lower = strtolower( trim( $attr_id_raw ) );
+            $attr_name_lc  = strtolower( trim( $attr_name ) );
+            $uri           = '';
+            if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
+                $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+            }
+            if ( '' === $uri ) {
+                continue;
+            }
+
+            if ( in_array( $attr_id_lower, array( 'url_whatsapp', 'url_text_messaging', 'url_text_messaging3' ), true ) || false !== strpos( $attr_id_lower, 'whatsapp' ) ) {
+                if ( '' === $data['chatUrl'] ) {
+                    $data['chatUrl'] = $uri;
+                }
+                continue;
+            }
+
+            if ( false !== strpos( $attr_name_lc, 'menu' ) || false !== strpos( $attr_id_lower, 'menu' ) ) {
+                if ( '' === $data['menuUrl'] ) {
+                    $data['menuUrl'] = $uri;
+                }
+                continue;
+            }
+
+            foreach ( $social_uri_map as $gmb_key => $network ) {
+                if ( $attr_id_lower === $gmb_key || false !== strpos( $attr_id_lower, $gmb_key ) ) {
+                    $data['socialProfiles'][ $network ] = $uri;
+                    break;
+                }
+            }
+        }
+
+        $action_type_label_map = array(
+            'APPOINTMENT'        => __( 'Reservas', 'lealez' ),
+            'ONLINE_APPOINTMENT' => __( 'Cita online', 'lealez' ),
+            'DINING_RESERVATION' => __( 'Reserva de mesa', 'lealez' ),
+            'MENU'               => __( 'Menú', 'lealez' ),
+            'FOOD_ORDERING'      => __( 'Ordenar en línea', 'lealez' ),
+            'FOOD_DELIVERY'      => __( 'Domicilio', 'lealez' ),
+            'FOOD_TAKEOUT'       => __( 'Para llevar', 'lealez' ),
+            'SHOP_ONLINE'        => __( 'Tienda online', 'lealez' ),
+            'ORDER_AHEAD'        => __( 'Ordenar anticipado', 'lealez' ),
+            'ORDER_FOOD'         => __( 'Pedir comida', 'lealez' ),
+        );
+        $booking_types = array( 'APPOINTMENT', 'ONLINE_APPOINTMENT', 'DINING_RESERVATION' );
+        $order_types   = array( 'FOOD_ORDERING', 'FOOD_DELIVERY', 'FOOD_TAKEOUT', 'SHOP_ONLINE', 'ORDER_AHEAD', 'ORDER_FOOD' );
+
+        $place_action_links = isset( $snapshot['placeActionLinks'] ) && is_array( $snapshot['placeActionLinks'] ) ? $snapshot['placeActionLinks'] : array();
+        foreach ( $place_action_links as $link ) {
+            if ( ! is_array( $link ) ) {
+                continue;
+            }
+            $uri  = ! empty( $link['uri'] ) ? esc_url_raw( (string) $link['uri'] ) : '';
+            $type = ! empty( $link['placeActionType'] ) ? strtoupper( trim( (string) $link['placeActionType'] ) ) : '';
+            if ( '' === $uri || '' === $type ) {
+                continue;
+            }
+            $entry = array(
+                'url'      => $uri,
+                'label'    => $action_type_label_map[ $type ] ?? $type,
+                'type'     => $type,
+                'from_gmb' => 1,
+            );
+            if ( in_array( $type, $booking_types, true ) ) {
+                $data['bookingUrls'][] = $entry;
+            } elseif ( in_array( $type, $order_types, true ) ) {
+                $data['orderUrls'][] = $entry;
+            } elseif ( 'MENU' === $type && '' === $data['menuUrl'] ) {
+                $data['menuUrl'] = $uri;
+            }
+        }
+
+        return $data;
+    }
+
+    /**
+     * Aplica datos GMB de contacto a post_meta del CPT.
+     *
+     * @param int   $post_id Post ID.
+     * @param array $snapshot Snapshot GMB.
+     * @return array Datos aplicados.
+     */
+    private function map_gmb_contact_snapshot_to_meta( $post_id, array $snapshot ) {
+        $post_id = absint( $post_id );
+        $data    = self::extract_gmb_contact_data_from_snapshot( $snapshot );
+
+        update_post_meta( $post_id, 'gmb_phone_numbers_raw', isset( $snapshot['phoneNumbers'] ) && is_array( $snapshot['phoneNumbers'] ) ? $snapshot['phoneNumbers'] : array() );
+        update_post_meta( $post_id, 'location_phone', $data['primaryPhone'] );
+        update_post_meta( $post_id, 'gmb_phone_additional_list', $data['additionalPhones'] );
+        if ( ! empty( $data['additionalPhones'] ) ) {
+            update_post_meta( $post_id, 'location_phone_additional', $data['additionalPhones'][0] );
+        } else {
+            delete_post_meta( $post_id, 'location_phone_additional' );
+        }
+
+        update_post_meta( $post_id, 'gmb_website_uri', $data['websiteUri'] );
+        update_post_meta( $post_id, 'location_website', $data['websiteUri'] );
+
+        update_post_meta( $post_id, 'location_chat_url', $data['chatUrl'] );
+        if ( false !== strpos( strtolower( $data['chatUrl'] ), 'wa.me/' ) || false !== strpos( strtolower( $data['chatUrl'] ), 'whatsapp' ) ) {
+            update_post_meta( $post_id, 'location_whatsapp', $data['chatUrl'] );
+            update_post_meta( $post_id, 'gmb_chat_type', 'whatsapp' );
+        } elseif ( '' !== $data['chatUrl'] ) {
+            delete_post_meta( $post_id, 'location_whatsapp' );
+            update_post_meta( $post_id, 'gmb_chat_type', 'sms' );
+        } else {
+            delete_post_meta( $post_id, 'location_whatsapp' );
+            delete_post_meta( $post_id, 'gmb_chat_type' );
+        }
+        update_post_meta( $post_id, 'gmb_chat_url_raw', $data['chatUrl'] );
+
+        update_post_meta( $post_id, 'location_menu_url', $data['menuUrl'] );
+        if ( '' !== $data['menuUrl'] ) {
+            update_post_meta( $post_id, 'location_menu_url_from_gmb', 1 );
+        } else {
+            delete_post_meta( $post_id, 'location_menu_url_from_gmb' );
+        }
+
+        update_post_meta( $post_id, 'gmb_social_profiles_raw', $data['socialProfiles'] );
+        if ( isset( $data['socialProfiles']['facebook'] ) ) {
+            update_post_meta( $post_id, 'social_facebook_local', $data['socialProfiles']['facebook'] );
+        }
+        if ( isset( $data['socialProfiles']['instagram'] ) ) {
+            update_post_meta( $post_id, 'social_instagram_local', $data['socialProfiles']['instagram'] );
+        }
+
+        $existing_booking = get_post_meta( $post_id, 'location_booking_urls', true );
+        $manual_booking   = is_array( $existing_booking ) ? array_values( array_filter( $existing_booking, function( $e ) { return is_array( $e ) && empty( $e['from_gmb'] ); } ) ) : array();
+        $booking_merged   = array_merge( $data['bookingUrls'], $manual_booking );
+        update_post_meta( $post_id, 'location_booking_urls', $booking_merged );
+        if ( ! empty( $booking_merged ) ) {
+            update_post_meta( $post_id, 'location_booking_url', $booking_merged[0]['url'] );
+        } else {
+            delete_post_meta( $post_id, 'location_booking_url' );
+        }
+
+        $existing_order = get_post_meta( $post_id, 'location_order_urls', true );
+        $manual_order   = is_array( $existing_order ) ? array_values( array_filter( $existing_order, function( $e ) { return is_array( $e ) && empty( $e['from_gmb'] ); } ) ) : array();
+        $order_merged   = array_merge( $data['orderUrls'], $manual_order );
+        update_post_meta( $post_id, 'location_order_urls', $order_merged );
+        if ( ! empty( $order_merged ) ) {
+            update_post_meta( $post_id, 'location_order_url', $order_merged[0]['url'] );
+        } else {
+            delete_post_meta( $post_id, 'location_order_url' );
+        }
+
+        update_post_meta( $post_id, 'gmb_contact_last_sync', array(
+            'at'       => gmdate( 'Y-m-d\\TH:i:s\\Z' ),
+            'at_label' => self::contact_datetime_label(),
+            'source'   => 'gmb_contact_metabox_button',
+        ) );
+
+        delete_post_meta( $post_id, 'oy_contact_local_pending_publish' );
+
+        return $this->collect_local_contact_data( $post_id );
+    }
+
+    /**
+     * Renderiza la barra de sincronización desde GMB.
+     *
+     * @param int $post_id Post ID.
+     * @return string
+     */
+    private function render_contact_sync_bar( $post_id ) {
+        $post_id       = absint( $post_id );
+        $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        $connected     = ! empty( $business_id ) && ! empty( $location_name );
+        $nonce         = wp_create_nonce( 'oy_sync_contact_gmb_' . $post_id );
+
+        ob_start();
+        ?>
+        <div id="oy-contact-sync-bar"
+             data-post-id="<?php echo esc_attr( (string) $post_id ); ?>"
+             data-sync-nonce="<?php echo esc_attr( $nonce ); ?>"
+             style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:10px 12px;background:#f6f7f7;border:1px solid #dadce0;border-radius:4px;">
+            <div>
+                <strong style="font-size:13px;">🔄 <?php _e( 'Sincronización de Contacto con Google Business Profile', 'lealez' ); ?></strong>
+                <p style="margin:3px 0 0;font-size:12px;color:#666;">
+                    <?php _e( 'Trae teléfonos, sitio web, chat, menú/servicios, redes sociales, reservas y pedidos online desde GMB.', 'lealez' ); ?>
+                </p>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button type="button" id="oy-contact-sync-btn" class="button button-secondary" <?php echo $connected ? '' : 'disabled'; ?> style="display:inline-flex;align-items:center;gap:6px;">
+                    <span class="dashicons dashicons-update" style="margin-top:3px;"></span>
+                    <?php _e( 'Sincronizar desde GMB', 'lealez' ); ?>
+                </button>
+                <span id="oy-contact-sync-msg" style="font-size:12px;color:#555;"></span>
+            </div>
+            <?php if ( ! $connected ) : ?>
+                <div style="flex-basis:100%;font-size:12px;color:#999;font-style:italic;">
+                    <?php _e( 'Requiere empresa y ubicación GMB vinculadas en el metabox Integración Google My Business.', 'lealez' ); ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Renderiza el log persistente de contacto.
+     *
+     * @param int $post_id Post ID.
+     * @return string
+     */
+    private function render_contact_log_panel( $post_id ) {
+        $post_id = absint( $post_id );
+        $entries = get_post_meta( $post_id, 'gmb_contact_sync_log', true );
+        if ( ! is_array( $entries ) ) {
+            $entries = array();
+        }
+        $entries = array_reverse( $entries );
+        $clear_nonce = wp_create_nonce( 'oy_clear_contact_log_' . $post_id );
+
+        ob_start();
+        ?>
+        <div id="oy-contact-log-panel" data-clear-nonce="<?php echo esc_attr( $clear_nonce ); ?>" style="margin-bottom:16px;border:1px solid #dadce0;border-radius:4px;overflow:hidden;background:#fff;">
+            <div id="oy-contact-log-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:#f6f7f7;cursor:pointer;border-bottom:1px solid transparent;">
+                <strong style="font-size:13px;color:#1d2327;">🔍 <?php _e( 'Log de Sincronización — Información de Contacto', 'lealez' ); ?></strong>
+                <span id="oy-contact-log-toggle-icon" style="font-size:13px;color:#888;transition:transform .2s;">▶</span>
+            </div>
+            <div id="oy-contact-log-body" style="display:none;">
+                <div id="oy-contact-log-entries" style="padding:10px 14px;max-height:360px;overflow:auto;">
+                    <?php if ( empty( $entries ) ) : ?>
+                        <p style="margin:0;color:#777;font-size:12px;font-style:italic;"><?php _e( 'Aún no hay registros de sincronización para Contacto.', 'lealez' ); ?></p>
+                    <?php else : ?>
+                        <?php foreach ( $entries as $entry ) :
+                            $status = sanitize_key( (string) ( $entry['status'] ?? 'info' ) );
+                            $colors = array(
+                                'success' => '#166534',
+                                'warning' => '#b45309',
+                                'error'   => '#dc3232',
+                                'info'    => '#1d4ed8',
+                            );
+                            $color = $colors[ $status ] ?? '#555';
+                            $diff  = isset( $entry['context']['diff'] ) && is_array( $entry['context']['diff'] ) ? $entry['context']['diff'] : array();
+                            ?>
+                            <div style="border:1px solid #e5e7eb;border-left:4px solid <?php echo esc_attr( $color ); ?>;border-radius:4px;padding:8px 10px;margin-bottom:8px;background:#fff;">
+                                <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
+                                    <strong style="font-size:12px;color:<?php echo esc_attr( $color ); ?>;"><?php echo esc_html( strtoupper( $status ) . ' · ' . ( $entry['event'] ?? 'log' ) ); ?></strong>
+                                    <span style="font-size:11px;color:#777;"><?php echo esc_html( ( $entry['at_label'] ?? '' ) . ( ! empty( $entry['by'] ) ? ' · ' . $entry['by'] : '' ) ); ?></span>
+                                </div>
+                                <p style="margin:0 0 6px;font-size:12px;color:#333;"><?php echo esc_html( (string) ( $entry['message'] ?? '' ) ); ?></p>
+                                <?php if ( ! empty( $diff ) ) : ?>
+                                    <details style="font-size:11px;color:#444;">
+                                        <summary><?php printf( esc_html__( '%d campo(s) con cambios', 'lealez' ), count( $diff ) ); ?></summary>
+                                        <ul style="margin:6px 0 0 18px;">
+                                            <?php foreach ( $diff as $row ) : ?>
+                                                <li><strong><?php echo esc_html( $row['label'] ?? $row['field'] ?? '' ); ?>:</strong>
+                                                    <code><?php echo esc_html( wp_json_encode( $row['old'] ?? null, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?></code>
+                                                    →
+                                                    <code><?php echo esc_html( wp_json_encode( $row['new'] ?? null, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?></code>
+                                                </li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    </details>
+                                <?php endif; ?>
+                                <?php if ( ! empty( $entry['context']['warnings'] ) ) : ?>
+                                    <details style="font-size:11px;color:#7a5c00;margin-top:6px;">
+                                        <summary><?php _e( 'Advertencias técnicas', 'lealez' ); ?></summary>
+                                        <pre style="white-space:pre-wrap;background:#fffbe5;border:1px solid #f0c000;padding:6px;border-radius:4px;"><?php echo esc_html( wp_json_encode( $entry['context']['warnings'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?></pre>
+                                    </details>
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+                <div style="border-top:1px solid #eee;padding:8px 14px;background:#fafafa;display:flex;justify-content:flex-end;">
+                    <button type="button" id="oy-contact-log-clear" class="button button-small" style="color:#dc3232;">
+                        <?php _e( 'Limpiar log', 'lealez' ); ?>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * Renderiza el panel de envío de Contacto hacia GMB.
+     *
+     * @param int $post_id Post ID.
+     * @return string
+     */
+    private function render_contact_push_panel( $post_id ) {
+        $post_id      = absint( $post_id );
+        $job          = get_post_meta( $post_id, 'gmb_contact_push_job', true );
+        $push_nonce   = wp_create_nonce( 'oy_push_contact_gmb_' . $post_id );
+        $check_nonce  = wp_create_nonce( 'oy_check_contact_push_status_' . $post_id );
+
+        $business_id      = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name    = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        $gmb_connected    = ! empty( $business_id ) && ! empty( $location_name );
+        $local_pending    = (bool) get_post_meta( $post_id, 'oy_contact_local_pending_publish', true );
+        $last_manual_save = get_post_meta( $post_id, 'oy_contact_last_manual_save', true );
+        $last_label       = ( is_array( $last_manual_save ) && ! empty( $last_manual_save['at_label'] ) ) ? (string) $last_manual_save['at_label'] : '';
+        $last_user        = ( is_array( $last_manual_save ) && ! empty( $last_manual_save['by'] ) ) ? (string) $last_manual_save['by'] : '';
+
+        $job_status         = is_array( $job ) ? (string) ( $job['status'] ?? '' ) : '';
+        $push_is_locked     = in_array( $job_status, array( 'pending_review', 'queued' ), true );
+        $push_disabled_attr = ( $gmb_connected && ! $push_is_locked ) ? '' : 'disabled';
+
+        ob_start();
+        ?>
+        <div id="oy-contact-push-panel"
+             data-post-id="<?php echo esc_attr( (string) $post_id ); ?>"
+             data-push-nonce="<?php echo esc_attr( $push_nonce ); ?>"
+             data-check-nonce="<?php echo esc_attr( $check_nonce ); ?>"
+             style="border:1px solid #dadce0;border-radius:4px;background:#fff;margin-bottom:16px;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:10px 14px;background:#f6f7f7;border-bottom:1px solid #dadce0;">
+                <span style="font-size:13px;font-weight:600;color:#1d2327;">📤 <?php _e( 'Publicar información de contacto en Google Business Profile', 'lealez' ); ?></span>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                    <button type="button" id="oy-push-contact-btn" class="button button-primary" <?php echo $push_disabled_attr; ?> style="display:inline-flex;align-items:center;gap:6px;">
+                        <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
+                        <?php _e( 'Enviar a GMB', 'lealez' ); ?>
+                    </button>
+                    <?php if ( ! empty( $job ) && is_array( $job ) && ! in_array( $job['status'] ?? '', array( 'applied', 'rejected', 'google_override', 'timeout', 'cancelled' ), true ) ) : ?>
+                        <button type="button" id="oy-check-contact-push-status-btn" class="button button-secondary" style="display:inline-flex;align-items:center;gap:6px;">
+                            <span class="dashicons dashicons-search" style="margin-top:3px;"></span>
+                            <?php _e( 'Verificar estado', 'lealez' ); ?>
+                        </button>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <?php if ( $local_pending ) : ?>
+                <div style="padding:10px 14px;background:#eef4ff;border-bottom:1px solid #d7e3ff;">
+                    <p style="margin:0;font-size:12px;color:#1d4ed8;font-weight:600;"><?php _e( 'Hay cambios locales guardados en este metabox pendientes por publicar en GMB.', 'lealez' ); ?></p>
+                    <?php if ( $last_label ) : ?>
+                        <p style="margin:4px 0 0;font-size:11px;color:#4b5563;">
+                            <?php printf( esc_html__( 'Último guardado local: %s', 'lealez' ), esc_html( $last_label ) ); ?>
+                            <?php if ( $last_user ) : ?>&nbsp;·&nbsp;<?php printf( esc_html__( 'por %s', 'lealez' ), esc_html( $last_user ) ); ?><?php endif; ?>
+                        </p>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if ( ! $gmb_connected ) : ?>
+                <div style="padding:10px 14px;">
+                    <p style="margin:0;font-size:12px;color:#999;font-style:italic;"><?php _e( 'Requiere empresa y ubicación GMB vinculadas para poder publicar.', 'lealez' ); ?></p>
+                </div>
+            <?php elseif ( ! empty( $job ) && is_array( $job ) ) :
+                $status    = $job['status'] ?? 'unknown';
+                $pushed_at = $job['pushed_at'] ?? '';
+                $pushed_by = $job['pushed_by'] ?? '';
+                $resolved  = $job['resolved_at'] ?? '';
+                $poll_n    = $job['poll_count'] ?? 0;
+                $warnings  = $job['warnings'] ?? array();
+                $status_cfg = array(
+                    'pending_review'  => array( '🕐', '#e07800', __( 'Pendiente de revisión por Google', 'lealez' ) ),
+                    'queued'          => array( '🕐', '#e07800', __( 'En cola de envío', 'lealez' ) ),
+                    'applied'         => array( '✅', '#166534', __( 'Cambio aplicado en Google', 'lealez' ) ),
+                    'rejected'        => array( '❌', '#dc3232', __( 'Google no conservó el cambio enviado', 'lealez' ) ),
+                    'google_override' => array( '⚠️', '#b45309', __( 'Google reemplazó el valor con sus propios datos', 'lealez' ) ),
+                    'timeout'         => array( '⏳', '#6b7280', __( 'Sin respuesta de Google en 30 días', 'lealez' ) ),
+                    'error'           => array( '🔴', '#dc3232', __( 'Error técnico al enviar', 'lealez' ) ),
+                );
+                $cfg = $status_cfg[ $status ] ?? array( '⚪', '#555', $status );
+                ?>
+                <div style="padding:10px 14px;">
+                    <p style="margin:0 0 6px;font-size:13px;font-weight:600;color:<?php echo esc_attr( $cfg[1] ); ?>;"><?php echo esc_html( $cfg[0] . ' ' . $cfg[2] ); ?></p>
+                    <p style="margin:0;font-size:11px;color:#666;">
+                        <?php if ( $pushed_at ) : ?><?php printf( esc_html__( 'Enviado: %s por %s', 'lealez' ), esc_html( $pushed_at ), esc_html( $pushed_by ) ); ?><?php endif; ?>
+                        <?php if ( $resolved ) : ?>&nbsp;·&nbsp;<?php printf( esc_html__( 'Resuelto: %s', 'lealez' ), esc_html( $resolved ) ); ?><?php endif; ?>
+                        <?php if ( $poll_n ) : ?>&nbsp;·&nbsp;<?php printf( esc_html__( 'Verificaciones automáticas: %d', 'lealez' ), (int) $poll_n ); ?><?php endif; ?>
+                    </p>
+                    <?php if ( ! empty( $warnings ) ) : ?>
+                        <details style="margin-top:6px;font-size:11px;color:#7a5c00;">
+                            <summary><?php _e( 'El envío terminó con advertencias técnicas', 'lealez' ); ?></summary>
+                            <pre style="white-space:pre-wrap;background:#fffbe5;border:1px solid #f0c000;padding:6px;border-radius:4px;"><?php echo esc_html( wp_json_encode( $warnings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) ); ?></pre>
+                        </details>
+                    <?php endif; ?>
+                    <?php if ( 'pending_review' === $status || 'queued' === $status ) : ?>
+                        <p style="margin:6px 0 0;font-size:11px;color:#888;font-style:italic;"><?php _e( 'Google puede aplicar algunos cambios de contacto de inmediato y dejar otros en revisión. El sistema verificará automáticamente.', 'lealez' ); ?></p>
+                    <?php endif; ?>
+                </div>
+            <?php else : ?>
+                <div style="padding:10px 14px;">
+                    <p style="margin:0;font-size:12px;color:#888;font-style:italic;"><?php _e( 'Ningún cambio enviado aún. Guarda los cambios del metabox y luego usa "Enviar a GMB".', 'lealez' ); ?></p>
+                </div>
+            <?php endif; ?>
+
+            <div id="oy-contact-push-action-msg" style="padding:0 14px 10px;font-size:12px;min-height:0;display:none;"></div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /**
+     * AJAX: Sincroniza Contacto desde GMB hacia Lealez.
+     */
+    public function ajax_sync_contact_from_gmb() {
+        $nonce   = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+        $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+
+        if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_sync_contact_gmb_' . $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
+        }
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
+        }
+
+        $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        if ( ! $business_id || '' === trim( $location_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada.', 'lealez' ) ) );
+        }
+        if ( ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'get_location_contact_snapshot' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API::get_location_contact_snapshot no disponible. Actualiza el plugin.', 'lealez' ) ) );
+        }
+
+        $before  = $this->collect_local_contact_data( $post_id );
+        $snapshot = Lealez_GMB_API::get_location_contact_snapshot( $business_id, $location_name );
+        if ( is_wp_error( $snapshot ) ) {
+            self::add_contact_log_entry( $post_id, 'sync_from_gmb', 'error', $snapshot->get_error_message(), array( 'error_code' => $snapshot->get_error_code() ) );
+            wp_send_json_error( array(
+                'message'  => $snapshot->get_error_message(),
+                'log_html' => $this->render_contact_log_panel( $post_id ),
+            ) );
+        }
+
+        $after = $this->map_gmb_contact_snapshot_to_meta( $post_id, $snapshot );
+        $diff  = $this->build_contact_diff( $before, $after );
+        $warnings = isset( $snapshot['_contact_aux_errors'] ) && is_array( $snapshot['_contact_aux_errors'] ) ? $snapshot['_contact_aux_errors'] : array();
+
+        self::add_contact_log_entry(
+            $post_id,
+            'sync_from_gmb',
+            empty( $warnings ) ? 'success' : 'warning',
+            sprintf( __( 'Sincronización desde GMB completada. %d campo(s) cambiaron.', 'lealez' ), count( $diff ) ),
+            array(
+                'diff'     => $diff,
+                'warnings' => $warnings,
+            )
+        );
+
+        wp_send_json_success( array(
+            'message'       => sprintf( __( 'Sincronización completada. %d campo(s) actualizados.', 'lealez' ), count( $diff ) ),
+            'field_values'  => $after,
+            'diff'          => $diff,
+            'warnings'      => $warnings,
+            'log_html'      => $this->render_contact_log_panel( $post_id ),
+            'push_html'     => $this->render_contact_push_panel( $post_id ),
+        ) );
+    }
+
+    /**
+     * AJAX: Limpia el log de Contacto.
+     */
+    public function ajax_clear_contact_log() {
+        $nonce   = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+        $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+        if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_clear_contact_log_' . $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+        }
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
+        }
+        delete_post_meta( $post_id, 'gmb_contact_sync_log' );
+        wp_send_json_success( array( 'log_html' => $this->render_contact_log_panel( $post_id ) ) );
+    }
+
+    /**
+     * AJAX: Envía Contacto a GMB.
+     */
+    public function ajax_push_contact_to_gmb() {
+        $nonce   = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+        $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+
+        if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_push_contact_gmb_' . $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Nonce inválido o post_id faltante.', 'lealez' ) ) );
+        }
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Sin permisos para editar esta ubicación.', 'lealez' ) ) );
+        }
+
+        $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        if ( ! $business_id || '' === trim( $location_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Esta ubicación no tiene empresa o ubicación GMB vinculada.', 'lealez' ) ) );
+        }
+        if ( ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'push_location_contact' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Lealez_GMB_API::push_location_contact no disponible. Actualiza el plugin.', 'lealez' ) ) );
+        }
+
+        $snapshot = Lealez_GMB_API::get_location_contact_snapshot( $business_id, $location_name );
+        if ( is_wp_error( $snapshot ) ) {
+            self::add_contact_log_entry( $post_id, 'push_to_gmb', 'error', $snapshot->get_error_message(), array( 'error_code' => $snapshot->get_error_code() ) );
+            wp_send_json_error( array(
+                'message'  => sprintf( __( 'No se pudo obtener estado actual de GMB: %s', 'lealez' ), $snapshot->get_error_message() ),
+                'log_html' => $this->render_contact_log_panel( $post_id ),
+            ) );
+        }
+
+        $current_job = get_post_meta( $post_id, 'gmb_contact_push_job', true );
+        $local_resolved = is_array( $current_job ) && in_array( $current_job['status'] ?? '', array( 'applied', 'rejected', 'google_override', 'timeout', 'error', 'cancelled' ), true );
+        if ( ! empty( $snapshot['metadata']['hasPendingEdits'] ) && ! $local_resolved ) {
+            wp_send_json_error( array(
+                'message'    => __( 'Google tiene un cambio de contacto en revisión. No se puede enviar otro hasta verificar o resolver el estado actual.', 'lealez' ),
+                'panel_html' => $this->render_contact_push_panel( $post_id ),
+            ) );
+        }
+
+        $submitted = $this->collect_local_contact_data( $post_id );
+        $result    = Lealez_GMB_API::push_location_contact( $business_id, $location_name, $submitted );
+
+        if ( is_wp_error( $result ) ) {
+            $err_data = $result->get_error_data();
+            self::add_contact_log_entry( $post_id, 'push_to_gmb', 'error', $result->get_error_message(), array( 'error_code' => $result->get_error_code(), 'error_data' => $err_data ) );
+            $response = array(
+                'message'    => $result->get_error_message(),
+                'log_html'   => $this->render_contact_log_panel( $post_id ),
+                'panel_html' => $this->render_contact_push_panel( $post_id ),
+            );
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG && is_array( $err_data ) && ! empty( $err_data['raw_body'] ) ) {
+                $response['debug_raw'] = substr( (string) $err_data['raw_body'], 0, 500 );
+            }
+            wp_send_json_error( $response );
+        }
+
+        $now_ts       = time();
+        $now_iso      = gmdate( 'Y-m-d\\TH:i:s\\Z', $now_ts );
+        $current_user = wp_get_current_user();
+        $user_login   = ( $current_user instanceof WP_User && $current_user->user_login ) ? $current_user->user_login : 'system';
+        $warnings     = isset( $result['warnings'] ) && is_array( $result['warnings'] ) ? $result['warnings'] : array();
+
+        $job = array(
+            'status'          => 'pending_review',
+            'pushed_at'       => $now_iso,
+            'pushed_at_ts'    => $now_ts,
+            'pushed_by'       => $user_login,
+            'update_mask'     => $result['update_mask'] ?? '',
+            'submitted'       => $submitted,
+            'snapshot_before' => self::extract_gmb_contact_data_from_snapshot( $snapshot ),
+            'warnings'        => $warnings,
+            'poll_count'      => 0,
+            'next_poll_at'    => $now_ts + 60,
+            'resolved_at'     => null,
+            'history'         => array(
+                array(
+                    'event'  => 'push_sent',
+                    'at'     => $now_iso,
+                    'at_ts'  => $now_ts,
+                    'by'     => $user_login,
+                    'detail' => 'PATCH enviado a GMB. updateMask=' . ( $result['update_mask'] ?? '' ) . ' | warnings=' . count( $warnings ),
+                ),
+            ),
+        );
+
+        update_post_meta( $post_id, 'gmb_contact_push_job', $job );
+        wp_schedule_single_event( $now_ts + 60, 'oy_poll_contact_push_status', array( $post_id ) );
+
+        self::add_contact_log_entry(
+            $post_id,
+            'push_to_gmb',
+            empty( $warnings ) ? 'success' : 'warning',
+            empty( $warnings ) ? __( 'Información de contacto enviada a GMB. Pendiente de verificación.', 'lealez' ) : __( 'Información de contacto enviada a GMB con advertencias técnicas. Pendiente de verificación.', 'lealez' ),
+            array(
+                'submitted' => $submitted,
+                'warnings'  => $warnings,
+            )
+        );
+
+        wp_send_json_success( array(
+            'message'    => __( 'Información de contacto enviada a Google Business Profile. El sistema verificará el estado automáticamente.', 'lealez' ),
+            'panel_html' => $this->render_contact_push_panel( $post_id ),
+            'log_html'   => $this->render_contact_log_panel( $post_id ),
+            'warnings'   => $warnings,
+        ) );
+    }
+
+    /**
+     * AJAX: verifica estado del último push de Contacto.
+     */
+    public function ajax_check_contact_push_status() {
+        $nonce   = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+        $post_id = isset( $_POST['post_id'] ) ? absint( wp_unslash( $_POST['post_id'] ) ) : 0;
+        if ( ! $post_id || ! wp_verify_nonce( $nonce, 'oy_check_contact_push_status_' . $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+        }
+        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
+        }
+
+        $job = get_post_meta( $post_id, 'gmb_contact_push_job', true );
+        if ( empty( $job ) || ! is_array( $job ) ) {
+            wp_send_json_error( array( 'message' => __( 'No hay push registrado para esta ubicación.', 'lealez' ) ) );
+        }
+
+        if ( in_array( $job['status'] ?? '', array( 'applied', 'rejected', 'google_override', 'timeout', 'cancelled' ), true ) ) {
+            wp_send_json_success( array(
+                'message'    => __( 'El cambio ya está resuelto.', 'lealez' ),
+                'status'     => $job['status'],
+                'panel_html' => $this->render_contact_push_panel( $post_id ),
+                'log_html'   => $this->render_contact_log_panel( $post_id ),
+            ) );
+        }
+
+        $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        $current       = Lealez_GMB_API::poll_location_contact_status( $business_id, $location_name );
+        if ( is_wp_error( $current ) ) {
+            wp_send_json_error( array(
+                'message'    => __( 'Error al consultar GMB: ', 'lealez' ) . $current->get_error_message(),
+                'panel_html' => $this->render_contact_push_panel( $post_id ),
+                'log_html'   => $this->render_contact_log_panel( $post_id ),
+            ) );
+        }
+
+        $now_ts     = time();
+        $now_iso    = gmdate( 'Y-m-d\\TH:i:s\\Z', $now_ts );
+        $new_status = self::determine_contact_push_outcome( $job, self::extract_gmb_contact_data_from_snapshot( $current ), $current );
+
+        $job['status']     = $new_status;
+        $job['poll_count'] = ( $job['poll_count'] ?? 0 ) + 1;
+        $job['history'][]  = array(
+            'event'  => 'manual_check',
+            'at'     => $now_iso,
+            'at_ts'  => $now_ts,
+            'by'     => wp_get_current_user()->user_login ?? 'system',
+            'detail' => 'Verificación manual → estado: ' . $new_status,
+        );
+
+        if ( in_array( $new_status, array( 'applied', 'rejected', 'google_override' ), true ) ) {
+            $job['resolved_at'] = $now_iso;
+        }
+        update_post_meta( $post_id, 'gmb_contact_push_job', $job );
+        if ( 'applied' === $new_status ) {
+            delete_post_meta( $post_id, 'oy_contact_local_pending_publish' );
+        }
+
+        self::add_contact_log_entry( $post_id, 'check_push_status', 'info', 'Verificación manual de contacto → ' . $new_status, array( 'status' => $new_status ) );
+
+        wp_send_json_success( array(
+            'message'    => '',
+            'status'     => $new_status,
+            'panel_html' => $this->render_contact_push_panel( $post_id ),
+            'log_html'   => $this->render_contact_log_panel( $post_id ),
+        ) );
+    }
+
+    /**
+     * WP-Cron: ciclo automático de polling post-PATCH de Contacto.
+     *
+     * @param int $post_id Post ID.
+     * @return void
+     */
+    public static function cron_poll_contact_push_status( $post_id ) {
+        $post_id = absint( $post_id );
+        if ( ! $post_id ) {
+            return;
+        }
+
+        $job = get_post_meta( $post_id, 'gmb_contact_push_job', true );
+        if ( empty( $job ) || ! is_array( $job ) || ! in_array( $job['status'] ?? '', array( 'pending_review', 'queued' ), true ) ) {
+            return;
+        }
+
+        $pushed_ts = $job['pushed_at_ts'] ?? 0;
+        if ( $pushed_ts && ( time() - $pushed_ts ) > 30 * DAY_IN_SECONDS ) {
+            $job['status']      = 'timeout';
+            $job['resolved_at'] = gmdate( 'Y-m-d\\TH:i:s\\Z' );
+            $job['history'][]   = array(
+                'event'  => 'timeout',
+                'at'     => gmdate( 'Y-m-d\\TH:i:s\\Z' ),
+                'at_ts'  => time(),
+                'by'     => 'cron',
+                'detail' => 'Sin respuesta de Google en 30 días.',
+            );
+            update_post_meta( $post_id, 'gmb_contact_push_job', $job );
+            self::add_contact_log_entry( $post_id, 'cron_poll', 'warning', 'Timeout del push de contacto después de 30 días.', array( 'status' => 'timeout' ) );
+            return;
+        }
+
+        $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
+        $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
+        if ( ! $business_id || ! $location_name || ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'poll_location_contact_status' ) ) {
+            return;
+        }
+
+        $current = Lealez_GMB_API::poll_location_contact_status( $business_id, $location_name );
+        $now_ts  = time();
+        $now_iso = gmdate( 'Y-m-d\\TH:i:s\\Z', $now_ts );
+
+        if ( is_wp_error( $current ) ) {
+            $job['poll_count'] = ( $job['poll_count'] ?? 0 ) + 1;
+            $job['history'][]  = array(
+                'event'  => 'poll_error',
+                'at'     => $now_iso,
+                'at_ts'  => $now_ts,
+                'by'     => 'cron',
+                'detail' => 'Error API: ' . $current->get_error_message(),
+            );
+            update_post_meta( $post_id, 'gmb_contact_push_job', $job );
+            self::schedule_next_contact_poll( $post_id, $job['poll_count'] ?? 0 );
+            return;
+        }
+        $new_status = self::determine_contact_push_outcome( $job, self::extract_gmb_contact_data_from_snapshot( $current ), $current );
+
+        $job['poll_count'] = ( $job['poll_count'] ?? 0 ) + 1;
+        $job['status']     = $new_status;
+        $job['history'][]  = array(
+            'event'  => 'cron_poll',
+            'at'     => $now_iso,
+            'at_ts'  => $now_ts,
+            'by'     => 'cron',
+            'detail' => 'Poll #' . $job['poll_count'] . ' → estado: ' . $new_status,
+        );
+
+        if ( in_array( $new_status, array( 'applied', 'rejected', 'google_override' ), true ) ) {
+            $job['resolved_at'] = $now_iso;
+        }
+        update_post_meta( $post_id, 'gmb_contact_push_job', $job );
+
+        if ( 'applied' === $new_status ) {
+            delete_post_meta( $post_id, 'oy_contact_local_pending_publish' );
+        }
+
+        self::add_contact_log_entry( $post_id, 'cron_poll', 'info', 'Verificación automática de contacto → ' . $new_status, array( 'status' => $new_status ) );
+
+        if ( 'pending_review' === $new_status ) {
+            self::schedule_next_contact_poll( $post_id, $job['poll_count'] );
+        }
+    }
+
+    /**
+     * Programa siguiente polling de contacto.
+     *
+     * @param int $post_id Post ID.
+     * @param int $poll_count Cantidad de polls ejecutados.
+     * @return void
+     */
+    private static function schedule_next_contact_poll( $post_id, $poll_count ) {
+        $intervals = array( 60, 120, 300, 600, 900, 1800, 3600, 7200, 21600 );
+        $idx       = (int) $poll_count;
+        $delay     = isset( $intervals[ $idx ] ) ? $intervals[ $idx ] : HOUR_IN_SECONDS;
+        wp_schedule_single_event( time() + $delay, 'oy_poll_contact_push_status', array( absint( $post_id ) ) );
+    }
+
+
+    /**
+     * Prepara datos de contacto para comparar resultado GMB sin falsos negativos.
+     *
+     * Ignora campos decorativos de UI como labels/from_gmb en URLs dinámicas y compara
+     * únicamente los valores que realmente se publican en Google.
+     *
+     * @param array $data Datos de contacto.
+     * @return mixed
+     */
+    private static function normalize_contact_compare_payload( array $data ) {
+        unset( $data['email'] );
+
+        foreach ( array( 'bookingUrls', 'orderUrls' ) as $url_key ) {
+            $clean = array();
+            $rows  = isset( $data[ $url_key ] ) && is_array( $data[ $url_key ] ) ? $data[ $url_key ] : array();
+            foreach ( $rows as $entry ) {
+                if ( ! is_array( $entry ) ) {
+                    continue;
+                }
+                $url = isset( $entry['url'] ) ? esc_url_raw( (string) $entry['url'] ) : '';
+                if ( '' === $url ) {
+                    continue;
+                }
+                $clean[] = array(
+                    'url'  => $url,
+                    'type' => isset( $entry['type'] ) ? strtoupper( sanitize_text_field( (string) $entry['type'] ) ) : '',
+                );
+            }
+            $data[ $url_key ] = $clean;
+        }
+
+        if ( ! empty( $data['additionalPhones'] ) && is_array( $data['additionalPhones'] ) ) {
+            $phones = array_values( array_filter( array_map( 'sanitize_text_field', $data['additionalPhones'] ) ) );
+            sort( $phones );
+            $data['additionalPhones'] = $phones;
+        }
+
+        if ( ! empty( $data['socialProfiles'] ) && is_array( $data['socialProfiles'] ) ) {
+            $social = array();
+            foreach ( $data['socialProfiles'] as $network => $url ) {
+                $network = sanitize_key( (string) $network );
+                $url     = esc_url_raw( (string) $url );
+                if ( '' !== $network && '' !== $url ) {
+                    $social[ $network ] = $url;
+                }
+            }
+            ksort( $social );
+            $data['socialProfiles'] = $social;
+        }
+
+        return self::normalize_for_compare( $data );
+    }
+    /**
+     * Determina resultado del push de contacto.
+     *
+     * @param array $job Job guardado.
+     * @param array $current_data Datos actuales parseados desde GMB.
+     * @param array $raw_current Snapshot crudo.
+     * @return string
+     */
+    private static function determine_contact_push_outcome( array $job, array $current_data, array $raw_current = array() ) {
+        if ( ! empty( $raw_current['metadata']['hasPendingEdits'] ) ) {
+            return 'pending_review';
+        }
+
+        $submitted = isset( $job['submitted'] ) && is_array( $job['submitted'] ) ? $job['submitted'] : array();
+        $before    = isset( $job['snapshot_before'] ) && is_array( $job['snapshot_before'] ) ? $job['snapshot_before'] : array();
+
+        $core_keys = array( 'primaryPhone', 'additionalPhones', 'websiteUri', 'chatUrl', 'menuUrl', 'socialProfiles', 'bookingUrls', 'orderUrls' );
+        $submitted_core = array_intersect_key( $submitted, array_flip( $core_keys ) );
+        $before_core    = array_intersect_key( $before, array_flip( $core_keys ) );
+        $current_core   = array_intersect_key( $current_data, array_flip( $core_keys ) );
+
+        if ( self::normalize_contact_compare_payload( $current_core ) === self::normalize_contact_compare_payload( $submitted_core ) ) {
+            return 'applied';
+        }
+        if ( ! empty( $before_core ) && self::normalize_contact_compare_payload( $current_core ) === self::normalize_contact_compare_payload( $before_core ) ) {
+            return 'rejected';
+        }
+        return 'google_override';
+    }
+
 
     /**
      * Render Contact Information meta box
@@ -135,6 +1229,10 @@ class OY_Location_Contact_Metabox {
         if ( ! is_array( $gmb_social_profiles ) ) {
             $gmb_social_profiles = array();
         }
+        echo $this->render_contact_sync_bar( $post->ID );
+        echo $this->render_contact_log_panel( $post->ID );
+        echo $this->render_contact_push_panel( $post->ID );
+
         if ( ! is_array( $social_profiles_manual ) ) {
             $social_profiles_manual = array();
         }
@@ -547,6 +1645,263 @@ class OY_Location_Contact_Metabox {
             });
         });
         </script>
+
+        <style>
+            @keyframes oy-contact-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            .oy-contact-is-loading .dashicons { animation: oy-contact-spin .85s linear infinite; }
+        </style>
+        <script type="text/javascript">
+        jQuery(document).ready(function($){
+            var contactNetworkOptions = '<?php
+                $contact_opts = '';
+                foreach ( $social_network_labels as $val => $lbl ) {
+                    $contact_opts .= '<option value="' . esc_attr( $val ) . '">' . esc_html( $lbl ) . '</option>';
+                }
+                $contact_opts .= '<option value="other">' . esc_html__( 'Otra', 'lealez' ) . '</option>';
+                echo esc_js( $contact_opts );
+            ?>';
+
+            function oyContactMessage($target, message, type) {
+                var colors = {
+                    success: '#166534',
+                    warning: '#b45309',
+                    error: '#dc3232',
+                    info: '#1d4ed8'
+                };
+                $target.text(message || '').css('color', colors[type] || '#555').show();
+            }
+
+            function oyContactEscape(value) {
+                return $('<div/>').text(value || '').html();
+            }
+
+            function oyContactSetLoading($button, isLoading, loadingText) {
+                if (! $button || ! $button.length) {
+                    return;
+                }
+                if (isLoading) {
+                    $button.data('original-html', $button.html());
+                    $button.prop('disabled', true).addClass('oy-contact-is-loading');
+                    if (loadingText) {
+                        $button.html('<span class="dashicons dashicons-update" style="margin-top:3px;"></span> ' + loadingText);
+                    }
+                } else {
+                    var original = $button.data('original-html');
+                    if (original) {
+                        $button.html(original);
+                    }
+                    $button.prop('disabled', false).removeClass('oy-contact-is-loading');
+                }
+            }
+
+            function oyContactReplacePanels(responseData) {
+                if (responseData && responseData.log_html && $('#oy-contact-log-panel').length) {
+                    $('#oy-contact-log-panel').replaceWith(responseData.log_html);
+                }
+                if (responseData && (responseData.push_html || responseData.panel_html) && $('#oy-contact-push-panel').length) {
+                    $('#oy-contact-push-panel').replaceWith(responseData.push_html || responseData.panel_html);
+                }
+            }
+
+            function oyContactRebuildPhones(phones) {
+                var $list = $('#oy-additional-phones-list');
+                $list.empty();
+                if (! $.isArray(phones)) {
+                    return;
+                }
+                phones.forEach(function(phone){
+                    if (! phone) {
+                        return;
+                    }
+                    $list.append(
+                        '<div class="oy-phone-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center;">' +
+                            '<input type="tel" name="gmb_phone_additional_list[]" value="' + oyContactEscape(phone) + '" class="regular-text" placeholder="+573001234567">' +
+                            '<button type="button" class="button button-small oy-remove-phone" style="color:#dc3232;">✕</button>' +
+                        '</div>'
+                    );
+                });
+            }
+
+            function oyContactRebuildUrlRows(selector, inputName, rowClass, removeClass, entries) {
+                var $list = $(selector);
+                $list.empty();
+                if (! $.isArray(entries)) {
+                    return;
+                }
+                entries.forEach(function(entry, idx){
+                    if (! entry || ! entry.url) {
+                        return;
+                    }
+                    $list.append(
+                        '<div class="' + rowClass + '" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
+                            '<input type="url" name="' + inputName + '[' + idx + '][url]" value="' + oyContactEscape(entry.url) + '" class="large-text" placeholder="https://..." style="flex:1;min-width:250px;">' +
+                            '<input type="text" name="' + inputName + '[' + idx + '][label]" value="' + oyContactEscape(entry.label || '') + '" class="regular-text" placeholder="Etiqueta" style="max-width:180px;">' +
+                            '<input type="hidden" name="' + inputName + '[' + idx + '][type]" value="' + oyContactEscape(entry.type || '') + '">' +
+                            '<input type="hidden" name="' + inputName + '[' + idx + '][from_gmb]" value="' + (entry.from_gmb ? '1' : '0') + '">' +
+                            '<button type="button" class="button button-small ' + removeClass + '" style="color:#dc3232;">✕</button>' +
+                        '</div>'
+                    );
+                });
+            }
+
+            function oyContactRebuildSocials(socialProfiles) {
+                var $list = $('#oy-social-profiles-list');
+                $list.empty();
+                if (! socialProfiles || typeof socialProfiles !== 'object') {
+                    return;
+                }
+                Object.keys(socialProfiles).forEach(function(network){
+                    var url = socialProfiles[network];
+                    if (! url) {
+                        return;
+                    }
+                    var $row = $('<div class="oy-social-row" style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
+                        '<select name="social_profiles_manual_network[]" class="oy-social-network-select" style="min-width:130px;">' + contactNetworkOptions + '</select>' +
+                        '<input type="url" name="social_profiles_manual_url[]" class="large-text" placeholder="https://...">' +
+                        '<button type="button" class="button button-small oy-remove-social" style="color:#dc3232;">✕</button>' +
+                    '</div>');
+                    $row.find('select').val(network);
+                    if (! $row.find('select').val()) {
+                        $row.find('select').val('other');
+                    }
+                    $row.find('input[type="url"]').val(url);
+                    $list.append($row);
+                });
+            }
+
+            function oyContactApplyFieldValues(values) {
+                if (! values || typeof values !== 'object') {
+                    return;
+                }
+                $('#location_phone').val(values.primaryPhone || '').trigger('change');
+                $('#location_website').val(values.websiteUri || '').trigger('change');
+                $('#location_chat_url').val(values.chatUrl || '').trigger('change');
+                $('#location_menu_url_gmb').val(values.menuUrl || '').trigger('change');
+                if (typeof values.email !== 'undefined') {
+                    $('#location_email').val(values.email || '').trigger('change');
+                }
+                oyContactRebuildPhones(values.additionalPhones || []);
+                oyContactRebuildUrlRows('#oy-booking-urls-list', 'location_booking_urls', 'oy-booking-url-row', 'oy-remove-booking-url', values.bookingUrls || []);
+                oyContactRebuildUrlRows('#oy-order-urls-list', 'location_order_urls', 'oy-order-url-row', 'oy-remove-order-url', values.orderUrls || []);
+                oyContactRebuildSocials(values.socialProfiles || {});
+            }
+
+            $(document).on('click', '#oy-contact-log-header', function(){
+                var $body = $('#oy-contact-log-body');
+                var $icon = $('#oy-contact-log-toggle-icon');
+                $body.slideToggle(150, function(){
+                    $icon.text($body.is(':visible') ? '▼' : '▶');
+                });
+            });
+
+            $(document).on('click', '#oy-contact-log-clear', function(e){
+                e.preventDefault();
+                var $panel = $('#oy-contact-log-panel');
+                var postId = $('#oy-contact-sync-bar').data('post-id') || $('#oy-contact-push-panel').data('post-id');
+                var nonce = $panel.data('clear-nonce');
+                if (! postId || ! nonce) {
+                    return;
+                }
+                $.post(ajaxurl, {
+                    action: 'oy_clear_contact_log',
+                    post_id: postId,
+                    nonce: nonce
+                }).done(function(resp){
+                    if (resp && resp.success) {
+                        oyContactReplacePanels(resp.data || {});
+                    } else {
+                        alert((resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo limpiar el log.', 'lealez' ) ); ?>');
+                    }
+                });
+            });
+
+            $(document).on('click', '#oy-contact-sync-btn', function(e){
+                e.preventDefault();
+                var $button = $(this);
+                var $bar = $('#oy-contact-sync-bar');
+                var $msg = $('#oy-contact-sync-msg');
+                var postId = $bar.data('post-id');
+                var nonce = $bar.data('sync-nonce');
+                oyContactSetLoading($button, true, '<?php echo esc_js( __( 'Sincronizando...', 'lealez' ) ); ?>');
+                oyContactMessage($msg, '<?php echo esc_js( __( 'Consultando Google Business Profile...', 'lealez' ) ); ?>', 'info');
+                $.post(ajaxurl, {
+                    action: 'oy_sync_contact_from_gmb',
+                    post_id: postId,
+                    nonce: nonce
+                }).done(function(resp){
+                    if (resp && resp.success) {
+                        oyContactApplyFieldValues(resp.data.field_values || {});
+                        oyContactReplacePanels(resp.data || {});
+                        oyContactMessage($('#oy-contact-sync-msg'), resp.data.message || '<?php echo esc_js( __( 'Sincronización completada.', 'lealez' ) ); ?>', resp.data.warnings && resp.data.warnings.length ? 'warning' : 'success');
+                    } else {
+                        oyContactReplacePanels((resp && resp.data) || {});
+                        oyContactMessage($('#oy-contact-sync-msg'), (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo sincronizar desde GMB.', 'lealez' ) ); ?>', 'error');
+                    }
+                }).fail(function(xhr){
+                    oyContactMessage($('#oy-contact-sync-msg'), '<?php echo esc_js( __( 'Error AJAX al sincronizar Contacto.', 'lealez' ) ); ?>' + ' HTTP ' + xhr.status, 'error');
+                }).always(function(){
+                    oyContactSetLoading($button, false);
+                });
+            });
+
+            $(document).on('click', '#oy-push-contact-btn', function(e){
+                e.preventDefault();
+                var $button = $(this);
+                var $panel = $('#oy-contact-push-panel');
+                var $msg = $('#oy-contact-push-action-msg');
+                var postId = $panel.data('post-id');
+                var nonce = $panel.data('push-nonce');
+                oyContactSetLoading($button, true, '<?php echo esc_js( __( 'Enviando...', 'lealez' ) ); ?>');
+                oyContactMessage($msg, '<?php echo esc_js( __( 'Enviando información de contacto a GMB...', 'lealez' ) ); ?>', 'info');
+                $.post(ajaxurl, {
+                    action: 'oy_push_contact_to_gmb',
+                    post_id: postId,
+                    nonce: nonce
+                }).done(function(resp){
+                    if (resp && resp.success) {
+                        oyContactReplacePanels(resp.data || {});
+                        oyContactMessage($('#oy-contact-push-action-msg'), resp.data.message || '<?php echo esc_js( __( 'Envío completado.', 'lealez' ) ); ?>', resp.data.warnings && resp.data.warnings.length ? 'warning' : 'success');
+                    } else {
+                        oyContactReplacePanels((resp && resp.data) || {});
+                        oyContactMessage($('#oy-contact-push-action-msg'), (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo enviar Contacto a GMB.', 'lealez' ) ); ?>', 'error');
+                    }
+                }).fail(function(xhr){
+                    oyContactMessage($('#oy-contact-push-action-msg'), '<?php echo esc_js( __( 'Error AJAX al enviar Contacto.', 'lealez' ) ); ?>' + ' HTTP ' + xhr.status, 'error');
+                }).always(function(){
+                    oyContactSetLoading($button, false);
+                });
+            });
+
+            $(document).on('click', '#oy-check-contact-push-status-btn', function(e){
+                e.preventDefault();
+                var $button = $(this);
+                var $panel = $('#oy-contact-push-panel');
+                var $msg = $('#oy-contact-push-action-msg');
+                var postId = $panel.data('post-id');
+                var nonce = $panel.data('check-nonce');
+                oyContactSetLoading($button, true, '<?php echo esc_js( __( 'Verificando...', 'lealez' ) ); ?>');
+                oyContactMessage($msg, '<?php echo esc_js( __( 'Consultando estado actual en GMB...', 'lealez' ) ); ?>', 'info');
+                $.post(ajaxurl, {
+                    action: 'oy_check_contact_push_status',
+                    post_id: postId,
+                    nonce: nonce
+                }).done(function(resp){
+                    if (resp && resp.success) {
+                        oyContactReplacePanels(resp.data || {});
+                        var statusMsg = resp.data.status ? '<?php echo esc_js( __( 'Estado actual:', 'lealez' ) ); ?> ' + resp.data.status : '<?php echo esc_js( __( 'Verificación completada.', 'lealez' ) ); ?>';
+                        oyContactMessage($('#oy-contact-push-action-msg'), resp.data.message || statusMsg, 'info');
+                    } else {
+                        oyContactReplacePanels((resp && resp.data) || {});
+                        oyContactMessage($('#oy-contact-push-action-msg'), (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo verificar el estado.', 'lealez' ) ); ?>', 'error');
+                    }
+                }).fail(function(xhr){
+                    oyContactMessage($('#oy-contact-push-action-msg'), '<?php echo esc_js( __( 'Error AJAX al verificar Contacto.', 'lealez' ) ); ?>' + ' HTTP ' + xhr.status, 'error');
+                }).always(function(){
+                    oyContactSetLoading($button, false);
+                });
+            });
+        });
+        </script>
         <?php
     }
 
@@ -586,6 +1941,8 @@ class OY_Location_Contact_Metabox {
         if ( ! current_user_can( 'edit_post', $post_id ) ) {
             return;
         }
+
+        $contact_before = $this->collect_local_contact_data( $post_id );
 
         // Campos simples de contacto.
         $simple_fields = array(
@@ -724,6 +2081,32 @@ class OY_Location_Contact_Metabox {
             if ( '' === $menu_url_val ) {
                 delete_post_meta( $post_id, 'location_menu_url_from_gmb' );
             }
+        }
+
+        $contact_after = $this->collect_local_contact_data( $post_id );
+        $contact_diff  = $this->build_contact_diff( $contact_before, $contact_after );
+
+        if ( ! empty( $contact_diff ) ) {
+            $current_user = wp_get_current_user();
+            $user_login   = ( $current_user instanceof WP_User && ! empty( $current_user->user_login ) ) ? $current_user->user_login : 'system';
+            $now_ts       = time();
+
+            update_post_meta( $post_id, 'oy_contact_local_pending_publish', 1 );
+            update_post_meta( $post_id, 'oy_contact_last_manual_save', array(
+                'at'       => gmdate( 'Y-m-d\\TH:i:s\\Z', $now_ts ),
+                'at_ts'    => $now_ts,
+                'at_label' => self::contact_datetime_label( $now_ts ),
+                'by'       => $user_login,
+                'diff'     => $contact_diff,
+            ) );
+
+            self::add_contact_log_entry(
+                $post_id,
+                'local_save',
+                'info',
+                sprintf( __( 'Cambios locales guardados en Contacto. %d campo(s) cambiaron y quedan pendientes por publicar en GMB.', 'lealez' ), count( $contact_diff ) ),
+                array( 'diff' => $contact_diff )
+            );
         }
     }
 }
