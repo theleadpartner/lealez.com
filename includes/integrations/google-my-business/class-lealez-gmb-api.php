@@ -2539,7 +2539,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
      *
      * @param int    $business_id        WP Post ID del oy_business (para tokens OAuth).
      * @param string $location_name      Resource name de la ubicación (cualquier formato aceptado).
-     * @param array  $attributes_payload Array de atributos en formato GMB API v1:
+     * @param array  $attribute_replacements Array de atributos en formato GMB API v1:
      *                                   [
      *                                     [
      *                                       'name'      => 'attributes/has_women_led',
@@ -2550,7 +2550,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
      *
      * @return array|WP_Error Respuesta de la API (el Attributes resource actualizado), o WP_Error.
      */
-    public static function update_location_attributes( $business_id, $location_name, $attributes_payload ) {
+    public static function update_location_attributes( $business_id, $location_name, $attribute_replacements ) {
         $business_id   = absint( $business_id );
         $location_name = trim( (string) $location_name );
 
@@ -2558,7 +2558,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_attributes.', 'lealez' ) );
         }
 
-        if ( empty( $attributes_payload ) || ! is_array( $attributes_payload ) ) {
+        if ( empty( $attribute_replacements ) || ! is_array( $attribute_replacements ) ) {
             return new WP_Error( 'empty_payload', __( 'No attributes provided to update.', 'lealez' ) );
         }
 
@@ -2580,18 +2580,18 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         // Body del PATCH: { "name": "locations/{id}/attributes", "attributes": [...] }
         $body = array(
             'name'       => $normalized_location . '/attributes',
-            'attributes' => $attributes_payload,
+            'attributes' => $attribute_replacements,
         );
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                sprintf( 'Updating %d attribute(s) for location.', count( $attributes_payload ) ),
+                sprintf( 'Updating %d attribute(s) for location.', count( $attribute_replacements ) ),
                 array(
                     'location' => $normalized_location,
                     'endpoint' => $endpoint,
-                    'count'    => count( $attributes_payload ),
+                    'count'    => count( $attribute_replacements ),
                 )
             );
         }
@@ -2633,7 +2633,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log(
                 '[OY GMB More] update_location_attributes: OK for ' . $normalized_location .
-                ' (' . count( $attributes_payload ) . ' attr(s) updated)'
+                ' (' . count( $attribute_replacements ) . ' attr(s) updated)'
             );
         }
 
@@ -3845,6 +3845,633 @@ public static function push_location_address( $business_id, $location_name, arra
      */
     public static function poll_location_address_status( $business_id, $location_name ) {
         return self::get_location_snapshot( $business_id, $location_name );
+    }
+
+
+    // =========================================================================
+    // CONTACT PUSH — Business Information API v1 + Attributes + Place Actions
+    // Arquitectura: snapshot antes del PATCH → PATCH → polling WP-Cron
+    // =========================================================================
+
+    /**
+     * Normaliza un resource name de ubicación a formato corto `locations/{id}`.
+     *
+     * @param string $location_name Resource name recibido desde Lealez/GMB.
+     * @return string|WP_Error
+     */
+    private static function normalize_contact_location_name( $location_name ) {
+        $location_name = trim( (string) $location_name );
+
+        if ( '' === $location_name ) {
+            return new WP_Error( 'invalid_location_name', __( 'El location_name está vacío.', 'lealez' ) );
+        }
+
+        if ( false !== strpos( $location_name, '/attributes' ) ) {
+            $location_name = explode( '/attributes', $location_name )[0];
+        }
+
+        $location_name = trim( $location_name, '/' );
+
+        if ( 0 === strpos( $location_name, 'accounts/' ) ) {
+            $parts = explode( '/locations/', $location_name, 2 );
+            if ( ! empty( $parts[1] ) ) {
+                return 'locations/' . trim( $parts[1], '/' );
+            }
+        }
+
+        if ( 0 === strpos( $location_name, 'locations/' ) ) {
+            return $location_name;
+        }
+
+        if ( preg_match( '/^\d+$/', $location_name ) ) {
+            return 'locations/' . $location_name;
+        }
+
+        return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+    }
+
+    /**
+     * Construye un atributo URL para Business Information API v1.
+     *
+     * @param string $normalized_location Resource name corto locations/{id}.
+     * @param string $attribute_id        ID del atributo, ej: url_whatsapp.
+     * @param string $url                 URL a publicar.
+     * @return array
+     */
+    private static function build_contact_url_attribute( $normalized_location, $attribute_id, $url ) {
+        return array(
+            'name'      => rtrim( $normalized_location, '/' ) . '/attributes/' . sanitize_key( $attribute_id ),
+            'valueType' => 'URL',
+            'uriValues' => array(
+                array(
+                    'uri' => esc_url_raw( (string) $url ),
+                ),
+            ),
+        );
+    }
+
+    /**
+     * Normaliza arrays para comparaciones internas de payloads GMB.
+     *
+     * @param mixed $value Valor a normalizar.
+     * @return mixed
+     */
+    private static function normalize_for_log_compare( $value ) {
+        if ( is_array( $value ) ) {
+            $is_assoc = array_keys( $value ) !== range( 0, count( $value ) - 1 );
+            $out      = array();
+            foreach ( $value as $key => $item ) {
+                $out[ $key ] = self::normalize_for_log_compare( $item );
+            }
+            if ( $is_assoc ) {
+                ksort( $out );
+            } else {
+                usort( $out, function( $a, $b ) {
+                    return strcmp( wp_json_encode( $a ), wp_json_encode( $b ) );
+                } );
+            }
+            return $out;
+        }
+
+        if ( is_string( $value ) ) {
+            return trim( $value );
+        }
+
+        return $value;
+    }
+
+    /**
+     * Obtiene snapshot de contacto desde GMB.
+     *
+     * Incluye campos nativos del recurso Location, atributos URL y PlaceActionLinks,
+     * para que el metabox pueda comparar/importar con un solo método.
+     *
+     * @param int    $business_id   WP post ID del oy_business.
+     * @param string $location_name Resource name de GMB.
+     * @return array|WP_Error
+     */
+    public static function get_location_contact_snapshot( $business_id, $location_name ) {
+        $business_id = absint( $business_id );
+        $normalized  = self::normalize_contact_location_name( $location_name );
+
+        if ( ! $business_id || is_wp_error( $normalized ) ) {
+            return is_wp_error( $normalized ) ? $normalized : new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        $read_mask = 'phoneNumbers,websiteUri,metadata.hasPendingEdits,metadata.hasGoogleUpdated';
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Fetching contact snapshot from Business Information API.',
+                array(
+                    'location'  => $normalized,
+                    'read_mask' => $read_mask,
+                )
+            );
+        }
+
+        $result = self::make_request(
+            $business_id,
+            '/' . $normalized,
+            self::$business_api_base,
+            'GET',
+            array(),
+            false,
+            array( 'readMask' => $read_mask )
+        );
+
+        if ( is_wp_error( $result ) ) {
+            return $result;
+        }
+
+        $snapshot = is_array( $result ) ? $result : array();
+
+        $attributes = self::get_location_attributes( $business_id, $normalized, false );
+        if ( is_wp_error( $attributes ) ) {
+            $snapshot['_contact_aux_errors']['attributes'] = $attributes->get_error_message();
+            $snapshot['attributes'] = array();
+        } else {
+            $snapshot['attributes'] = is_array( $attributes ) ? $attributes : array();
+        }
+
+        $place_action_links = self::get_location_place_action_links( $business_id, $normalized, false );
+        if ( is_wp_error( $place_action_links ) ) {
+            $snapshot['_contact_aux_errors']['placeActionLinks'] = $place_action_links->get_error_message();
+            $snapshot['placeActionLinks'] = array();
+        } else {
+            $snapshot['placeActionLinks'] = is_array( $place_action_links ) ? $place_action_links : array();
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez GMB] get_location_contact_snapshot OK — ' . $normalized . ' | attrs=' . count( $snapshot['attributes'] ) . ' | placeActionLinks=' . count( $snapshot['placeActionLinks'] ) );
+        }
+
+        return $snapshot;
+    }
+
+    /**
+     * Envía los campos de contacto de Lealez hacia Google Business Profile.
+     *
+     * Campos enviados:
+     * - phoneNumbers.primaryPhone / additionalPhones
+     * - websiteUri
+     * - atributos URL: WhatsApp/SMS, menú/servicios y redes sociales
+     * - PlaceActionLinks: reservas y ordenar online gestionados desde el metabox Contacto
+     *
+     * @param int    $business_id   WP post ID del oy_business.
+     * @param string $location_name Resource name de GMB.
+     * @param array  $contact_data  Datos normalizados desde Lealez.
+     * @return array|WP_Error
+     */
+    public static function push_location_contact( $business_id, $location_name, array $contact_data ) {
+        $business_id = absint( $business_id );
+        $normalized  = self::normalize_contact_location_name( $location_name );
+
+        if ( ! $business_id || is_wp_error( $normalized ) ) {
+            return is_wp_error( $normalized ) ? $normalized : new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        $primary_phone     = isset( $contact_data['primaryPhone'] ) ? trim( sanitize_text_field( (string) $contact_data['primaryPhone'] ) ) : '';
+        $additional_phones = array();
+        if ( ! empty( $contact_data['additionalPhones'] ) && is_array( $contact_data['additionalPhones'] ) ) {
+            foreach ( $contact_data['additionalPhones'] as $phone ) {
+                $phone = trim( sanitize_text_field( (string) $phone ) );
+                if ( '' !== $phone && ! in_array( $phone, $additional_phones, true ) ) {
+                    $additional_phones[] = $phone;
+                }
+            }
+        }
+
+        $website_uri = isset( $contact_data['websiteUri'] ) ? esc_url_raw( (string) $contact_data['websiteUri'] ) : '';
+
+        $body        = array();
+        $update_mask = array();
+
+        $phone_numbers = array();
+        if ( '' !== $primary_phone ) {
+            $phone_numbers['primaryPhone'] = $primary_phone;
+        }
+        if ( ! empty( $additional_phones ) ) {
+            $phone_numbers['additionalPhones'] = array_values( $additional_phones );
+        }
+
+        // Se envía aunque quede vacío para permitir limpiar teléfonos desde Lealez.
+        $body['phoneNumbers'] = ! empty( $phone_numbers ) ? $phone_numbers : new stdClass();
+        $update_mask[]        = 'phoneNumbers';
+
+        // Se envía siempre para permitir limpiar o reemplazar websiteUri.
+        $body['websiteUri'] = $website_uri;
+        $update_mask[]      = 'websiteUri';
+
+        $update_mask     = array_values( array_unique( $update_mask ) );
+        $update_mask_str = implode( ',', $update_mask );
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Pushing native contact fields to GMB.',
+                array(
+                    'location'    => $normalized,
+                    'updateMask'  => $update_mask_str,
+                    'body_preview'=> $body,
+                )
+            );
+        }
+
+        $native_result = self::make_request(
+            $business_id,
+            '/' . $normalized,
+            self::$business_api_base,
+            'PATCH',
+            $body,
+            false,
+            array( 'updateMask' => $update_mask_str )
+        );
+
+        if ( is_wp_error( $native_result ) ) {
+            $err_data = $native_result->get_error_data();
+            $native_result->add_data(
+                array_merge(
+                    is_array( $err_data ) ? $err_data : array(),
+                    array(
+                        'update_mask' => $update_mask_str,
+                        'payload'     => $body,
+                    )
+                ),
+                $native_result->get_error_code()
+            );
+            return $native_result;
+        }
+
+        $warnings = array();
+        $attribute_result = null;
+        $place_action_result = null;
+
+        // ── Atributos URL: chat, menú/servicios y redes sociales ─────────────────
+        // Importante: locations.attributes.patch usa updateMask=attributes. Para no borrar
+        // atributos ajenos a Contacto, se lee primero el listado actual, se reemplazan solo
+        // los atributos URL controlados por este metabox y se conserva el resto.
+        $attribute_replacements = array();
+        $contact_attribute_ids  = array(
+            'url_whatsapp',
+            'url_text_messaging',
+            'url_text_messaging3',
+            'url_menu',
+            'url_facebook',
+            'url_instagram',
+            'url_twitter',
+            'url_linkedin',
+            'url_youtube',
+            'url_tiktok',
+            'url_pinterest',
+        );
+
+        $chat_url = isset( $contact_data['chatUrl'] ) ? esc_url_raw( (string) $contact_data['chatUrl'] ) : '';
+        if ( '' !== $chat_url ) {
+            $chat_attr = ( false !== strpos( strtolower( $chat_url ), 'wa.me/' ) || false !== strpos( strtolower( $chat_url ), 'whatsapp' ) )
+                ? 'url_whatsapp'
+                : 'url_text_messaging';
+            $attribute_replacements[ $chat_attr ] = self::build_contact_url_attribute( $normalized, $chat_attr, $chat_url );
+        }
+
+        $menu_url = isset( $contact_data['menuUrl'] ) ? esc_url_raw( (string) $contact_data['menuUrl'] ) : '';
+        if ( '' !== $menu_url ) {
+            $attribute_replacements['url_menu'] = self::build_contact_url_attribute( $normalized, 'url_menu', $menu_url );
+        }
+
+        $social_map = array(
+            'facebook'  => 'url_facebook',
+            'instagram' => 'url_instagram',
+            'twitter'   => 'url_twitter',
+            'linkedin'  => 'url_linkedin',
+            'youtube'   => 'url_youtube',
+            'tiktok'    => 'url_tiktok',
+            'pinterest' => 'url_pinterest',
+        );
+
+        $social_profiles = isset( $contact_data['socialProfiles'] ) && is_array( $contact_data['socialProfiles'] ) ? $contact_data['socialProfiles'] : array();
+        foreach ( $social_profiles as $network => $url ) {
+            $network = sanitize_key( (string) $network );
+            $url     = esc_url_raw( (string) $url );
+            if ( '' === $url || empty( $social_map[ $network ] ) ) {
+                continue;
+            }
+            $attribute_replacements[ $social_map[ $network ] ] = self::build_contact_url_attribute( $normalized, $social_map[ $network ], $url );
+        }
+
+        $current_attributes = self::get_location_attributes( $business_id, $normalized, false );
+        if ( is_wp_error( $current_attributes ) ) {
+            $warnings[] = array(
+                'scope'   => 'attributes_read',
+                'message' => $current_attributes->get_error_message(),
+                'code'    => $current_attributes->get_error_code(),
+            );
+        } else {
+            $merged_attributes = array();
+            $existing_contact_signature = array();
+
+            if ( is_array( $current_attributes ) ) {
+                foreach ( $current_attributes as $attr ) {
+                    if ( ! is_array( $attr ) ) {
+                        continue;
+                    }
+
+                    $attr_id = '';
+                    if ( ! empty( $attr['attributeId'] ) ) {
+                        $attr_id = strtolower( trim( (string) $attr['attributeId'] ) );
+                    } elseif ( ! empty( $attr['name'] ) ) {
+                        $parts   = explode( '/attributes/', (string) $attr['name'] );
+                        $attr_id = strtolower( trim( end( $parts ), '/' ) );
+                    }
+
+                    if ( in_array( $attr_id, $contact_attribute_ids, true ) ) {
+                        $existing_contact_signature[ $attr_id ] = $attr;
+                        continue;
+                    }
+
+                    $merged_attributes[] = $attr;
+                }
+            }
+
+            foreach ( $attribute_replacements as $attr ) {
+                $merged_attributes[] = $attr;
+            }
+
+            $before_signature = self::normalize_for_log_compare( $existing_contact_signature );
+            $after_signature  = self::normalize_for_log_compare( $attribute_replacements );
+            $should_patch_attributes = ( $before_signature !== $after_signature );
+
+            if ( $should_patch_attributes ) {
+                if ( empty( $merged_attributes ) ) {
+                    $attribute_result = self::make_request(
+                        $business_id,
+                        '/' . rtrim( $normalized, '/' ) . '/attributes',
+                        self::$business_api_base,
+                        'PATCH',
+                        array(
+                            'name'       => rtrim( $normalized, '/' ) . '/attributes',
+                            'attributes' => array(),
+                        ),
+                        false,
+                        array( 'updateMask' => 'attributes' )
+                    );
+                } else {
+                    $attribute_result = self::update_location_attributes( $business_id, $normalized, $merged_attributes );
+                }
+
+                if ( is_wp_error( $attribute_result ) ) {
+                    $warnings[] = array(
+                        'scope'   => 'attributes',
+                        'message' => $attribute_result->get_error_message(),
+                        'code'    => $attribute_result->get_error_code(),
+                    );
+                } else {
+                    delete_transient( 'lealez_attrs_' . md5( (string) $business_id . '|' . rtrim( $normalized, '/' ) ) );
+                }
+            }
+        }
+
+        // ── PlaceActionLinks: reservas y ordenar online ──────────────────────────
+        $booking_urls = isset( $contact_data['bookingUrls'] ) && is_array( $contact_data['bookingUrls'] ) ? $contact_data['bookingUrls'] : array();
+        $order_urls   = isset( $contact_data['orderUrls'] ) && is_array( $contact_data['orderUrls'] ) ? $contact_data['orderUrls'] : array();
+        $place_action_result = self::sync_location_place_action_links( $business_id, $normalized, $booking_urls, $order_urls );
+        if ( is_wp_error( $place_action_result ) ) {
+            $warnings[] = array(
+                'scope'   => 'placeActionLinks',
+                'message' => $place_action_result->get_error_message(),
+                'code'    => $place_action_result->get_error_code(),
+            );
+        } else {
+            delete_transient( 'lealez_pal_' . md5( (string) $business_id . '|' . rtrim( $normalized, '/' ) ) );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                empty( $warnings ) ? 'success' : 'warning',
+                empty( $warnings ) ? 'Contact push completed without warnings.' : 'Contact push completed with warnings.',
+                array(
+                    'location'          => $normalized,
+                    'warnings'          => $warnings,
+                    'native_updateMask' => $update_mask_str,
+                    'attributes_count'  => count( $attribute_replacements ),
+                    'place_actions'     => $place_action_result,
+                )
+            );
+        }
+
+        return array(
+            'patch_response'        => is_array( $native_result ) ? $native_result : array(),
+            'update_mask'           => $update_mask_str,
+            'submitted'             => $contact_data,
+            'native_payload'        => $body,
+            'attributes_submitted'  => $attribute_replacements,
+            'attributes_response'   => is_wp_error( $attribute_result ) ? null : $attribute_result,
+            'place_actions_response'=> is_wp_error( $place_action_result ) ? null : $place_action_result,
+            'warnings'              => $warnings,
+        );
+    }
+
+    /**
+     * Sincroniza vínculos de acción de reserva/pedidos controlados por el metabox Contacto.
+     *
+     * Conserva vínculos ajenos a los tipos manejados por Lealez, pero para los tipos de
+     * reserva/pedidos usa Lealez como fuente de verdad: crea/actualiza los enviados y elimina
+     * los que el usuario quitó del metabox.
+     *
+     * @param int    $business_id
+     * @param string $location_name Resource name normalizado `locations/{id}`.
+     * @param array  $booking_urls
+     * @param array  $order_urls
+     * @return array|WP_Error
+     */
+    public static function sync_location_place_action_links( $business_id, $location_name, array $booking_urls = array(), array $order_urls = array() ) {
+        $business_id = absint( $business_id );
+        $normalized  = self::normalize_contact_location_name( $location_name );
+
+        if ( ! $business_id || is_wp_error( $normalized ) ) {
+            return is_wp_error( $normalized ) ? $normalized : new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
+        }
+
+        $booking_types = array( 'APPOINTMENT', 'ONLINE_APPOINTMENT', 'DINING_RESERVATION' );
+        $order_types   = array( 'FOOD_ORDERING', 'FOOD_DELIVERY', 'FOOD_TAKEOUT', 'SHOP_ONLINE', 'ORDER_AHEAD', 'ORDER_FOOD' );
+        $managed_types = array_values( array_unique( array_merge( $booking_types, $order_types ) ) );
+
+        $existing = self::get_location_place_action_links( $business_id, $normalized, false );
+        if ( is_wp_error( $existing ) ) {
+            return $existing;
+        }
+        $existing = is_array( $existing ) ? $existing : array();
+
+        $existing_by_type = array();
+        $existing_managed = array();
+        foreach ( $existing as $link ) {
+            if ( ! is_array( $link ) ) {
+                continue;
+            }
+            $type = strtoupper( trim( (string) ( $link['placeActionType'] ?? '' ) ) );
+            if ( '' === $type || empty( $link['name'] ) ) {
+                continue;
+            }
+            if ( ! isset( $existing_by_type[ $type ] ) ) {
+                $existing_by_type[ $type ] = $link;
+            }
+            if ( in_array( $type, $managed_types, true ) ) {
+                $existing_managed[] = $link;
+            }
+        }
+
+        $targets = array();
+        foreach ( $booking_urls as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            $url  = esc_url_raw( (string) ( $entry['url'] ?? '' ) );
+            $type = strtoupper( trim( (string) ( $entry['type'] ?? '' ) ) );
+            if ( '' === $type || ! in_array( $type, $booking_types, true ) ) {
+                $type = 'APPOINTMENT';
+            }
+            if ( '' !== $url ) {
+                $targets[] = array( 'uri' => $url, 'placeActionType' => $type, 'group' => 'booking' );
+            }
+        }
+        foreach ( $order_urls as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+            $url  = esc_url_raw( (string) ( $entry['url'] ?? '' ) );
+            $type = strtoupper( trim( (string) ( $entry['type'] ?? '' ) ) );
+            if ( '' === $type || ! in_array( $type, $order_types, true ) ) {
+                $type = 'FOOD_ORDERING';
+            }
+            if ( '' !== $url ) {
+                $targets[] = array( 'uri' => $url, 'placeActionType' => $type, 'group' => 'order' );
+            }
+        }
+
+        $target_signature = array();
+        foreach ( $targets as $target ) {
+            $target_signature[ $target['placeActionType'] . '|' . strtolower( $target['uri'] ) ] = true;
+        }
+
+        $operations = array();
+
+        // Eliminar enlaces manejados por Lealez que ya no están en el metabox.
+        foreach ( $existing_managed as $link ) {
+            $type = strtoupper( trim( (string) ( $link['placeActionType'] ?? '' ) ) );
+            $uri  = esc_url_raw( (string) ( $link['uri'] ?? '' ) );
+            $name = trim( (string) ( $link['name'] ?? '' ), '/' );
+            if ( '' === $name || isset( $target_signature[ $type . '|' . strtolower( $uri ) ] ) ) {
+                continue;
+            }
+
+            $delete_result = self::make_request(
+                $business_id,
+                '/' . $name,
+                self::$place_actions_api_base,
+                'DELETE',
+                array(),
+                false,
+                array()
+            );
+
+            if ( is_wp_error( $delete_result ) ) {
+                return $delete_result;
+            }
+
+            $operations[] = array(
+                'operation' => 'delete',
+                'type'      => $type,
+                'uri'       => $uri,
+                'name'      => $name,
+                'response'  => is_array( $delete_result ) ? $delete_result : array(),
+            );
+
+            if ( isset( $existing_by_type[ $type ] ) && trim( (string) ( $existing_by_type[ $type ]['name'] ?? '' ), '/' ) === $name ) {
+                unset( $existing_by_type[ $type ] );
+            }
+        }
+
+        foreach ( $targets as $target ) {
+            $type = $target['placeActionType'];
+            $body = array(
+                'placeActionType' => $type,
+                'uri'             => $target['uri'],
+                'providerType'    => 'MERCHANT',
+            );
+
+            if ( isset( $existing_by_type[ $type ] ) && ! empty( $existing_by_type[ $type ]['name'] ) ) {
+                $name     = trim( (string) $existing_by_type[ $type ]['name'], '/' );
+                $endpoint = '/' . $name;
+                $body['name'] = $name;
+
+                $result = self::make_request(
+                    $business_id,
+                    $endpoint,
+                    self::$place_actions_api_base,
+                    'PATCH',
+                    $body,
+                    false,
+                    array( 'updateMask' => 'uri' )
+                );
+
+                if ( is_wp_error( $result ) ) {
+                    return $result;
+                }
+
+                $operations[] = array(
+                    'operation' => 'patch',
+                    'type'      => $type,
+                    'uri'       => $target['uri'],
+                    'name'      => $name,
+                    'response'  => is_array( $result ) ? $result : array(),
+                );
+            } else {
+                $endpoint = '/' . rtrim( $normalized, '/' ) . '/placeActionLinks';
+                $result   = self::make_request(
+                    $business_id,
+                    $endpoint,
+                    self::$place_actions_api_base,
+                    'POST',
+                    $body,
+                    false,
+                    array()
+                );
+
+                if ( is_wp_error( $result ) ) {
+                    return $result;
+                }
+
+                $operations[] = array(
+                    'operation' => 'create',
+                    'type'      => $type,
+                    'uri'       => $target['uri'],
+                    'response'  => is_array( $result ) ? $result : array(),
+                );
+            }
+        }
+
+        return array(
+            'location'       => $normalized,
+            'operations'     => $operations,
+            'target_count'   => count( $targets ),
+            'existing_count' => count( $existing ),
+            'mode'           => 'sync_managed_contact_links',
+        );
+    }
+
+    /**
+     * Consulta el estado actual de contacto en GMB para polling.
+     *
+     * @param int    $business_id
+     * @param string $location_name
+     * @return array|WP_Error
+     */
+    public static function poll_location_contact_status( $business_id, $location_name ) {
+        return self::get_location_contact_snapshot( $business_id, $location_name );
     }
 
 
