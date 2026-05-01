@@ -2598,9 +2598,12 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             // porque Google lo trata como nombre inválido para el Attribute.
             $attribute['name'] = 'attributes/' . sanitize_key( $attr_id );
 
-            if ( ! isset( $attribute['valueType'] ) && ! empty( $attribute['uriValues'] ) ) {
-                $attribute['valueType'] = 'URL';
-            }
+            // En el recurso Attribute que se envía a locations.updateAttributes
+            // no forzamos valueType. Google lo devuelve en las lecturas, pero en
+            // escritura puede rechazarlo como argumento inválido para algunos
+            // atributos/categorías. El tipo queda determinado por el atributo y
+            // por el contenido enviado: uriValues para URL y values para ENUM.
+            unset( $attribute['valueType'] );
 
             if ( ! empty( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) ) {
                 foreach ( $attribute['uriValues'] as $idx => $uri_value ) {
@@ -2714,6 +2717,108 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         return $result;
     }
 
+    /**
+     * Actualiza un grupo de atributos y, si Google rechaza el PATCH agrupado,
+     * reintenta atributo por atributo para que un valor inválido no bloquee los
+     * demás campos válidos. Esto es crítico para Usuario de chat: si SMS tiene
+     * un número que Google rechaza, WhatsApp igual debe poder actualizarse.
+     *
+     * @param int    $business_id             WP Post ID del oy_business.
+     * @param string $normalized_location     Resource name corto locations/{id}.
+     * @param array  $attribute_replacements  Mapa [attribute_id => Attribute].
+     * @param array  $mask_items              IDs cortos a actualizar/limpiar.
+     * @param string $group_label             Etiqueta para logs.
+     * @param array  $warnings                Referencia de warnings acumulados.
+     * @return array Resultado consolidado.
+     */
+    private static function update_location_attributes_group_with_fallback( $business_id, $normalized_location, array $attribute_replacements, array $mask_items, $group_label, array &$warnings ) {
+        $mask_items = array_values( array_unique( array_filter( array_map( 'sanitize_key', $mask_items ) ) ) );
+        $group_label = sanitize_key( (string) $group_label );
+
+        if ( empty( $mask_items ) ) {
+            return array(
+                'status' => 'skipped',
+                'mode'   => 'none',
+                'mask'   => array(),
+            );
+        }
+
+        $payload = array();
+        foreach ( $mask_items as $attr_id ) {
+            if ( isset( $attribute_replacements[ $attr_id ] ) && is_array( $attribute_replacements[ $attr_id ] ) ) {
+                $payload[] = $attribute_replacements[ $attr_id ];
+            }
+        }
+
+        $group_result = self::update_location_attributes(
+            $business_id,
+            $normalized_location,
+            $payload,
+            $mask_items
+        );
+
+        if ( ! is_wp_error( $group_result ) ) {
+            return array(
+                'status'   => 'applied',
+                'mode'     => 'group',
+                'mask'     => array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $mask_items ),
+                'response' => $group_result,
+            );
+        }
+
+        $warnings[] = array(
+            'scope'   => 'attributes_' . $group_label,
+            'message' => $group_result->get_error_message(),
+            'code'    => $group_result->get_error_code(),
+            'mode'    => 'group_retry_individual',
+            'mask'    => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $mask_items ) ),
+        );
+
+        $responses = array();
+        $errors    = array();
+
+        foreach ( $mask_items as $attr_id ) {
+            $single_payload = array();
+            if ( isset( $attribute_replacements[ $attr_id ] ) && is_array( $attribute_replacements[ $attr_id ] ) ) {
+                $single_payload[] = $attribute_replacements[ $attr_id ];
+            }
+
+            $single_result = self::update_location_attributes(
+                $business_id,
+                $normalized_location,
+                $single_payload,
+                array( $attr_id )
+            );
+
+            if ( is_wp_error( $single_result ) ) {
+                $errors[ $attr_id ] = array(
+                    'message' => $single_result->get_error_message(),
+                    'code'    => $single_result->get_error_code(),
+                );
+                $warnings[] = array(
+                    'scope'   => 'attribute_' . $attr_id,
+                    'message' => $single_result->get_error_message(),
+                    'code'    => $single_result->get_error_code(),
+                    'mode'    => 'individual_retry_failed',
+                    'mask'    => self::normalize_contact_attribute_mask_item( $attr_id ),
+                );
+            } else {
+                $responses[ $attr_id ] = $single_result;
+            }
+        }
+
+        return array(
+            'status'      => empty( $errors ) ? 'applied' : ( empty( $responses ) ? 'failed' : 'partial' ),
+            'mode'        => 'individual_retry',
+            'mask'        => array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $mask_items ),
+            'responses'   => $responses,
+            'errors'      => $errors,
+            'group_error' => array(
+                'message' => $group_result->get_error_message(),
+                'code'    => $group_result->get_error_code(),
+            ),
+        );
+    }
 
 
 
@@ -4658,6 +4763,7 @@ public static function push_location_address( $business_id, $location_name, arra
 
         $warnings = array();
         $attribute_result = null;
+        $attribute_mask_attempted = array();
         $place_action_result = null;
 
         // ── Atributos URL/URI: chat, menú/servicios y redes sociales ──────────────
@@ -4789,25 +4895,55 @@ public static function push_location_address( $business_id, $location_name, arra
 
             $before_signature = self::normalize_contact_attribute_signature_map( $existing_contact_signature );
             $after_signature  = self::normalize_contact_attribute_signature_map( $attribute_replacements );
-            $should_patch_attributes = ( $before_signature !== $after_signature );
 
-            if ( $should_patch_attributes ) {
-                $attribute_result = self::update_location_attributes(
-                    $business_id,
-                    $normalized,
-                    array_values( $attribute_replacements ),
-                    $contact_attribute_ids
+            // No enviar un attributeMask gigante con atributos vacíos que Google
+            // puede rechazar para esta categoría/región. Solo se actualiza o
+            // limpia lo que realmente cambió entre GMB y Lealez.
+            $changed_attribute_ids = array();
+            foreach ( array_unique( array_merge( array_keys( $before_signature ), array_keys( $after_signature ) ) ) as $attr_id ) {
+                $before_attr = isset( $before_signature[ $attr_id ] ) ? $before_signature[ $attr_id ] : null;
+                $after_attr  = isset( $after_signature[ $attr_id ] ) ? $after_signature[ $attr_id ] : null;
+                if ( $before_attr !== $after_attr ) {
+                    $changed_attribute_ids[] = sanitize_key( $attr_id );
+                }
+            }
+
+            if ( ! empty( $changed_attribute_ids ) ) {
+                $chat_attribute_ids = array( 'url_whatsapp', 'url_text_messaging', 'preferred_messaging_service' );
+                $chat_mask          = array_values( array_intersect( $changed_attribute_ids, $chat_attribute_ids ) );
+                $other_mask         = array_values( array_diff( $changed_attribute_ids, $chat_attribute_ids ) );
+                $attribute_result   = array(
+                    'status'  => 'skipped',
+                    'groups'  => array(),
+                    'changed' => array_values( $changed_attribute_ids ),
                 );
 
-                if ( is_wp_error( $attribute_result ) ) {
-                    $warnings[] = array(
-                        'scope'   => 'attributes',
-                        'message' => $attribute_result->get_error_message(),
-                        'code'    => $attribute_result->get_error_code(),
+                if ( ! empty( $chat_mask ) ) {
+                    $attribute_result['groups']['chat'] = self::update_location_attributes_group_with_fallback(
+                        $business_id,
+                        $normalized,
+                        $attribute_replacements,
+                        $chat_mask,
+                        'chat',
+                        $warnings
                     );
-                } else {
-                    delete_transient( 'lealez_attrs_' . md5( (string) $business_id . '|' . rtrim( $normalized, '/' ) ) );
+                    $attribute_mask_attempted = array_merge( $attribute_mask_attempted, $chat_mask );
                 }
+
+                if ( ! empty( $other_mask ) ) {
+                    $attribute_result['groups']['contact_links'] = self::update_location_attributes_group_with_fallback(
+                        $business_id,
+                        $normalized,
+                        $attribute_replacements,
+                        $other_mask,
+                        'contact_links',
+                        $warnings
+                    );
+                    $attribute_mask_attempted = array_merge( $attribute_mask_attempted, $other_mask );
+                }
+
+                $attribute_result['status'] = empty( $warnings ) ? 'applied' : 'completed_with_warnings';
+                delete_transient( 'lealez_attrs_' . md5( (string) $business_id . '|' . rtrim( $normalized, '/' ) ) );
             }
         }
 
@@ -4839,7 +4975,7 @@ public static function push_location_address( $business_id, $location_name, arra
                     'warnings'          => $warnings,
                     'native_updateMask' => $update_mask_str,
                     'attributes_count'  => count( $attribute_replacements ),
-                    'attributeMask'     => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $contact_attribute_ids ) ),
+                    'attributeMask'     => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), array_values( array_unique( $attribute_mask_attempted ) ) ) ),
                     'place_actions'     => $place_action_result,
                 )
             );
@@ -4851,7 +4987,7 @@ public static function push_location_address( $business_id, $location_name, arra
             'submitted'             => $contact_data,
             'native_payload'        => $body,
             'attributes_submitted'  => $attribute_replacements,
-            'attribute_mask'        => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $contact_attribute_ids ) ),
+            'attribute_mask'        => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), array_values( array_unique( $attribute_mask_attempted ) ) ) ),
             'attributes_response'   => is_wp_error( $attribute_result ) ? null : $attribute_result,
             'place_actions_response'=> is_wp_error( $place_action_result ) ? null : $place_action_result,
             'warnings'              => $warnings,
