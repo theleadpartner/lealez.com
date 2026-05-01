@@ -2539,7 +2539,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
      *
      * @param int    $business_id        WP Post ID del oy_business (para tokens OAuth).
      * @param string $location_name      Resource name de la ubicación (cualquier formato aceptado).
-     * @param array  $attribute_replacements Array de atributos en formato GMB API v1:
+     * @param array  $attributes_payload Array de atributos en formato GMB API v1:
      *                                   [
      *                                     [
      *                                       'name'      => 'attributes/has_women_led',
@@ -2550,7 +2550,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
      *
      * @return array|WP_Error Respuesta de la API (el Attributes resource actualizado), o WP_Error.
      */
-    public static function update_location_attributes( $business_id, $location_name, $attribute_replacements ) {
+    public static function update_location_attributes( $business_id, $location_name, $attributes_payload ) {
         $business_id   = absint( $business_id );
         $location_name = trim( (string) $location_name );
 
@@ -2558,7 +2558,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_attributes.', 'lealez' ) );
         }
 
-        if ( empty( $attribute_replacements ) || ! is_array( $attribute_replacements ) ) {
+        if ( empty( $attributes_payload ) || ! is_array( $attributes_payload ) ) {
             return new WP_Error( 'empty_payload', __( 'No attributes provided to update.', 'lealez' ) );
         }
 
@@ -2580,18 +2580,18 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         // Body del PATCH: { "name": "locations/{id}/attributes", "attributes": [...] }
         $body = array(
             'name'       => $normalized_location . '/attributes',
-            'attributes' => $attribute_replacements,
+            'attributes' => $attributes_payload,
         );
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                sprintf( 'Updating %d attribute(s) for location.', count( $attribute_replacements ) ),
+                sprintf( 'Updating %d attribute(s) for location.', count( $attributes_payload ) ),
                 array(
                     'location' => $normalized_location,
                     'endpoint' => $endpoint,
-                    'count'    => count( $attribute_replacements ),
+                    'count'    => count( $attributes_payload ),
                 )
             );
         }
@@ -2633,7 +2633,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log(
                 '[OY GMB More] update_location_attributes: OK for ' . $normalized_location .
-                ' (' . count( $attribute_replacements ) . ' attr(s) updated)'
+                ' (' . count( $attributes_payload ) . ' attr(s) updated)'
             );
         }
 
@@ -3848,17 +3848,13 @@ public static function push_location_address( $business_id, $location_name, arra
     }
 
 
+
+
     // =========================================================================
     // CONTACT PUSH — Business Information API v1 + Attributes + Place Actions
     // Arquitectura: snapshot antes del PATCH → PATCH → polling WP-Cron
     // =========================================================================
 
-    /**
-     * Normaliza un resource name de ubicación a formato corto `locations/{id}`.
-     *
-     * @param string $location_name Resource name recibido desde Lealez/GMB.
-     * @return string|WP_Error
-     */
     private static function normalize_contact_location_name( $location_name ) {
         $location_name = trim( (string) $location_name );
 
@@ -3950,7 +3946,7 @@ public static function push_location_address( $business_id, $location_name, arra
      * @param string $location_name Resource name de GMB.
      * @return array|WP_Error
      */
-    public static function get_location_contact_snapshot( $business_id, $location_name ) {
+    public static function get_location_contact_snapshot( $business_id, $location_name, $force_refresh = true ) {
         $business_id = absint( $business_id );
         $normalized  = self::normalize_contact_location_name( $location_name );
 
@@ -3978,7 +3974,7 @@ public static function push_location_address( $business_id, $location_name, arra
             self::$business_api_base,
             'GET',
             array(),
-            false,
+            ! $force_refresh,
             array( 'readMask' => $read_mask )
         );
 
@@ -3988,7 +3984,7 @@ public static function push_location_address( $business_id, $location_name, arra
 
         $snapshot = is_array( $result ) ? $result : array();
 
-        $attributes = self::get_location_attributes( $business_id, $normalized, false );
+        $attributes = self::get_location_attributes( $business_id, $normalized, ! $force_refresh );
         if ( is_wp_error( $attributes ) ) {
             $snapshot['_contact_aux_errors']['attributes'] = $attributes->get_error_message();
             $snapshot['attributes'] = array();
@@ -3996,7 +3992,7 @@ public static function push_location_address( $business_id, $location_name, arra
             $snapshot['attributes'] = is_array( $attributes ) ? $attributes : array();
         }
 
-        $place_action_links = self::get_location_place_action_links( $business_id, $normalized, false );
+        $place_action_links = self::get_location_place_action_links( $business_id, $normalized, ! $force_refresh );
         if ( is_wp_error( $place_action_links ) ) {
             $snapshot['_contact_aux_errors']['placeActionLinks'] = $place_action_links->get_error_message();
             $snapshot['placeActionLinks'] = array();
@@ -4033,10 +4029,20 @@ public static function push_location_address( $business_id, $location_name, arra
             return is_wp_error( $normalized ) ? $normalized : new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
         }
 
-        $primary_phone     = isset( $contact_data['primaryPhone'] ) ? trim( sanitize_text_field( (string) $contact_data['primaryPhone'] ) ) : '';
-        $additional_phones = array();
+        $primary_phone = isset( $contact_data['primaryPhone'] )
+            ? trim( sanitize_text_field( (string) $contact_data['primaryPhone'] ) )
+            : ( isset( $contact_data['location_phone'] ) ? trim( sanitize_text_field( (string) $contact_data['location_phone'] ) ) : '' );
+
+        $raw_additional_phones = array();
         if ( ! empty( $contact_data['additionalPhones'] ) && is_array( $contact_data['additionalPhones'] ) ) {
-            foreach ( $contact_data['additionalPhones'] as $phone ) {
+            $raw_additional_phones = $contact_data['additionalPhones'];
+        } elseif ( ! empty( $contact_data['gmb_phone_additional_list'] ) && is_array( $contact_data['gmb_phone_additional_list'] ) ) {
+            $raw_additional_phones = $contact_data['gmb_phone_additional_list'];
+        }
+
+        $additional_phones = array();
+        if ( ! empty( $raw_additional_phones ) && is_array( $raw_additional_phones ) ) {
+            foreach ( $raw_additional_phones as $phone ) {
                 $phone = trim( sanitize_text_field( (string) $phone ) );
                 if ( '' !== $phone && ! in_array( $phone, $additional_phones, true ) ) {
                     $additional_phones[] = $phone;
@@ -4044,7 +4050,9 @@ public static function push_location_address( $business_id, $location_name, arra
             }
         }
 
-        $website_uri = isset( $contact_data['websiteUri'] ) ? esc_url_raw( (string) $contact_data['websiteUri'] ) : '';
+        $website_uri = isset( $contact_data['websiteUri'] )
+            ? esc_url_raw( (string) $contact_data['websiteUri'] )
+            : ( isset( $contact_data['location_website'] ) ? esc_url_raw( (string) $contact_data['location_website'] ) : '' );
 
         $body        = array();
         $update_mask = array();
@@ -4129,7 +4137,9 @@ public static function push_location_address( $business_id, $location_name, arra
             'url_pinterest',
         );
 
-        $chat_url = isset( $contact_data['chatUrl'] ) ? esc_url_raw( (string) $contact_data['chatUrl'] ) : '';
+        $chat_url = isset( $contact_data['chatUrl'] )
+            ? esc_url_raw( (string) $contact_data['chatUrl'] )
+            : ( isset( $contact_data['location_chat_url'] ) ? esc_url_raw( (string) $contact_data['location_chat_url'] ) : '' );
         if ( '' !== $chat_url ) {
             $chat_attr = ( false !== strpos( strtolower( $chat_url ), 'wa.me/' ) || false !== strpos( strtolower( $chat_url ), 'whatsapp' ) )
                 ? 'url_whatsapp'
@@ -4137,7 +4147,9 @@ public static function push_location_address( $business_id, $location_name, arra
             $attribute_replacements[ $chat_attr ] = self::build_contact_url_attribute( $normalized, $chat_attr, $chat_url );
         }
 
-        $menu_url = isset( $contact_data['menuUrl'] ) ? esc_url_raw( (string) $contact_data['menuUrl'] ) : '';
+        $menu_url = isset( $contact_data['menuUrl'] )
+            ? esc_url_raw( (string) $contact_data['menuUrl'] )
+            : ( isset( $contact_data['location_menu_url'] ) ? esc_url_raw( (string) $contact_data['location_menu_url'] ) : ( isset( $contact_data['location_menu_url_gmb'] ) ? esc_url_raw( (string) $contact_data['location_menu_url_gmb'] ) : '' ) );
         if ( '' !== $menu_url ) {
             $attribute_replacements['url_menu'] = self::build_contact_url_attribute( $normalized, 'url_menu', $menu_url );
         }
@@ -4152,7 +4164,9 @@ public static function push_location_address( $business_id, $location_name, arra
             'pinterest' => 'url_pinterest',
         );
 
-        $social_profiles = isset( $contact_data['socialProfiles'] ) && is_array( $contact_data['socialProfiles'] ) ? $contact_data['socialProfiles'] : array();
+        $social_profiles = isset( $contact_data['socialProfiles'] ) && is_array( $contact_data['socialProfiles'] )
+            ? $contact_data['socialProfiles']
+            : ( ( isset( $contact_data['social_profiles_manual'] ) && is_array( $contact_data['social_profiles_manual'] ) ) ? $contact_data['social_profiles_manual'] : array() );
         foreach ( $social_profiles as $network => $url ) {
             $network = sanitize_key( (string) $network );
             $url     = esc_url_raw( (string) $url );
@@ -4235,8 +4249,12 @@ public static function push_location_address( $business_id, $location_name, arra
         }
 
         // ── PlaceActionLinks: reservas y ordenar online ──────────────────────────
-        $booking_urls = isset( $contact_data['bookingUrls'] ) && is_array( $contact_data['bookingUrls'] ) ? $contact_data['bookingUrls'] : array();
-        $order_urls   = isset( $contact_data['orderUrls'] ) && is_array( $contact_data['orderUrls'] ) ? $contact_data['orderUrls'] : array();
+        $booking_urls = isset( $contact_data['bookingUrls'] ) && is_array( $contact_data['bookingUrls'] )
+            ? $contact_data['bookingUrls']
+            : ( ( isset( $contact_data['location_booking_urls'] ) && is_array( $contact_data['location_booking_urls'] ) ) ? $contact_data['location_booking_urls'] : array() );
+        $order_urls   = isset( $contact_data['orderUrls'] ) && is_array( $contact_data['orderUrls'] )
+            ? $contact_data['orderUrls']
+            : ( ( isset( $contact_data['location_order_urls'] ) && is_array( $contact_data['location_order_urls'] ) ) ? $contact_data['location_order_urls'] : array() );
         $place_action_result = self::sync_location_place_action_links( $business_id, $normalized, $booking_urls, $order_urls );
         if ( is_wp_error( $place_action_result ) ) {
             $warnings[] = array(
@@ -4368,6 +4386,19 @@ public static function push_location_address( $business_id, $location_name, arra
                 continue;
             }
 
+            $is_editable   = ! array_key_exists( 'isEditable', $link ) || ! empty( $link['isEditable'] );
+            $provider_type = strtoupper( trim( (string) ( $link['providerType'] ?? '' ) ) );
+            if ( ! $is_editable || ( '' !== $provider_type && 'MERCHANT' !== $provider_type ) ) {
+                $operations[] = array(
+                    'operation' => 'skip_delete_uneditable_or_provider_link',
+                    'type'      => $type,
+                    'uri'       => $uri,
+                    'name'      => $name,
+                    'provider'  => $provider_type,
+                );
+                continue;
+            }
+
             $delete_result = self::make_request(
                 $business_id,
                 '/' . $name,
@@ -4400,7 +4431,7 @@ public static function push_location_address( $business_id, $location_name, arra
             $body = array(
                 'placeActionType' => $type,
                 'uri'             => $target['uri'],
-                'providerType'    => 'MERCHANT',
+                'isPreferred'     => true,
             );
 
             if ( isset( $existing_by_type[ $type ] ) && ! empty( $existing_by_type[ $type ]['name'] ) ) {
@@ -4415,7 +4446,7 @@ public static function push_location_address( $business_id, $location_name, arra
                     'PATCH',
                     $body,
                     false,
-                    array( 'updateMask' => 'uri' )
+                    array( 'updateMask' => 'uri,isPreferred' )
                 );
 
                 if ( is_wp_error( $result ) ) {
@@ -4471,9 +4502,8 @@ public static function push_location_address( $business_id, $location_name, arra
      * @return array|WP_Error
      */
     public static function poll_location_contact_status( $business_id, $location_name ) {
-        return self::get_location_contact_snapshot( $business_id, $location_name );
+        return self::get_location_contact_snapshot( $business_id, $location_name, true );
     }
-
 
     /**
      * Busca categorías oficiales de Google Business Profile para autocomplete.
