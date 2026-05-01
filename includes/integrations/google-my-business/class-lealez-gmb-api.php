@@ -4140,11 +4140,22 @@ public static function push_location_address( $business_id, $location_name, arra
         $chat_url = isset( $contact_data['chatUrl'] )
             ? esc_url_raw( (string) $contact_data['chatUrl'] )
             : ( isset( $contact_data['location_chat_url'] ) ? esc_url_raw( (string) $contact_data['location_chat_url'] ) : '' );
+
         if ( '' !== $chat_url ) {
-            $chat_attr = ( false !== strpos( strtolower( $chat_url ), 'wa.me/' ) || false !== strpos( strtolower( $chat_url ), 'whatsapp' ) )
-                ? 'url_whatsapp'
-                : 'url_text_messaging';
-            $attribute_replacements[ $chat_attr ] = self::build_contact_url_attribute( $normalized, $chat_attr, $chat_url );
+            /*
+             * El editor web de Google suele mostrar "Usuario de chat" desde atributos URL.
+             * En algunas fichas Google devuelve/acepta url_whatsapp y en otras url_text_messaging.
+             * La versión anterior escogía solo uno; por eso un enlace wa.me podía guardarse en
+             * Lealez pero no aparecer visualmente en la sección Contacto de GMB. Para reflejarlo
+             * como en la interfaz de Google, Lealez publica el mismo valor en ambos atributos
+             * controlados cuando el enlace es WhatsApp, y siempre mantiene url_text_messaging
+             * como fallback oficial de mensajería.
+             */
+            $attribute_replacements['url_text_messaging'] = self::build_contact_url_attribute( $normalized, 'url_text_messaging', $chat_url );
+
+            if ( false !== strpos( strtolower( $chat_url ), 'wa.me/' ) || false !== strpos( strtolower( $chat_url ), 'whatsapp' ) ) {
+                $attribute_replacements['url_whatsapp'] = self::build_contact_url_attribute( $normalized, 'url_whatsapp', $chat_url );
+            }
         }
 
         $menu_url = isset( $contact_data['menuUrl'] )
