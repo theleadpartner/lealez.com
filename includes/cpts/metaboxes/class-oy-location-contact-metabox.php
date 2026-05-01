@@ -216,7 +216,6 @@ class OY_Location_Contact_Metabox {
             'location_phone'             => isset( $_POST['location_phone'] ) ? sanitize_text_field( wp_unslash( $_POST['location_phone'] ) ) : '',
             'gmb_phone_additional_list'  => $this->normalize_phone_list( $additional_phones_raw ),
             'location_chat_url'          => isset( $_POST['location_chat_url'] ) ? esc_url_raw( wp_unslash( $_POST['location_chat_url'] ) ) : '',
-            'location_email'             => isset( $_POST['location_email'] ) ? sanitize_email( wp_unslash( $_POST['location_email'] ) ) : '',
             'location_website'           => isset( $_POST['location_website'] ) ? esc_url_raw( wp_unslash( $_POST['location_website'] ) ) : '',
             'location_menu_url'          => isset( $_POST['location_menu_url_gmb'] ) ? esc_url_raw( wp_unslash( $_POST['location_menu_url_gmb'] ) ) : '',
             'location_booking_urls'      => $this->normalize_url_entries( $booking_urls_raw, 'APPOINTMENT', __( 'Reservas', 'lealez' ) ),
@@ -248,7 +247,6 @@ class OY_Location_Contact_Metabox {
         $simple_fields = array(
             'location_phone',
             'location_chat_url',
-            'location_email',
             'location_website',
         );
 
@@ -260,6 +258,9 @@ class OY_Location_Contact_Metabox {
                 delete_post_meta( $post_id, $meta_key );
             }
         }
+
+        // GMB no expone un campo de email en Business Profile; se elimina de Contacto para evitar datos que no sincronizan.
+        delete_post_meta( $post_id, 'location_email' );
 
         $additional_phones = isset( $payload['gmb_phone_additional_list'] ) && is_array( $payload['gmb_phone_additional_list'] )
             ? array_values( $payload['gmb_phone_additional_list'] )
@@ -343,6 +344,86 @@ class OY_Location_Contact_Metabox {
         }
 
         return $save_meta;
+    }
+
+    /**
+     * Convierte un valor de contacto en texto para el log visual.
+     *
+     * @param mixed $value Valor.
+     * @return string
+     */
+    private function stringify_contact_value_for_log( $value ) {
+        if ( is_array( $value ) ) {
+            $parts = array();
+            foreach ( $value as $key => $item ) {
+                if ( is_array( $item ) ) {
+                    if ( isset( $item['network'], $item['url'] ) ) {
+                        $parts[] = sanitize_key( (string) $item['network'] ) . ': ' . esc_url_raw( (string) $item['url'] );
+                    } elseif ( isset( $item['url'] ) ) {
+                        $type    = isset( $item['type'] ) ? strtoupper( sanitize_text_field( (string) $item['type'] ) ) : '';
+                        $parts[] = ( $type ? $type . ': ' : '' ) . esc_url_raw( (string) $item['url'] );
+                    } else {
+                        $parts[] = wp_json_encode( $item );
+                    }
+                } elseif ( is_string( $key ) && ! is_numeric( $key ) ) {
+                    $parts[] = sanitize_key( (string) $key ) . ': ' . trim( (string) $item );
+                } else {
+                    $parts[] = trim( (string) $item );
+                }
+            }
+            $parts = array_values( array_filter( $parts, static function( $item ) {
+                return '' !== trim( (string) $item );
+            } ) );
+            sort( $parts );
+            return implode( ', ', $parts );
+        }
+
+        return trim( (string) $value );
+    }
+
+    /**
+     * Construye filas de diff de Contacto para el log, usando el estado actual de GMB y lo enviado desde Lealez.
+     *
+     * @param array $before_payload Payload antes.
+     * @param array $after_payload  Payload después.
+     * @return array
+     */
+    private function build_contact_diff_rows( array $before_payload, array $after_payload ) {
+        $fields = array(
+            'location_phone'            => __( 'Teléfono principal', 'lealez' ),
+            'gmb_phone_additional_list' => __( 'Teléfonos adicionales', 'lealez' ),
+            'location_chat_url'         => __( 'Usuario de chat', 'lealez' ),
+            'location_website'          => __( 'Sitio Web', 'lealez' ),
+            'location_menu_url'         => __( 'Vínculo del Menú / Servicios', 'lealez' ),
+            'location_booking_urls'     => __( 'URLs de Reservas', 'lealez' ),
+            'location_order_urls'       => __( 'URLs para Ordenar Online', 'lealez' ),
+            'social_profiles_manual'    => __( 'Redes sociales', 'lealez' ),
+        );
+
+        $rows = array();
+        foreach ( $fields as $key => $label ) {
+            $before = $this->stringify_contact_value_for_log( $before_payload[ $key ] ?? '' );
+            $after  = $this->stringify_contact_value_for_log( $after_payload[ $key ] ?? '' );
+
+            if ( $before === $after ) {
+                $status = 'unchanged';
+            } elseif ( '' === $before && '' !== $after ) {
+                $status = 'new';
+            } elseif ( '' !== $before && '' === $after ) {
+                $status = 'removed';
+            } else {
+                $status = 'changed';
+            }
+
+            $rows[] = array(
+                'label'  => $label,
+                'before' => $before,
+                'after'  => $after,
+                'status' => $status,
+            );
+        }
+
+        return $rows;
     }
 
     /**
@@ -497,7 +578,6 @@ class OY_Location_Contact_Metabox {
             'location_phone'            => isset( $phone_numbers['primaryPhone'] ) ? sanitize_text_field( (string) $phone_numbers['primaryPhone'] ) : '',
             'gmb_phone_additional_list' => isset( $phone_numbers['additionalPhones'] ) && is_array( $phone_numbers['additionalPhones'] ) ? $this->normalize_phone_list( $phone_numbers['additionalPhones'] ) : array(),
             'location_chat_url'         => $this->get_first_attribute_uri_by_keys( $attributes, array( 'url_whatsapp', 'url_text_messaging' ) ),
-            'location_email'            => '',
             'location_website'          => ! empty( $snapshot['websiteUri'] ) ? esc_url_raw( (string) $snapshot['websiteUri'] ) : '',
             'location_menu_url'         => $this->get_first_attribute_uri_by_keys( $attributes, array( 'url_menu', 'url_food_menu', 'menu_url' ) ),
             'location_booking_urls'     => $mapped_links['booking'],
@@ -536,8 +616,6 @@ class OY_Location_Contact_Metabox {
         }
 
         $payload = $this->build_contact_payload_from_gmb_snapshot( $snapshot );
-        // Email es manual y GMB no lo devuelve; conservarlo.
-        $payload['location_email'] = (string) get_post_meta( $post_id, 'location_email', true );
         $this->persist_contact_payload( $post_id, $payload, 'sync_from_gmb_button', false );
 
         update_post_meta( $post_id, 'gmb_contact_last_sync_snapshot', $snapshot );
@@ -566,7 +644,6 @@ class OY_Location_Contact_Metabox {
             'location_phone'            => (string) get_post_meta( $post_id, 'location_phone', true ),
             'gmb_phone_additional_list' => $this->normalize_phone_list( get_post_meta( $post_id, 'gmb_phone_additional_list', true ) ),
             'location_chat_url'         => (string) get_post_meta( $post_id, 'location_chat_url', true ),
-            'location_email'            => (string) get_post_meta( $post_id, 'location_email', true ),
             'location_website'          => (string) get_post_meta( $post_id, 'location_website', true ),
             'location_menu_url'         => (string) get_post_meta( $post_id, 'location_menu_url', true ),
             'location_booking_urls'     => is_array( $booking_urls ) ? $this->normalize_url_entries( $booking_urls, 'APPOINTMENT', __( 'Reservas', 'lealez' ) ) : array(),
@@ -614,8 +691,10 @@ class OY_Location_Contact_Metabox {
             }
         }
 
-        $payload = $this->get_contact_payload_from_db( $post_id );
-        $result  = Lealez_GMB_API::push_location_contact( $business_id, $location_name, $payload );
+        $payload            = $this->get_contact_payload_from_db( $post_id );
+        $gmb_payload_before = $this->build_contact_payload_from_gmb_snapshot( is_array( $snapshot ) ? $snapshot : array() );
+        $diff_before_push   = $this->build_contact_diff_rows( $gmb_payload_before, $payload );
+        $result             = Lealez_GMB_API::push_location_contact( $business_id, $location_name, $payload );
         if ( is_wp_error( $result ) ) {
             $err_data   = $result->get_error_data();
             $raw_preview = '';
@@ -662,9 +741,12 @@ class OY_Location_Contact_Metabox {
 
         wp_send_json_success( array(
             'message'    => __( 'Cambios de contacto enviados a Google Business Profile. Estado: pendiente de revisión/verificación. El sistema chequeará automáticamente.', 'lealez' ),
-            'status'     => 'pending_review',
-            'panel_html' => $this->render_contact_push_panel( $post_id ),
-            'result'     => $result,
+            'status'          => 'pending_review',
+            'panel_html'      => $this->render_contact_push_panel( $post_id ),
+            'result'          => $result,
+            'snapshot_before' => $snapshot,
+            'submitted'       => $payload,
+            'diff'            => $diff_before_push,
         ) );
     }
 
@@ -690,6 +772,8 @@ class OY_Location_Contact_Metabox {
             wp_send_json_success( array(
                 'status'     => $job['status'],
                 'panel_html' => $this->render_contact_push_panel( $post_id ),
+                'job'        => $job,
+                'message'    => __( 'El cambio de contacto ya estaba resuelto localmente.', 'lealez' ),
             ) );
         }
 
@@ -722,8 +806,11 @@ class OY_Location_Contact_Metabox {
         }
 
         wp_send_json_success( array(
-            'status'     => $new_status,
-            'panel_html' => $this->render_contact_push_panel( $post_id ),
+            'status'          => $new_status,
+            'panel_html'      => $this->render_contact_push_panel( $post_id ),
+            'job'             => $job,
+            'current_snapshot'=> $current,
+            'message'         => sprintf( __( 'Verificación ejecutada. Estado actual: %s', 'lealez' ), $new_status ),
         ) );
     }
 
@@ -1102,7 +1189,7 @@ class OY_Location_Contact_Metabox {
             var MAX_LOG = 20;
 
             var FIELD_SELECTORS = [
-                '#location_phone', '#location_chat_url', '#location_email', '#location_website', '#location_menu_url_gmb',
+                '#location_phone', '#location_chat_url', '#location_website', '#location_menu_url_gmb',
                 'input[name="gmb_phone_additional_list[]"]',
                 'input[name^="location_booking_urls"]',
                 'input[name^="location_order_urls"]',
@@ -1117,7 +1204,6 @@ class OY_Location_Contact_Metabox {
                 { key:'location_phone', selector:'#location_phone', label:'Teléfono principal' },
                 { key:'gmb_phone_additional_list', selector:'input[name="gmb_phone_additional_list[]"]', label:'Teléfonos adicionales', type:'array' },
                 { key:'location_chat_url', selector:'#location_chat_url', label:'Usuario de chat' },
-                { key:'location_email', selector:'#location_email', label:'Email' },
                 { key:'location_website', selector:'#location_website', label:'Sitio Web' },
                 { key:'location_menu_url', selector:'#location_menu_url_gmb', label:'Vínculo del Menú / Servicios' },
                 { key:'location_booking_urls', selector:'#oy-booking-urls-list .oy-booking-url-row', label:'URLs de Reservas', type:'urlRows' },
@@ -1229,7 +1315,6 @@ class OY_Location_Contact_Metabox {
             function applyState(state){
                 $('#location_phone').val(state.location_phone || '');
                 $('#location_chat_url').val(state.location_chat_url || '');
-                $('#location_email').val(state.location_email || '');
                 $('#location_website').val(state.location_website || '');
                 $('#location_menu_url_gmb').val(state.location_menu_url || '');
                 $('#oy-additional-phones-list').empty();
@@ -1268,21 +1353,69 @@ class OY_Location_Contact_Metabox {
                     .fail(function(xhr,status){ setStatus(status === 'timeout' ? 'Timeout al guardar el metabox. Intenta de nuevo.' : 'Error de red al guardar el metabox.','error'); })
                     .always(function(){ editorState.saving = false; updateUiState(); });
             }
+            function escHtml(value){ return $('<div>').text(value === null || typeof value === 'undefined' ? '' : value).html(); }
             function readLog(){ try { var arr = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); return Array.isArray(arr) ? arr : []; } catch(e){ return []; } }
             function writeLog(arr){ try { localStorage.setItem(LS_KEY, JSON.stringify(arr.slice(0, MAX_LOG))); } catch(e){} }
+            function summarizeRaw(raw){
+                raw = raw || {};
+                var parts = [];
+                if (raw.status) { parts.push('Estado: ' + raw.status); }
+                if (raw.message) { parts.push(raw.message); }
+                if (raw.result && raw.result.update_mask) { parts.push('updateMask: ' + raw.result.update_mask); }
+                if (raw.result && raw.result.attributes_submitted) { parts.push('Atributos URL enviados: ' + Object.keys(raw.result.attributes_submitted || {}).join(', ')); }
+                if (raw.result && raw.result.place_actions_response && raw.result.place_actions_response.operations) { parts.push('Place Actions: ' + raw.result.place_actions_response.operations.length + ' operación(es)'); }
+                if (raw.result && raw.result.warnings && raw.result.warnings.length) { parts.push('Advertencias API: ' + raw.result.warnings.length); }
+                if (raw.snapshot && raw.snapshot._contact_aux_errors) { parts.push('Errores auxiliares: ' + JSON.stringify(raw.snapshot._contact_aux_errors)); }
+                return parts.join(' · ');
+            }
             function renderLog(){
                 var $container = $('#oy-contact-log-entries'); if (!$container.length) { return; }
                 var entries = readLog(); $container.empty();
                 if (!entries.length) { $container.html('<div style="padding:12px 14px; font-size:12px; color:#777;">Sin registros todavía.</div>'); return; }
                 entries.forEach(function(entry){
-                    var rows = (entry.diff || []).map(function(r){ return '<li><strong>'+ $('<div>').text(r.label).html() +'</strong>: <code>'+ $('<div>').text(r.before || '—').html() +'</code> → <code>'+ $('<div>').text(r.after || '—').html() +'</code></li>'; }).join('');
-                    $container.append('<div style="padding:10px 14px;border-bottom:1px solid #f0f0f0;font-size:12px;"><div><strong>'+ $('<div>').text(entry.title || 'Evento').html() +'</strong> <span style="color:#777;">'+ $('<div>').text(entry.at || '').html() +'</span></div>'+(rows ? '<ul style="margin:6px 0 0 18px;">'+rows+'</ul>' : '<div style="color:#777;margin-top:4px;">Sin cambios detectados.</div>')+'</div>');
+                    var diff = Array.isArray(entry.diff) ? entry.diff : [];
+                    var changedCount = diff.filter(function(r){ return r.status === 'changed' || r.status === 'new' || r.status === 'removed'; }).length;
+                    var statusLabel = changedCount ? ('✏️ ' + changedCount + ' campo' + (changedCount !== 1 ? 's' : '') + ' con diferencia') : '✅ Sin diferencias de campos';
+                    var statusColor = changedCount ? '#e06800' : '#46b450';
+                    var rawSummary = summarizeRaw(entry.raw || {});
+                    var html = '';
+                    html += '<div style="padding:12px 14px;border-bottom:1px solid #f0f0f0;font-size:12px;background:#fff;">';
+                    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">';
+                    html += '<div><strong style="font-size:13px;color:#1d2327;">' + escHtml(entry.title || 'Evento') + '</strong> <span style="color:#777;">' + escHtml(entry.at || '') + '</span></div>';
+                    html += '<span style="font-size:11px;font-weight:600;color:' + statusColor + ';">' + escHtml(statusLabel) + '</span>';
+                    html += '</div>';
+                    if (rawSummary) { html += '<div style="margin-top:5px;color:#666;line-height:1.45;">' + escHtml(rawSummary) + '</div>'; }
+                    if (diff.length) {
+                        html += '<table style="margin-top:8px;width:100%;border-collapse:collapse;font-size:11px;">';
+                        html += '<thead><tr style="background:#f6f7f7;"><th style="text-align:left;padding:5px 7px;border:1px solid #ececec;">Campo</th><th style="text-align:left;padding:5px 7px;border:1px solid #ececec;">Antes / GMB</th><th style="text-align:left;padding:5px 7px;border:1px solid #ececec;">Después / Lealez</th><th style="text-align:left;padding:5px 7px;border:1px solid #ececec;">Estado</th></tr></thead><tbody>';
+                        diff.forEach(function(r){
+                            var cfg = { changed:['Modificado','#e06800'], new:['Nuevo','#2271b1'], removed:['Eliminado','#dc3232'], unchanged:['Sin cambio','#46b450'] }[r.status || 'changed'] || ['Modificado','#e06800'];
+                            html += '<tr>';
+                            html += '<td style="padding:5px 7px;border:1px solid #f0f0f0;font-weight:600;">' + escHtml(r.label || '') + '</td>';
+                            html += '<td style="padding:5px 7px;border:1px solid #f0f0f0;font-family:monospace;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(r.before || '—') + '">' + escHtml(r.before || '—') + '</td>';
+                            html += '<td style="padding:5px 7px;border:1px solid #f0f0f0;font-family:monospace;font-weight:' + ((r.status || '') !== 'unchanged' ? '600' : '400') + ';max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + escHtml(r.after || '—') + '">' + escHtml(r.after || '—') + '</td>';
+                            html += '<td style="padding:5px 7px;border:1px solid #f0f0f0;color:' + cfg[1] + ';font-weight:600;">' + escHtml(cfg[0]) + '</td>';
+                            html += '</tr>';
+                        });
+                        html += '</tbody></table>';
+                    } else {
+                        html += '<div style="color:#777;margin-top:6px;">Sin cambios detectados en los campos comparados.</div>';
+                    }
+                    if (entry.raw && Object.keys(entry.raw).length) {
+                        html += '<details style="margin-top:8px;"><summary style="cursor:pointer;color:#2271b1;font-weight:600;">Ver detalle técnico del evento</summary>';
+                        html += '<pre style="margin:6px 0 0;padding:8px;max-height:240px;overflow:auto;background:#f6f7f7;border:1px solid #e5e5e5;border-radius:3px;font-size:11px;line-height:1.4;white-space:pre-wrap;">' + escHtml(JSON.stringify(entry.raw, null, 2)) + '</pre>';
+                        html += '</details>';
+                    }
+                    html += '</div>';
+                    $container.append(html);
                 });
             }
             function addLogEntry(raw, diff, source){
                 var entries = readLog();
-                entries.unshift({ title: source === 'button' ? 'Sincronización desde GMB' : (source === 'push' ? 'Envío a GMB' : 'Guardado local'), at:(new Date()).toLocaleString(), raw:raw || {}, diff:diff || [] });
+                var titleMap = { button:'Sincronización desde GMB', push:'Envío a GMB', metabox_save:'Guardado local', check:'Verificación de estado' };
+                entries.unshift({ title: titleMap[source] || 'Evento de Contacto', at:(new Date()).toLocaleString(), raw:raw || {}, diff:diff || [] });
                 writeLog(entries); renderLog();
+                if ($('#oy-contact-log-body').is(':hidden')) { $('#oy-contact-log-body').show(); $('#oy-contact-log-toggle-icon').text('▼'); }
             }
             function updateFormFromPayload(payload){
                 if (!payload) { return; }
@@ -1348,7 +1481,7 @@ class OY_Location_Contact_Metabox {
                 $btn.prop('disabled', true); $btn.find('.dashicons').addClass('spin'); setPushMsg('Enviando contacto a Google Business Profile...','loading');
                 $.ajax({ url:ajaxUrl, type:'POST', timeout:60000, data:{ action:'oy_push_contact_to_gmb', nonce:nonce, post_id:postId } })
                     .done(function(resp){
-                        if (resp && resp.success) { setPushMsg((resp.data && resp.data.message) ? resp.data.message : 'Contacto enviado.','success'); addLogEntry(resp.data || {}, [], 'push'); if (resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); } }
+                        if (resp && resp.success) { setPushMsg((resp.data && resp.data.message) ? resp.data.message : 'Contacto enviado.','success'); addLogEntry(resp.data || {}, (resp.data && resp.data.diff) ? resp.data.diff : [], 'push'); if (resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); } }
                         else { setPushMsg((resp && resp.data && resp.data.message) ? resp.data.message : 'Error desconocido al enviar.','error'); if (resp && resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); } }
                     })
                     .fail(function(xhr,status){ setPushMsg(status === 'timeout' ? 'Timeout: Google tardó demasiado. Intenta de nuevo.' : 'Error de red al enviar. Revisa la consola.','error'); })
@@ -1361,7 +1494,7 @@ class OY_Location_Contact_Metabox {
                 if (!nonce) { setPushMsg('Error: nonce de verificación no disponible. Recarga la página.','error'); return; }
                 $btn.prop('disabled', true); $btn.find('.dashicons').addClass('spin'); setPushMsg('Consultando Google Business Profile...','loading');
                 $.ajax({ url:ajaxUrl, type:'POST', timeout:45000, data:{ action:'oy_check_contact_push_status', nonce:nonce, post_id:postId } })
-                    .done(function(resp){ if (resp && resp.success && resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); setPushMsg('', 'info'); } else { setPushMsg((resp && resp.data && resp.data.message) ? resp.data.message : 'Error desconocido al verificar.','error'); } })
+                    .done(function(resp){ if (resp && resp.success && resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); addLogEntry(resp.data || {}, [], 'check'); setPushMsg('', 'info'); } else { setPushMsg((resp && resp.data && resp.data.message) ? resp.data.message : 'Error desconocido al verificar.','error'); } })
                     .fail(function(){ setPushMsg('Error de red al verificar. Intenta de nuevo.','error'); })
                     .always(function(){ $btn.prop('disabled', false); $btn.find('.dashicons').removeClass('spin'); });
             });
@@ -1388,7 +1521,6 @@ class OY_Location_Contact_Metabox {
         if ( empty( $chat_url ) ) {
             $chat_url = get_post_meta( $post->ID, 'location_whatsapp', true );
         }
-        $email               = get_post_meta( $post->ID, 'location_email', true );
         $website             = get_post_meta( $post->ID, 'location_website', true );
         // NOTA: location_menu_url se gestiona en el metabox "Menú del Negocio" (class-oy-location-menu-metabox.php)
 
@@ -1536,14 +1668,14 @@ class OY_Location_Contact_Metabox {
                            value="<?php echo esc_attr( $chat_url ); ?>"
                            class="large-text"
                            placeholder="https://wa.me/573001234567">
-                    <p class="description"><?php _e( 'Permite que los clientes chateen con tu empresa vía WhatsApp o SMS. 🔄 Se importa automáticamente desde GMB (<code>url_whatsapp</code> / <code>url_text_messaging</code>) — o puedes ingresarlo manualmente.', 'lealez' ); ?></p>
+                    <p class="description"><?php _e( 'Permite que los clientes chateen con tu empresa vía WhatsApp o SMS. 🔄 Se importa automáticamente desde GMB (<code>url_whatsapp</code> / <code>url_text_messaging</code>) y al enviarlo a GMB Lealez publica ambos atributos compatibles cuando corresponde, para que se refleje en la sección Usuario de chat.', 'lealez' ); ?></p>
                 </td>
             </tr>
         </table>
 
         <hr style="margin:16px 0;">
 
-        <h4><?php _e( '📧 Contacto Web', 'lealez' ); ?></h4>
+        <h4><?php _e( '🌐 Contacto Web', 'lealez' ); ?></h4>
         <?php
         // ── Alerta de error de Place Actions API ─────────────────────────────────────────
         $pa_api_error = get_post_meta( $post->ID, 'gmb_place_actions_api_error', true );
@@ -1565,19 +1697,6 @@ class OY_Location_Contact_Metabox {
             </div>
         <?php endif; ?>
         <table class="form-table" style="margin-bottom:0;">
-            <tr>
-                <th scope="row">
-                    <label for="location_email"><?php _e( 'Email', 'lealez' ); ?></label>
-                </th>
-                <td>
-                    <input type="email"
-                           name="location_email"
-                           id="location_email"
-                           value="<?php echo esc_attr( $email ); ?>"
-                           class="regular-text">
-                    <p class="description"><?php _e( '⚙️ Solo manual — Google My Business no tiene campo de email.', 'lealez' ); ?></p>
-                </td>
-            </tr>
             <tr>
                 <th scope="row">
                     <label for="location_website"><?php _e( 'Sitio Web', 'lealez' ); ?></label>
@@ -1889,7 +2008,6 @@ class OY_Location_Contact_Metabox {
      * - gmb_phone_additional_list
      * - location_phone_additional
      * - location_chat_url
-     * - location_email
      * - location_website
      * - social_profiles_manual
      * - social_facebook_local
@@ -1923,7 +2041,6 @@ class OY_Location_Contact_Metabox {
         // En ese escenario NO se debe borrar meta existente por ausencia de campos.
         $contact_fields_present = isset( $_POST['location_phone'] )
             || isset( $_POST['location_chat_url'] )
-            || isset( $_POST['location_email'] )
             || isset( $_POST['location_website'] )
             || isset( $_POST['gmb_phone_additional_list'] )
             || isset( $_POST['social_profiles_manual_network'] )
@@ -1940,7 +2057,6 @@ class OY_Location_Contact_Metabox {
         $simple_fields = array(
             'location_phone'    => 'sanitize_text_field',
             'location_chat_url' => 'esc_url_raw',
-            'location_email'    => 'sanitize_email',
             'location_website'  => 'esc_url_raw',
         );
 
@@ -1952,6 +2068,9 @@ class OY_Location_Contact_Metabox {
                 delete_post_meta( $post_id, $field_name );
             }
         }
+
+        // GMB no expone email en la ficha de contacto; se elimina el meta legacy si existía.
+        delete_post_meta( $post_id, 'location_email' );
 
         // Save additional phones (dynamic list from gmb_phone_additional_list[]).
         if ( isset( $_POST['gmb_phone_additional_list'] ) && is_array( $_POST['gmb_phone_additional_list'] ) ) {
