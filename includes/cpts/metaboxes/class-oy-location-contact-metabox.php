@@ -195,6 +195,141 @@ class OY_Location_Contact_Metabox {
     }
 
     /**
+     * Normaliza el tipo del campo Usuario de chat.
+     *
+     * @param string $chat_type Tipo recibido.
+     * @param string $chat_value Valor actual.
+     * @return string whatsapp|sms
+     */
+    private function normalize_chat_type( $chat_type, $chat_value = '' ) {
+        if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_type' ) ) {
+            return Lealez_GMB_API::normalize_contact_chat_type( $chat_type, $chat_value );
+        }
+
+        $chat_type  = strtolower( sanitize_key( (string) $chat_type ) );
+        $chat_value = trim( (string) $chat_value );
+        if ( in_array( $chat_type, array( 'whatsapp', 'sms' ), true ) ) {
+            return $chat_type;
+        }
+        if ( preg_match( '/^\+?[0-9][0-9\s\-\.\(\)]{6,}$/', $chat_value ) || 0 === strpos( strtolower( $chat_value ), 'sms:' ) ) {
+            return 'sms';
+        }
+        return 'whatsapp';
+    }
+
+    /**
+     * Normaliza país del campo SMS.
+     *
+     * @param string $country País.
+     * @return string
+     */
+    private function normalize_chat_country( $country = 'CO' ) {
+        if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_country' ) ) {
+            return Lealez_GMB_API::normalize_contact_chat_country( $country );
+        }
+
+        $country = strtoupper( substr( preg_replace( '/[^A-Za-z]/', '', (string) $country ), 0, 2 ) );
+        return $country ? $country : 'CO';
+    }
+
+    /**
+     * Normaliza el valor de Usuario de chat para guardarlo en Lealez.
+     * WhatsApp se guarda como URL wa.me; SMS se guarda como número internacional.
+     *
+     * @param string $chat_type Tipo.
+     * @param string $chat_value Valor.
+     * @param string $country País.
+     * @param string $primary_phone Teléfono principal.
+     * @param array  $additional_phones Teléfonos adicionales.
+     * @return string
+     */
+    private function normalize_chat_value_for_storage( $chat_type, $chat_value, $country = 'CO', $primary_phone = '', array $additional_phones = array() ) {
+        $chat_type  = $this->normalize_chat_type( $chat_type, $chat_value );
+        $country    = $this->normalize_chat_country( $country );
+        $chat_value = trim( (string) $chat_value );
+
+        if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_value_for_google' ) ) {
+            $normalized = Lealez_GMB_API::normalize_contact_chat_value_for_google( $chat_type, $chat_value, $country, $primary_phone, $additional_phones );
+            if ( 'sms' === $chat_type ) {
+                if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_sms_phone_for_profile' ) ) {
+                    return Lealez_GMB_API::normalize_contact_sms_phone_for_profile( $normalized, $country );
+                }
+                return preg_replace( '/^sms:/i', '', (string) $normalized );
+            }
+            return esc_url_raw( (string) $normalized );
+        }
+
+        if ( 'sms' === $chat_type ) {
+            $digits = preg_replace( '/\D+/', '', $chat_value );
+            if ( $digits && 'CO' === $country && 0 !== strpos( $digits, '57' ) ) {
+                $digits = '57' . ltrim( $digits, '0' );
+            }
+            return $digits ? '+' . $digits : sanitize_text_field( $chat_value );
+        }
+
+        return esc_url_raw( $chat_value );
+    }
+
+    /**
+     * Devuelve metadatos de chat desde atributos GMB.
+     *
+     * @param array $attributes Atributos GMB.
+     * @return array
+     */
+    private function extract_chat_payload_from_attributes( array $attributes ) {
+        $result = array(
+            'type'    => '',
+            'value'   => '',
+            'country' => 'CO',
+            'raw'     => '',
+        );
+
+        $preferred = array( 'url_whatsapp', 'url_text_messaging' );
+        foreach ( $preferred as $wanted_id ) {
+            foreach ( $attributes as $attr ) {
+                if ( ! is_array( $attr ) ) {
+                    continue;
+                }
+
+                $attr_id = '';
+                if ( ! empty( $attr['attributeId'] ) ) {
+                    $attr_id = strtolower( trim( (string) $attr['attributeId'] ) );
+                } elseif ( ! empty( $attr['name'] ) ) {
+                    $parts   = explode( '/attributes/', (string) $attr['name'], 2 );
+                    $attr_id = strtolower( trim( end( $parts ), '/' ) );
+                }
+
+                if ( $attr_id !== $wanted_id ) {
+                    continue;
+                }
+
+                if ( empty( $attr['uriValues'] ) || ! is_array( $attr['uriValues'] ) || empty( $attr['uriValues'][0]['uri'] ) ) {
+                    continue;
+                }
+
+                $raw_uri = trim( (string) $attr['uriValues'][0]['uri'] );
+                if ( '' === $raw_uri ) {
+                    continue;
+                }
+
+                if ( 'url_whatsapp' === $wanted_id ) {
+                    $result['type']  = 'whatsapp';
+                    $result['value'] = $this->normalize_chat_value_for_storage( 'whatsapp', $raw_uri, 'CO' );
+                    $result['raw']   = $raw_uri;
+                    return $result;
+                }
+
+                $result['type']  = 'sms';
+                $result['value'] = $this->normalize_chat_value_for_storage( 'sms', $raw_uri, 'CO' );
+                $result['raw']   = $raw_uri;
+                return $result;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * Construye el payload de Contacto desde POST/AJAX.
      *
      * @return array
@@ -212,10 +347,19 @@ class OY_Location_Contact_Metabox {
             ? array_map( 'wp_unslash', $_POST['gmb_phone_additional_list'] )
             : array();
 
+        $primary_phone     = isset( $_POST['location_phone'] ) ? sanitize_text_field( wp_unslash( $_POST['location_phone'] ) ) : '';
+        $additional_phones = $this->normalize_phone_list( $additional_phones_raw );
+        $chat_raw          = isset( $_POST['location_chat_url'] ) ? sanitize_text_field( wp_unslash( $_POST['location_chat_url'] ) ) : '';
+        $chat_type         = $this->normalize_chat_type( isset( $_POST['location_chat_type'] ) ? sanitize_text_field( wp_unslash( $_POST['location_chat_type'] ) ) : '', $chat_raw );
+        $chat_country      = $this->normalize_chat_country( isset( $_POST['location_chat_country'] ) ? sanitize_text_field( wp_unslash( $_POST['location_chat_country'] ) ) : 'CO' );
+        $chat_value        = $this->normalize_chat_value_for_storage( $chat_type, $chat_raw, $chat_country, $primary_phone, $additional_phones );
+
         return array(
-            'location_phone'             => isset( $_POST['location_phone'] ) ? sanitize_text_field( wp_unslash( $_POST['location_phone'] ) ) : '',
-            'gmb_phone_additional_list'  => $this->normalize_phone_list( $additional_phones_raw ),
-            'location_chat_url'          => isset( $_POST['location_chat_url'] ) ? esc_url_raw( wp_unslash( $_POST['location_chat_url'] ) ) : '',
+            'location_phone'             => $primary_phone,
+            'gmb_phone_additional_list'  => $additional_phones,
+            'location_chat_type'         => $chat_type,
+            'location_chat_country'      => $chat_country,
+            'location_chat_url'          => $chat_value,
             'location_website'           => isset( $_POST['location_website'] ) ? esc_url_raw( wp_unslash( $_POST['location_website'] ) ) : '',
             'location_menu_url'          => isset( $_POST['location_menu_url_gmb'] ) ? esc_url_raw( wp_unslash( $_POST['location_menu_url_gmb'] ) ) : '',
             'location_booking_urls'      => $this->normalize_url_entries( $booking_urls_raw, 'APPOINTMENT', __( 'Reservas', 'lealez' ) ),
@@ -246,6 +390,8 @@ class OY_Location_Contact_Metabox {
 
         $simple_fields = array(
             'location_phone',
+            'location_chat_type',
+            'location_chat_country',
             'location_chat_url',
             'location_website',
         );
@@ -392,6 +538,8 @@ class OY_Location_Contact_Metabox {
         $fields = array(
             'location_phone'            => __( 'Teléfono principal', 'lealez' ),
             'gmb_phone_additional_list' => __( 'Teléfonos adicionales', 'lealez' ),
+            'location_chat_type'        => __( 'Tipo de usuario de chat', 'lealez' ),
+            'location_chat_country'     => __( 'País del SMS', 'lealez' ),
             'location_chat_url'         => __( 'Usuario de chat', 'lealez' ),
             'location_website'          => __( 'Sitio Web', 'lealez' ),
             'location_menu_url'         => __( 'Vínculo del Menú / Servicios', 'lealez' ),
@@ -574,10 +722,14 @@ class OY_Location_Contact_Metabox {
             }
         }
 
+        $chat_payload = $this->extract_chat_payload_from_attributes( $attributes );
+
         return array(
             'location_phone'            => isset( $phone_numbers['primaryPhone'] ) ? sanitize_text_field( (string) $phone_numbers['primaryPhone'] ) : '',
             'gmb_phone_additional_list' => isset( $phone_numbers['additionalPhones'] ) && is_array( $phone_numbers['additionalPhones'] ) ? $this->normalize_phone_list( $phone_numbers['additionalPhones'] ) : array(),
-            'location_chat_url'         => $this->get_first_attribute_uri_by_keys( $attributes, array( 'url_whatsapp', 'url_text_messaging' ) ),
+            'location_chat_type'        => $chat_payload['type'] ? $chat_payload['type'] : 'whatsapp',
+            'location_chat_country'     => $chat_payload['country'] ? $chat_payload['country'] : 'CO',
+            'location_chat_url'         => $chat_payload['value'],
             'location_website'          => ! empty( $snapshot['websiteUri'] ) ? esc_url_raw( (string) $snapshot['websiteUri'] ) : '',
             'location_menu_url'         => $this->get_first_attribute_uri_by_keys( $attributes, array( 'url_menu', 'url_food_menu', 'menu_url' ) ),
             'location_booking_urls'     => $mapped_links['booking'],
@@ -640,10 +792,19 @@ class OY_Location_Contact_Metabox {
         $order_urls   = get_post_meta( $post_id, 'location_order_urls', true );
         $social       = get_post_meta( $post_id, 'social_profiles_manual', true );
 
+        $chat_value   = (string) get_post_meta( $post_id, 'location_chat_url', true );
+        $chat_type    = $this->normalize_chat_type( (string) get_post_meta( $post_id, 'location_chat_type', true ), $chat_value );
+        $chat_country = $this->normalize_chat_country( (string) get_post_meta( $post_id, 'location_chat_country', true ) );
+        $phone        = (string) get_post_meta( $post_id, 'location_phone', true );
+        $extra_phones = $this->normalize_phone_list( get_post_meta( $post_id, 'gmb_phone_additional_list', true ) );
+        $chat_value   = $this->normalize_chat_value_for_storage( $chat_type, $chat_value, $chat_country, $phone, $extra_phones );
+
         return array(
-            'location_phone'            => (string) get_post_meta( $post_id, 'location_phone', true ),
-            'gmb_phone_additional_list' => $this->normalize_phone_list( get_post_meta( $post_id, 'gmb_phone_additional_list', true ) ),
-            'location_chat_url'         => (string) get_post_meta( $post_id, 'location_chat_url', true ),
+            'location_phone'            => $phone,
+            'gmb_phone_additional_list' => $extra_phones,
+            'location_chat_type'        => $chat_type,
+            'location_chat_country'     => $chat_country,
+            'location_chat_url'         => $chat_value,
             'location_website'          => (string) get_post_meta( $post_id, 'location_website', true ),
             'location_menu_url'         => (string) get_post_meta( $post_id, 'location_menu_url', true ),
             'location_booking_urls'     => is_array( $booking_urls ) ? $this->normalize_url_entries( $booking_urls, 'APPOINTMENT', __( 'Reservas', 'lealez' ) ) : array(),
@@ -719,7 +880,8 @@ class OY_Location_Contact_Metabox {
             'pushed_at_ts'    => $now_ts,
             'pushed_by'       => $user_login,
             'update_mask'     => isset( $result['update_mask'] ) ? $result['update_mask'] : '',
-            'submitted'       => $payload,
+            'attribute_mask'  => isset( $result['attribute_mask'] ) ? $result['attribute_mask'] : '',
+            'submitted'       => isset( $result['submitted'] ) && is_array( $result['submitted'] ) ? $result['submitted'] : $payload,
             'snapshot_before' => $snapshot,
             'api_result'      => $result,
             'poll_count'      => 0,
@@ -731,7 +893,7 @@ class OY_Location_Contact_Metabox {
                     'at'     => $now_iso,
                     'at_ts'  => $now_ts,
                     'by'     => $user_login,
-                    'detail' => 'PATCH/PlaceAction/Attributes enviado a GMB. updateMask=' . ( isset( $result['update_mask'] ) ? $result['update_mask'] : '' ),
+                    'detail' => 'PATCH/PlaceAction/Attributes enviado a GMB. updateMask=' . ( isset( $result['update_mask'] ) ? $result['update_mask'] : '' ) . ' · attributeMask=' . ( isset( $result['attribute_mask'] ) ? $result['attribute_mask'] : '' ),
                 ),
             ),
         );
@@ -745,7 +907,7 @@ class OY_Location_Contact_Metabox {
             'panel_html'      => $this->render_contact_push_panel( $post_id ),
             'result'          => $result,
             'snapshot_before' => $snapshot,
-            'submitted'       => $payload,
+            'submitted'       => isset( $result['submitted'] ) && is_array( $result['submitted'] ) ? $result['submitted'] : $payload,
             'diff'            => $diff_before_push,
         ) );
     }
@@ -931,10 +1093,38 @@ class OY_Location_Contact_Metabox {
         $phones = array_map( 'strval', $phones );
         sort( $phones );
 
+        $chat_value   = trim( (string) ( $payload['location_chat_url'] ?? '' ) );
+        $chat_type    = (string) ( $payload['location_chat_type'] ?? '' );
+        $chat_country = (string) ( $payload['location_chat_country'] ?? 'CO' );
+
+        if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_type' ) ) {
+            $chat_type = Lealez_GMB_API::normalize_contact_chat_type( $chat_type, $chat_value );
+        } else {
+            $chat_type = in_array( strtolower( $chat_type ), array( 'whatsapp', 'sms' ), true ) ? strtolower( $chat_type ) : 'whatsapp';
+        }
+
+        if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_country' ) ) {
+            $chat_country = Lealez_GMB_API::normalize_contact_chat_country( $chat_country );
+        } else {
+            $chat_country = strtoupper( substr( preg_replace( '/[^A-Za-z]/', '', $chat_country ), 0, 2 ) );
+            $chat_country = $chat_country ? $chat_country : 'CO';
+        }
+
+        if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_value_for_google' ) ) {
+            $chat_norm = Lealez_GMB_API::normalize_contact_chat_value_for_google( $chat_type, $chat_value, $chat_country );
+            if ( 'sms' === $chat_type && method_exists( 'Lealez_GMB_API', 'normalize_contact_sms_phone_for_profile' ) ) {
+                $chat_norm = Lealez_GMB_API::normalize_contact_sms_phone_for_profile( $chat_norm, $chat_country );
+            }
+        } else {
+            $chat_norm = strtolower( rtrim( $chat_value, '/' ) );
+        }
+
         return array(
             'primary_phone' => strtolower( trim( (string) ( $payload['location_phone'] ?? '' ) ) ),
             'phones'        => $phones,
-            'chat'          => strtolower( trim( (string) ( $payload['location_chat_url'] ?? '' ) ) ),
+            'chat_type'     => $chat_type,
+            'chat_country'  => $chat_country,
+            'chat'          => strtolower( rtrim( trim( (string) $chat_norm ), '/' ) ),
             'website'       => strtolower( trim( (string) ( $payload['location_website'] ?? '' ) ) ),
             'menu'          => strtolower( trim( (string) ( $payload['location_menu_url'] ?? '' ) ) ),
             'booking'       => $norm_url_entries( $payload['location_booking_urls'] ?? array() ),
@@ -1012,6 +1202,8 @@ class OY_Location_Contact_Metabox {
             'location_phone'            => isset( $current['phoneNumbers']['primaryPhone'] ) ? (string) $current['phoneNumbers']['primaryPhone'] : '',
             'gmb_phone_additional_list' => isset( $current['phoneNumbers']['additionalPhones'] ) && is_array( $current['phoneNumbers']['additionalPhones'] ) ? $current['phoneNumbers']['additionalPhones'] : array(),
             'location_website'          => isset( $current['websiteUri'] ) ? (string) $current['websiteUri'] : '',
+            'location_chat_type'        => 'whatsapp',
+            'location_chat_country'     => isset( $job['submitted']['location_chat_country'] ) ? (string) $job['submitted']['location_chat_country'] : 'CO',
             'location_chat_url'         => '',
             'location_menu_url'         => '',
             'location_booking_urls'     => array(),
@@ -1022,7 +1214,23 @@ class OY_Location_Contact_Metabox {
         $attrs = isset( $current['attributes'] ) && is_array( $current['attributes'] ) ? $current['attributes'] : array();
         $links = isset( $current['placeActionLinks'] ) && is_array( $current['placeActionLinks'] ) ? $current['placeActionLinks'] : array();
 
-        $current_payload['location_chat_url'] = $get_first_uri( $attrs, array( 'url_whatsapp', 'url_text_messaging' ) );
+        $current_whatsapp_uri = $get_first_uri( $attrs, array( 'url_whatsapp' ) );
+        $current_sms_uri      = $get_first_uri( $attrs, array( 'url_text_messaging' ) );
+        if ( $current_whatsapp_uri ) {
+            $current_payload['location_chat_type'] = 'whatsapp';
+            if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_value_for_google' ) ) {
+                $current_payload['location_chat_url'] = Lealez_GMB_API::normalize_contact_chat_value_for_google( 'whatsapp', $current_whatsapp_uri, $current_payload['location_chat_country'] );
+            } else {
+                $current_payload['location_chat_url'] = $current_whatsapp_uri;
+            }
+        } elseif ( $current_sms_uri ) {
+            $current_payload['location_chat_type'] = 'sms';
+            if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_sms_phone_for_profile' ) ) {
+                $current_payload['location_chat_url'] = Lealez_GMB_API::normalize_contact_sms_phone_for_profile( $current_sms_uri, $current_payload['location_chat_country'] );
+            } else {
+                $current_payload['location_chat_url'] = preg_replace( '/^sms:/i', '', $current_sms_uri );
+            }
+        }
         $current_payload['location_menu_url'] = $get_first_uri( $attrs, array( 'url_menu', 'url_food_menu', 'menu_url' ) );
 
         $mapped = $map_links( $links );
@@ -1189,7 +1397,7 @@ class OY_Location_Contact_Metabox {
             var MAX_LOG = 20;
 
             var FIELD_SELECTORS = [
-                '#location_phone', '#location_chat_url', '#location_website', '#location_menu_url_gmb',
+                '#location_phone', '#location_chat_type', '#location_chat_country', '#location_chat_url', '#location_website', '#location_menu_url_gmb',
                 'input[name="gmb_phone_additional_list[]"]',
                 'input[name^="location_booking_urls"]',
                 'input[name^="location_order_urls"]',
@@ -1203,6 +1411,8 @@ class OY_Location_Contact_Metabox {
             var FIELD_MAP = [
                 { key:'location_phone', selector:'#location_phone', label:'Teléfono principal' },
                 { key:'gmb_phone_additional_list', selector:'input[name="gmb_phone_additional_list[]"]', label:'Teléfonos adicionales', type:'array' },
+                { key:'location_chat_type', selector:'#location_chat_type', label:'Tipo de usuario de chat' },
+                { key:'location_chat_country', selector:'#location_chat_country', label:'País del SMS' },
                 { key:'location_chat_url', selector:'#location_chat_url', label:'Usuario de chat' },
                 { key:'location_website', selector:'#location_website', label:'Sitio Web' },
                 { key:'location_menu_url', selector:'#location_menu_url_gmb', label:'Vínculo del Menú / Servicios' },
@@ -1300,6 +1510,22 @@ class OY_Location_Contact_Metabox {
                 var colors = { info:'#555', success:'#166534', error:'#dc3232', loading:'#1a73e8' };
                 $('#oy-contact-sync-msg').text(message || '').css('color', colors[type] || '#555');
             }
+            function updateChatFieldUi(){
+                var type = ($('#location_chat_type').val() || 'whatsapp').toString();
+                var $country = $('#location_chat_country');
+                var $input = $('#location_chat_url');
+                if (type === 'sms') {
+                    $country.show();
+                    $input.attr('placeholder', $input.data('placeholder-sms') || '+573001234567');
+                    $('.oy-chat-help-whatsapp').hide();
+                    $('.oy-chat-help-sms').show();
+                } else {
+                    $country.hide();
+                    $input.attr('placeholder', $input.data('placeholder-whatsapp') || 'https://wa.me/573001234567');
+                    $('.oy-chat-help-sms').hide();
+                    $('.oy-chat-help-whatsapp').show();
+                }
+            }
             function updateUiState(){
                 var lock = !editorState.enabled;
                 $(FIELD_SELECTORS.join(',')).each(function(){
@@ -1314,7 +1540,10 @@ class OY_Location_Contact_Metabox {
             function refreshDirtyState(){ editorState.dirty = !statesEqual(editorState.baseline, captureState()); updateUiState(); }
             function applyState(state){
                 $('#location_phone').val(state.location_phone || '');
+                $('#location_chat_type').val(state.location_chat_type || 'whatsapp');
+                $('#location_chat_country').val(state.location_chat_country || 'CO');
                 $('#location_chat_url').val(state.location_chat_url || '');
+                updateChatFieldUi();
                 $('#location_website').val(state.location_website || '');
                 $('#location_menu_url_gmb').val(state.location_menu_url || '');
                 $('#oy-additional-phones-list').empty();
@@ -1420,7 +1649,10 @@ class OY_Location_Contact_Metabox {
             function updateFormFromPayload(payload){
                 if (!payload) { return; }
                 $('#location_phone').val(payload.location_phone || '');
+                $('#location_chat_type').val(payload.location_chat_type || 'whatsapp');
+                $('#location_chat_country').val(payload.location_chat_country || 'CO');
                 $('#location_chat_url').val(payload.location_chat_url || '');
+                updateChatFieldUi();
                 $('#location_website').val(payload.location_website || '');
                 $('#location_menu_url_gmb').val(payload.location_menu_url || '');
                 $('#oy-additional-phones-list').empty();
@@ -1428,7 +1660,8 @@ class OY_Location_Contact_Metabox {
                 // Para listas complejas se recarga la página después de sincronizar para evitar reconstruir índices dinámicos manualmente.
             }
 
-            $(document).on('input change', FIELD_SELECTORS.join(','), function(){ if (editorState.enabled) { refreshDirtyState(); } });
+            $(document).on('change', '#location_chat_type', function(){ updateChatFieldUi(); if (editorState.enabled) { refreshDirtyState(); } });
+            $(document).on('input change', FIELD_SELECTORS.join(','), function(){ if (this && this.id === 'location_chat_type') { return; } if (editorState.enabled) { refreshDirtyState(); } });
             $(document).on('click', CONTROL_SELECTORS.join(','), function(){ if (editorState.enabled) { setTimeout(refreshDirtyState, 0); } });
             $(document).on('click', '#oy-contact-editor-start', function(e){ e.preventDefault(); beginEditMode(); });
             $(document).on('click', '#oy-contact-editor-cancel', function(e){ e.preventDefault(); cancelEditMode(); });
@@ -1501,7 +1734,7 @@ class OY_Location_Contact_Metabox {
 
             $(document).ready(function(){
                 if (!$('#oy_location_contact').length) { return; }
-                ensureUi(); editorState.baseline = captureState(); updateUiState(); renderLog();
+                ensureUi(); updateChatFieldUi(); editorState.baseline = captureState(); updateUiState(); renderLog();
                 if (lastManualLabel) { setStatus('Último guardado local del metabox: ' + lastManualLabel, 'info'); }
                 else if (localPending) { setStatus('Hay cambios locales pendientes por publicar en GMB.', 'info'); }
             });
@@ -1514,14 +1747,19 @@ class OY_Location_Contact_Metabox {
      * Render Contact Information meta box
      */
     public function render_contact_meta_box( $post ) {
-        $phone               = get_post_meta( $post->ID, 'location_phone', true );
+        $phone                 = get_post_meta( $post->ID, 'location_phone', true );
         $phone_additional_list = get_post_meta( $post->ID, 'gmb_phone_additional_list', true );
-        $chat_url            = get_post_meta( $post->ID, 'location_chat_url', true );
+        $chat_url              = get_post_meta( $post->ID, 'location_chat_url', true );
+        $chat_type             = get_post_meta( $post->ID, 'location_chat_type', true );
+        $chat_country          = get_post_meta( $post->ID, 'location_chat_country', true );
         // Backward compat: if no chat_url set but old whatsapp field exists
         if ( empty( $chat_url ) ) {
             $chat_url = get_post_meta( $post->ID, 'location_whatsapp', true );
         }
-        $website             = get_post_meta( $post->ID, 'location_website', true );
+        $chat_type    = $this->normalize_chat_type( $chat_type, $chat_url );
+        $chat_country = $this->normalize_chat_country( $chat_country ? $chat_country : 'CO' );
+        $chat_url     = $this->normalize_chat_value_for_storage( $chat_type, $chat_url, $chat_country, (string) $phone, is_array( $phone_additional_list ) ? $phone_additional_list : array() );
+        $website      = get_post_meta( $post->ID, 'location_website', true );
         // NOTA: location_menu_url se gestiona en el metabox "Menú del Negocio" (class-oy-location-menu-metabox.php)
 
         // ── Arrays dinámicos de URLs de Reservas y Ordenar Online ──────────────────────
@@ -1662,13 +1900,51 @@ class OY_Location_Contact_Metabox {
                     <label for="location_chat_url"><?php _e( 'Usuario de chat', 'lealez' ); ?></label>
                 </th>
                 <td>
-                    <input type="url"
-                           name="location_chat_url"
-                           id="location_chat_url"
-                           value="<?php echo esc_attr( $chat_url ); ?>"
-                           class="large-text"
-                           placeholder="https://wa.me/573001234567">
-                    <p class="description"><?php _e( 'Permite que los clientes chateen con tu empresa vía WhatsApp o SMS. 🔄 Se importa automáticamente desde GMB (<code>url_whatsapp</code> / <code>url_text_messaging</code>) y al enviarlo a GMB Lealez publica ambos atributos compatibles cuando corresponde, para que se refleje en la sección Usuario de chat.', 'lealez' ); ?></p>
+                    <div class="oy-chat-config-row" style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;max-width:920px;">
+                        <select name="location_chat_type"
+                                id="location_chat_type"
+                                style="min-width:220px;">
+                            <option value="whatsapp" <?php selected( $chat_type, 'whatsapp' ); ?>><?php _e( 'WhatsApp', 'lealez' ); ?></option>
+                            <option value="sms" <?php selected( $chat_type, 'sms' ); ?>><?php _e( 'Mensaje de texto', 'lealez' ); ?></option>
+                        </select>
+
+                        <select name="location_chat_country"
+                                id="location_chat_country"
+                                style="min-width:145px;<?php echo 'sms' === $chat_type ? '' : 'display:none;'; ?>">
+                            <?php
+                            $chat_countries = array(
+                                'CO' => __( 'Colombia (+57)', 'lealez' ),
+                                'US' => __( 'Estados Unidos (+1)', 'lealez' ),
+                                'MX' => __( 'México (+52)', 'lealez' ),
+                                'ES' => __( 'España (+34)', 'lealez' ),
+                                'AR' => __( 'Argentina (+54)', 'lealez' ),
+                                'CL' => __( 'Chile (+56)', 'lealez' ),
+                                'PE' => __( 'Perú (+51)', 'lealez' ),
+                                'EC' => __( 'Ecuador (+593)', 'lealez' ),
+                                'PA' => __( 'Panamá (+507)', 'lealez' ),
+                            );
+                            foreach ( $chat_countries as $country_code => $country_label ) :
+                                ?>
+                                <option value="<?php echo esc_attr( $country_code ); ?>" <?php selected( $chat_country, $country_code ); ?>><?php echo esc_html( $country_label ); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+
+                        <input type="text"
+                               name="location_chat_url"
+                               id="location_chat_url"
+                               value="<?php echo esc_attr( $chat_url ); ?>"
+                               class="regular-text"
+                               style="flex:1;min-width:280px;"
+                               data-placeholder-whatsapp="https://wa.me/573001234567"
+                               data-placeholder-sms="+573001234567"
+                               placeholder="<?php echo 'sms' === $chat_type ? esc_attr( '+573001234567' ) : esc_attr( 'https://wa.me/573001234567' ); ?>">
+                    </div>
+                    <p class="description oy-chat-help oy-chat-help-whatsapp" style="<?php echo 'whatsapp' === $chat_type ? '' : 'display:none;'; ?>">
+                        <?php _e( 'Para WhatsApp, ingresa una URL click-to-chat como <code>https://wa.me/573102695744</code>. Lealez enviará este valor a GMB como atributo <code>url_whatsapp</code> y limpiará el canal SMS para que Google muestre WhatsApp como chat principal.', 'lealez' ); ?>
+                    </p>
+                    <p class="description oy-chat-help oy-chat-help-sms" style="<?php echo 'sms' === $chat_type ? '' : 'display:none;'; ?>">
+                        <?php _e( 'Para Mensaje de texto, ingresa el número de teléfono. Lealez lo guarda como número internacional y lo envía a GMB como atributo <code>url_text_messaging</code> usando el URI técnico <code>sms:+...</code>.', 'lealez' ); ?>
+                    </p>
                 </td>
             </tr>
         </table>
@@ -2040,6 +2316,8 @@ class OY_Location_Contact_Metabox {
         // y WordPress no los envía en el POST del botón general "Actualizar".
         // En ese escenario NO se debe borrar meta existente por ausencia de campos.
         $contact_fields_present = isset( $_POST['location_phone'] )
+            || isset( $_POST['location_chat_type'] )
+            || isset( $_POST['location_chat_country'] )
             || isset( $_POST['location_chat_url'] )
             || isset( $_POST['location_website'] )
             || isset( $_POST['gmb_phone_additional_list'] )
@@ -2054,19 +2332,20 @@ class OY_Location_Contact_Metabox {
         }
 
         // Campos simples de contacto.
-        $simple_fields = array(
-            'location_phone'    => 'sanitize_text_field',
-            'location_chat_url' => 'esc_url_raw',
-            'location_website'  => 'esc_url_raw',
-        );
+        $location_phone = isset( $_POST['location_phone'] ) ? sanitize_text_field( wp_unslash( $_POST['location_phone'] ) ) : '';
+        update_post_meta( $post_id, 'location_phone', $location_phone );
 
-        foreach ( $simple_fields as $field_name => $sanitize_callback ) {
-            if ( isset( $_POST[ $field_name ] ) ) {
-                $value = call_user_func( $sanitize_callback, wp_unslash( $_POST[ $field_name ] ) );
-                update_post_meta( $post_id, $field_name, $value );
-            } else {
-                delete_post_meta( $post_id, $field_name );
-            }
+        $chat_raw     = isset( $_POST['location_chat_url'] ) ? sanitize_text_field( wp_unslash( $_POST['location_chat_url'] ) ) : '';
+        $chat_type    = $this->normalize_chat_type( isset( $_POST['location_chat_type'] ) ? sanitize_text_field( wp_unslash( $_POST['location_chat_type'] ) ) : '', $chat_raw );
+        $chat_country = $this->normalize_chat_country( isset( $_POST['location_chat_country'] ) ? sanitize_text_field( wp_unslash( $_POST['location_chat_country'] ) ) : 'CO' );
+        update_post_meta( $post_id, 'location_chat_type', $chat_type );
+        update_post_meta( $post_id, 'location_chat_country', $chat_country );
+        update_post_meta( $post_id, 'location_chat_url', $this->normalize_chat_value_for_storage( $chat_type, $chat_raw, $chat_country, $location_phone ) );
+
+        if ( isset( $_POST['location_website'] ) ) {
+            update_post_meta( $post_id, 'location_website', esc_url_raw( wp_unslash( $_POST['location_website'] ) ) );
+        } else {
+            delete_post_meta( $post_id, 'location_website' );
         }
 
         // GMB no expone email en la ficha de contacto; se elimina el meta legacy si existía.
