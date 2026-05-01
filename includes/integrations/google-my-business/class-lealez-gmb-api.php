@@ -3986,6 +3986,26 @@ public static function push_location_address( $business_id, $location_name, arra
     }
 
     /**
+     * Construye un atributo ENUM para Business Information API.
+     *
+     * Se usa para preferred_messaging_service, que define cuál canal aparece
+     * como PRINCIPAL cuando hay más de un usuario de chat en Google Business Profile.
+     *
+     * @param string $attribute_id ID del atributo.
+     * @param string $value        Valor ENUM.
+     * @return array
+     */
+    private static function build_contact_enum_attribute( $attribute_id, $value ) {
+        $value = sanitize_key( (string) $value );
+
+        return array(
+            'name'      => 'attributes/' . sanitize_key( $attribute_id ),
+            'valueType' => 'ENUM',
+            'values'    => '' !== $value ? array( $value ) : array(),
+        );
+    }
+
+    /**
      * Sanitiza una URL/URI de atributo sin romper esquemas válidos para mensajería.
      *
      * @param string $uri URI original.
@@ -4015,17 +4035,37 @@ public static function push_location_address( $business_id, $location_name, arra
      * @return string
      */
     private static function get_contact_attribute_id_from_payload( array $attribute ) {
+        $raw = '';
+
         if ( ! empty( $attribute['attributeId'] ) ) {
-            return strtolower( trim( sanitize_key( (string) $attribute['attributeId'] ) ) );
+            $raw = (string) $attribute['attributeId'];
+        } elseif ( ! empty( $attribute['name'] ) ) {
+            $raw = (string) $attribute['name'];
         }
 
-        if ( ! empty( $attribute['name'] ) ) {
-            $name  = trim( (string) $attribute['name'] );
-            $parts = explode( '/attributes/', $name, 2 );
-            return strtolower( trim( sanitize_key( end( $parts ) ) ) );
+        $raw = trim( $raw );
+        if ( '' === $raw ) {
+            return '';
         }
 
-        return '';
+        // Business Information API puede devolver:
+        // - attributes/url_whatsapp
+        // - locations/{id}/attributes/url_whatsapp
+        // - accounts/{id}/locations/{id}/attributes/url_whatsapp
+        // El valor útil para comparar, sincronizar y construir attributeMask es solo url_whatsapp.
+        if ( false !== strpos( $raw, '/attributes/' ) ) {
+            $parts = explode( '/attributes/', $raw, 2 );
+            $raw   = end( $parts );
+        } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+            $raw = substr( $raw, strlen( 'attributes/' ) );
+        } elseif ( false !== strpos( $raw, 'attributes/' ) ) {
+            $parts = explode( 'attributes/', $raw, 2 );
+            $raw   = end( $parts );
+        }
+
+        $raw = trim( $raw, '/' );
+
+        return strtolower( trim( sanitize_key( $raw ) ) );
     }
 
     /**
@@ -4627,6 +4667,7 @@ public static function push_location_address( $business_id, $location_name, arra
         $contact_attribute_ids  = array(
             'url_whatsapp',
             'url_text_messaging',
+            'preferred_messaging_service',
             'url_menu',
             'url_facebook',
             'url_instagram',
@@ -4687,6 +4728,11 @@ public static function push_location_address( $business_id, $location_name, arra
                 continue;
             }
             $attribute_replacements[ $chat_channel['attribute_id'] ] = self::build_contact_url_attribute( $normalized, $chat_channel['attribute_id'], $chat_channel['api_uri'] );
+        }
+
+        if ( ! empty( $chat_channels[0]['type'] ) ) {
+            $preferred_messaging_service = 'sms' === $chat_channels[0]['type'] ? 'text_messaging' : 'whatsapp';
+            $attribute_replacements['preferred_messaging_service'] = self::build_contact_enum_attribute( 'preferred_messaging_service', $preferred_messaging_service );
         }
 
         $menu_url = isset( $contact_data['menuUrl'] )
