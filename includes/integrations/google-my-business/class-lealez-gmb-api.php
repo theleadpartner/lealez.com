@@ -2531,8 +2531,8 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
      * PATCH https://mybusinessbusinessinformation.googleapis.com/v1/{locationName}/attributes
      *
      * El body debe contener el resource name de la ubicación + la lista de atributos a actualizar.
-     * Google usa PATCH con `updateMask=attributes` — SOLO se actualizan los atributos enviados;
-     * los demás no se modifican.
+     * Google usa PATCH con el parámetro de consulta `attributeMask`.
+     * No se debe usar `updateMask` en este endpoint.
      *
      * Documentación oficial:
      * https://developers.google.com/my-business/reference/businessinformation/rest/v1/locations/updateAttributes
@@ -2550,7 +2550,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
      *
      * @return array|WP_Error Respuesta de la API (el Attributes resource actualizado), o WP_Error.
      */
-    public static function update_location_attributes( $business_id, $location_name, $attributes_payload ) {
+    public static function update_location_attributes( $business_id, $location_name, $attributes_payload, $attribute_mask = array() ) {
         $business_id   = absint( $business_id );
         $location_name = trim( (string) $location_name );
 
@@ -2558,8 +2558,8 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             return new WP_Error( 'invalid_params', __( 'Invalid business_id or location_name for update_location_attributes.', 'lealez' ) );
         }
 
-        if ( empty( $attributes_payload ) || ! is_array( $attributes_payload ) ) {
-            return new WP_Error( 'empty_payload', __( 'No attributes provided to update.', 'lealez' ) );
+        if ( ! is_array( $attributes_payload ) ) {
+            return new WP_Error( 'empty_payload', __( 'Attributes payload must be an array.', 'lealez' ) );
         }
 
         // ── Normalizar location_name a formato corto 'locations/{id}' ──────────
@@ -2573,25 +2573,80 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
         if ( false !== strpos( $normalized_location, '/attributes' ) ) {
             $normalized_location = explode( '/attributes', $normalized_location )[0];
         }
+        $normalized_location = rtrim( $normalized_location, '/' );
 
         // El endpoint PATCH para atributos es: /v1/locations/{id}/attributes
-        $endpoint = '/' . rtrim( $normalized_location, '/' ) . '/attributes';
+        $endpoint = '/' . $normalized_location . '/attributes';
+
+        $body_attributes = array();
+        $derived_mask    = array();
+
+        foreach ( $attributes_payload as $attribute ) {
+            if ( ! is_array( $attribute ) ) {
+                continue;
+            }
+
+            $attr_id = self::get_contact_attribute_id_from_payload( $attribute );
+            if ( '' === $attr_id ) {
+                continue;
+            }
+
+            $attribute['name'] = $normalized_location . '/attributes/' . sanitize_key( $attr_id );
+
+            if ( ! empty( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) ) {
+                foreach ( $attribute['uriValues'] as $idx => $uri_value ) {
+                    if ( ! is_array( $uri_value ) ) {
+                        continue;
+                    }
+                    if ( isset( $uri_value['uri'] ) ) {
+                        $attribute['uriValues'][ $idx ]['uri'] = self::sanitize_contact_attribute_uri( (string) $uri_value['uri'] );
+                    }
+                }
+            }
+
+            $body_attributes[] = $attribute;
+            $derived_mask[]    = 'attributes/' . sanitize_key( $attr_id );
+        }
+
+        $mask_items = array();
+        if ( ! empty( $attribute_mask ) && is_array( $attribute_mask ) ) {
+            foreach ( $attribute_mask as $mask_item ) {
+                $normalized_mask_item = self::normalize_contact_attribute_mask_item( $mask_item );
+                if ( $normalized_mask_item ) {
+                    $mask_items[] = $normalized_mask_item;
+                }
+            }
+        }
+
+        if ( empty( $mask_items ) ) {
+            $mask_items = $derived_mask;
+        }
+
+        $mask_items = array_values( array_unique( array_filter( $mask_items ) ) );
+        if ( empty( $mask_items ) ) {
+            return new WP_Error( 'empty_attribute_mask', __( 'No attributeMask could be derived for update_location_attributes.', 'lealez' ) );
+        }
+
+        $attribute_mask_str = implode( ',', $mask_items );
 
         // Body del PATCH: { "name": "locations/{id}/attributes", "attributes": [...] }
+        // Para eliminar un atributo controlado, se incluye en attributeMask y se omite del body.
         $body = array(
             'name'       => $normalized_location . '/attributes',
-            'attributes' => $attributes_payload,
+            'attributes' => $body_attributes,
         );
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
                 $business_id,
                 'info',
-                sprintf( 'Updating %d attribute(s) for location.', count( $attributes_payload ) ),
+                sprintf( 'Updating %d attribute(s) for location with attributeMask.', count( $body_attributes ) ),
                 array(
-                    'location' => $normalized_location,
-                    'endpoint' => $endpoint,
-                    'count'    => count( $attributes_payload ),
+                    'location'      => $normalized_location,
+                    'endpoint'      => $endpoint,
+                    'count'         => count( $body_attributes ),
+                    'attributeMask' => $attribute_mask_str,
+                    'body_preview'  => $body,
                 )
             );
         }
@@ -2603,7 +2658,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             'PATCH',
             $body,
             false, // No caché en PATCH
-            array( 'updateMask' => 'attributes' )
+            array( 'attributeMask' => $attribute_mask_str )
         );
 
         if ( is_wp_error( $result ) ) {
@@ -2612,11 +2667,14 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                     $business_id,
                     'error',
                     'update_location_attributes failed: ' . $result->get_error_message(),
-                    array( 'location' => $normalized_location )
+                    array(
+                        'location'      => $normalized_location,
+                        'attributeMask' => $attribute_mask_str,
+                    )
                 );
             }
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-                error_log( '[OY GMB More] update_location_attributes error: ' . $result->get_error_message() );
+                error_log( '[OY GMB More] update_location_attributes error: ' . $result->get_error_message() . ' (attributeMask=' . $attribute_mask_str . ')' );
             }
             return $result;
         }
@@ -2626,15 +2684,22 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                 $business_id,
                 'success',
                 sprintf( 'Attributes updated successfully for location: %s', $normalized_location ),
-                array( 'location' => $normalized_location )
+                array(
+                    'location'      => $normalized_location,
+                    'attributeMask' => $attribute_mask_str,
+                )
             );
         }
 
         if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
             error_log(
                 '[OY GMB More] update_location_attributes: OK for ' . $normalized_location .
-                ' (' . count( $attributes_payload ) . ' attr(s) updated)'
+                ' (' . count( $body_attributes ) . ' attr(s) updated; attributeMask=' . $attribute_mask_str . ')'
             );
+        }
+
+        if ( is_array( $result ) ) {
+            $result['_lealez_attributeMask'] = $attribute_mask_str;
         }
 
         return $result;
@@ -3887,11 +3952,15 @@ public static function push_location_address( $business_id, $location_name, arra
     }
 
     /**
-     * Construye un atributo URL para Business Information API v1.
+     * Construye un atributo URL/URI para Business Information API v1.
+     *
+     * El recurso Attribute usa valueType=URL y recibe uriValues. Para WhatsApp se
+     * envía una URL https://wa.me/...; para SMS se conserva el URI sms:+... porque
+     * el editor de Google muestra ese canal como número de teléfono.
      *
      * @param string $normalized_location Resource name corto locations/{id}.
      * @param string $attribute_id        ID del atributo, ej: url_whatsapp.
-     * @param string $url                 URL a publicar.
+     * @param string $url                 URL/URI a publicar.
      * @return array
      */
     private static function build_contact_url_attribute( $normalized_location, $attribute_id, $url ) {
@@ -3900,10 +3969,258 @@ public static function push_location_address( $business_id, $location_name, arra
             'valueType' => 'URL',
             'uriValues' => array(
                 array(
-                    'uri' => esc_url_raw( (string) $url ),
+                    'uri' => self::sanitize_contact_attribute_uri( (string) $url ),
                 ),
             ),
         );
+    }
+
+    /**
+     * Sanitiza una URL/URI de atributo sin romper esquemas válidos para mensajería.
+     *
+     * @param string $uri URI original.
+     * @return string
+     */
+    private static function sanitize_contact_attribute_uri( $uri ) {
+        $uri = trim( (string) $uri );
+        if ( '' === $uri ) {
+            return '';
+        }
+
+        if ( preg_match( '/^sms:\+?[0-9][0-9\s\-\.\(\)]*$/i', $uri ) ) {
+            return 'sms:' . self::normalize_contact_sms_phone_for_profile( substr( $uri, 4 ) );
+        }
+
+        if ( preg_match( '/^tel:\+?[0-9][0-9\s\-\.\(\)]*$/i', $uri ) ) {
+            return 'tel:' . self::normalize_contact_sms_phone_for_profile( substr( $uri, 4 ) );
+        }
+
+        return esc_url_raw( $uri );
+    }
+
+    /**
+     * Obtiene el ID corto de un atributo de Google Business Profile.
+     *
+     * @param array $attribute Atributo GMB.
+     * @return string
+     */
+    private static function get_contact_attribute_id_from_payload( array $attribute ) {
+        if ( ! empty( $attribute['attributeId'] ) ) {
+            return strtolower( trim( sanitize_key( (string) $attribute['attributeId'] ) ) );
+        }
+
+        if ( ! empty( $attribute['name'] ) ) {
+            $name  = trim( (string) $attribute['name'] );
+            $parts = explode( '/attributes/', $name, 2 );
+            return strtolower( trim( sanitize_key( end( $parts ) ) ) );
+        }
+
+        return '';
+    }
+
+    /**
+     * Normaliza un ID de atributo para attributeMask.
+     *
+     * @param string $attribute_id ID corto o resource name.
+     * @return string
+     */
+    private static function normalize_contact_attribute_mask_item( $attribute_id ) {
+        $attribute_id = trim( (string) $attribute_id );
+        if ( '' === $attribute_id ) {
+            return '';
+        }
+
+        if ( false !== strpos( $attribute_id, '/attributes/' ) ) {
+            $parts        = explode( '/attributes/', $attribute_id, 2 );
+            $attribute_id = end( $parts );
+        }
+
+        if ( 0 === strpos( $attribute_id, 'attributes/' ) ) {
+            $attribute_id = substr( $attribute_id, strlen( 'attributes/' ) );
+        }
+
+        $attribute_id = sanitize_key( $attribute_id );
+        if ( '' === $attribute_id ) {
+            return '';
+        }
+
+        return 'attributes/' . $attribute_id;
+    }
+
+    /**
+     * Normaliza el tipo de chat usado por el editor de Google.
+     *
+     * @param string $chat_type  Tipo recibido.
+     * @param string $chat_value Valor actual para inferir compatibilidad.
+     * @return string whatsapp|sms
+     */
+    public static function normalize_contact_chat_type( $chat_type, $chat_value = '' ) {
+        $chat_type  = strtolower( sanitize_key( (string) $chat_type ) );
+        $chat_value = trim( (string) $chat_value );
+
+        if ( in_array( $chat_type, array( 'whatsapp', 'sms' ), true ) ) {
+            return $chat_type;
+        }
+
+        $lower = strtolower( $chat_value );
+        if ( 0 === strpos( $lower, 'sms:' ) || 0 === strpos( $lower, 'tel:' ) ) {
+            return 'sms';
+        }
+        if ( false !== strpos( $lower, 'wa.me/' ) || false !== strpos( $lower, 'whatsapp.com' ) ) {
+            return 'whatsapp';
+        }
+        if ( preg_match( '/^\+?[0-9][0-9\s\-\.\(\)]{6,}$/', $chat_value ) ) {
+            return 'sms';
+        }
+
+        return 'whatsapp';
+    }
+
+    /**
+     * Normaliza código país ISO-2 usado para teléfonos de mensajería.
+     *
+     * @param string $region_code Código país.
+     * @return string
+     */
+    public static function normalize_contact_chat_country( $region_code = 'CO' ) {
+        $region_code = strtoupper( substr( preg_replace( '/[^A-Za-z]/', '', (string) $region_code ), 0, 2 ) );
+        return $region_code ? $region_code : 'CO';
+    }
+
+    /**
+     * Devuelve prefijo telefónico por país para normalización básica.
+     *
+     * @param string $region_code Código país.
+     * @return string
+     */
+    private static function get_contact_country_calling_code( $region_code = 'CO' ) {
+        $map = array(
+            'CO' => '57',
+            'US' => '1',
+            'CA' => '1',
+            'MX' => '52',
+            'ES' => '34',
+            'AR' => '54',
+            'CL' => '56',
+            'PE' => '51',
+            'EC' => '593',
+            'PA' => '507',
+            'BR' => '55',
+        );
+
+        $region_code = self::normalize_contact_chat_country( $region_code );
+        return isset( $map[ $region_code ] ) ? $map[ $region_code ] : '';
+    }
+
+    /**
+     * Convierte un teléfono local/internacional a dígitos internacionales.
+     *
+     * @param string $phone       Teléfono.
+     * @param string $region_code País.
+     * @return string
+     */
+    private static function normalize_contact_international_phone_digits( $phone, $region_code = 'CO' ) {
+        $phone = trim( (string) $phone );
+        if ( '' === $phone ) {
+            return '';
+        }
+
+        if ( 0 === strpos( strtolower( $phone ), 'sms:' ) ) {
+            $phone = substr( $phone, 4 );
+        } elseif ( 0 === strpos( strtolower( $phone ), 'tel:' ) ) {
+            $phone = substr( $phone, 4 );
+        }
+
+        $digits = preg_replace( '/\D+/', '', $phone );
+        if ( '' === $digits ) {
+            return '';
+        }
+
+        if ( 0 === strpos( $digits, '00' ) ) {
+            $digits = substr( $digits, 2 );
+        }
+
+        $country_code = self::get_contact_country_calling_code( $region_code );
+        if ( $country_code && 0 !== strpos( $digits, $country_code ) ) {
+            $digits = ltrim( $digits, '0' );
+            $digits = $country_code . $digits;
+        }
+
+        return $digits;
+    }
+
+    /**
+     * Normaliza número SMS para mostrar/guardar en Lealez.
+     *
+     * @param string $phone       Teléfono o URI sms:.
+     * @param string $region_code País.
+     * @return string
+     */
+    public static function normalize_contact_sms_phone_for_profile( $phone, $region_code = 'CO' ) {
+        $digits = self::normalize_contact_international_phone_digits( $phone, $region_code );
+        return $digits ? '+' . $digits : trim( sanitize_text_field( (string) $phone ) );
+    }
+
+    /**
+     * Normaliza el valor del campo Usuario de chat antes de enviarlo a GMB.
+     *
+     * @param string $chat_type         whatsapp|sms.
+     * @param string $chat_value        URL WhatsApp o número SMS.
+     * @param string $region_code       País.
+     * @param string $primary_phone     Teléfono principal como fallback.
+     * @param array  $additional_phones Teléfonos adicionales como fallback.
+     * @return string
+     */
+    public static function normalize_contact_chat_value_for_google( $chat_type, $chat_value, $region_code = 'CO', $primary_phone = '', array $additional_phones = array() ) {
+        $chat_value  = trim( (string) $chat_value );
+        $region_code = self::normalize_contact_chat_country( $region_code );
+        $chat_type   = self::normalize_contact_chat_type( $chat_type, $chat_value );
+
+        if ( '' === $chat_value && 'whatsapp' === $chat_type ) {
+            if ( ! empty( $additional_phones[0] ) ) {
+                $chat_value = (string) $additional_phones[0];
+            } elseif ( '' !== trim( (string) $primary_phone ) ) {
+                $chat_value = (string) $primary_phone;
+            }
+        }
+
+        if ( '' === $chat_value ) {
+            return '';
+        }
+
+        if ( 'sms' === $chat_type ) {
+            $phone = self::normalize_contact_sms_phone_for_profile( $chat_value, $region_code );
+            return $phone ? 'sms:' . $phone : '';
+        }
+
+        $lower     = strtolower( $chat_value );
+        $candidate = '';
+
+        if ( false !== strpos( $lower, 'api.whatsapp.com/send' ) || false !== strpos( $lower, 'whatsapp.com/send' ) ) {
+            $parts = wp_parse_url( $chat_value );
+            if ( ! empty( $parts['query'] ) ) {
+                parse_str( $parts['query'], $query_args );
+                if ( ! empty( $query_args['phone'] ) ) {
+                    $candidate = (string) $query_args['phone'];
+                }
+            }
+        }
+
+        if ( '' === $candidate && false !== strpos( $lower, 'wa.me/' ) ) {
+            $path      = wp_parse_url( $chat_value, PHP_URL_PATH );
+            $candidate = is_string( $path ) ? trim( $path, '/' ) : '';
+        }
+
+        if ( '' === $candidate ) {
+            $candidate = $chat_value;
+        }
+
+        $digits = self::normalize_contact_international_phone_digits( $candidate, $region_code );
+        if ( '' === $digits ) {
+            return esc_url_raw( $chat_value );
+        }
+
+        return 'https://wa.me/' . $digits;
     }
 
     /**
@@ -4118,15 +4435,13 @@ public static function push_location_address( $business_id, $location_name, arra
         $attribute_result = null;
         $place_action_result = null;
 
-        // ── Atributos URL: chat, menú/servicios y redes sociales ─────────────────
-        // Importante: locations.attributes.patch usa updateMask=attributes. Para no borrar
-        // atributos ajenos a Contacto, se lee primero el listado actual, se reemplazan solo
-        // los atributos URL controlados por este metabox y se conserva el resto.
+        // ── Atributos URL/URI: chat, menú/servicios y redes sociales ──────────────
+        // El endpoint correcto para atributos es locations.updateAttributes con
+        // query `attributeMask`. No se debe usar updateMask para estos campos.
         $attribute_replacements = array();
         $contact_attribute_ids  = array(
             'url_whatsapp',
             'url_text_messaging',
-            'url_text_messaging3',
             'url_menu',
             'url_facebook',
             'url_instagram',
@@ -4137,24 +4452,41 @@ public static function push_location_address( $business_id, $location_name, arra
             'url_pinterest',
         );
 
-        $chat_url = isset( $contact_data['chatUrl'] )
-            ? esc_url_raw( (string) $contact_data['chatUrl'] )
-            : ( isset( $contact_data['location_chat_url'] ) ? esc_url_raw( (string) $contact_data['location_chat_url'] ) : '' );
+        $chat_value_raw = isset( $contact_data['chatValue'] )
+            ? (string) $contact_data['chatValue']
+            : ( isset( $contact_data['chatUrl'] )
+                ? (string) $contact_data['chatUrl']
+                : ( isset( $contact_data['location_chat_url'] ) ? (string) $contact_data['location_chat_url'] : '' ) );
 
-        if ( '' !== $chat_url ) {
-            /*
-             * El editor web de Google suele mostrar "Usuario de chat" desde atributos URL.
-             * En algunas fichas Google devuelve/acepta url_whatsapp y en otras url_text_messaging.
-             * La versión anterior escogía solo uno; por eso un enlace wa.me podía guardarse en
-             * Lealez pero no aparecer visualmente en la sección Contacto de GMB. Para reflejarlo
-             * como en la interfaz de Google, Lealez publica el mismo valor en ambos atributos
-             * controlados cuando el enlace es WhatsApp, y siempre mantiene url_text_messaging
-             * como fallback oficial de mensajería.
-             */
-            $attribute_replacements['url_text_messaging'] = self::build_contact_url_attribute( $normalized, 'url_text_messaging', $chat_url );
+        $chat_type = isset( $contact_data['chatType'] )
+            ? (string) $contact_data['chatType']
+            : ( isset( $contact_data['location_chat_type'] ) ? (string) $contact_data['location_chat_type'] : '' );
 
-            if ( false !== strpos( strtolower( $chat_url ), 'wa.me/' ) || false !== strpos( strtolower( $chat_url ), 'whatsapp' ) ) {
-                $attribute_replacements['url_whatsapp'] = self::build_contact_url_attribute( $normalized, 'url_whatsapp', $chat_url );
+        $chat_country = isset( $contact_data['location_chat_country'] )
+            ? (string) $contact_data['location_chat_country']
+            : ( isset( $contact_data['location_country'] ) ? (string) $contact_data['location_country'] : 'CO' );
+
+        $chat_type    = self::normalize_contact_chat_type( $chat_type, $chat_value_raw );
+        $chat_country = self::normalize_contact_chat_country( $chat_country );
+        $chat_uri     = self::normalize_contact_chat_value_for_google( $chat_type, $chat_value_raw, $chat_country, $primary_phone, $additional_phones );
+
+        $contact_data['location_chat_type']    = $chat_type;
+        $contact_data['location_chat_country'] = $chat_country;
+        $contact_data['location_chat_api_uri'] = $chat_uri;
+
+        if ( 'sms' === $chat_type ) {
+            $contact_data['location_chat_url'] = $chat_uri ? self::normalize_contact_sms_phone_for_profile( $chat_uri, $chat_country ) : '';
+        } else {
+            $contact_data['location_chat_url'] = $chat_uri;
+        }
+
+        if ( '' !== $chat_uri ) {
+            if ( 'sms' === $chat_type ) {
+                // GMB muestra "Mensaje de texto" como número, pero en Attributes se publica como URI sms:+...
+                $attribute_replacements['url_text_messaging'] = self::build_contact_url_attribute( $normalized, 'url_text_messaging', $chat_uri );
+            } else {
+                // GMB muestra "WhatsApp" como URL click-to-chat.
+                $attribute_replacements['url_whatsapp'] = self::build_contact_url_attribute( $normalized, 'url_whatsapp', $chat_uri );
             }
         }
 
@@ -4195,7 +4527,6 @@ public static function push_location_address( $business_id, $location_name, arra
                 'code'    => $current_attributes->get_error_code(),
             );
         } else {
-            $merged_attributes = array();
             $existing_contact_signature = array();
 
             if ( is_array( $current_attributes ) ) {
@@ -4204,25 +4535,11 @@ public static function push_location_address( $business_id, $location_name, arra
                         continue;
                     }
 
-                    $attr_id = '';
-                    if ( ! empty( $attr['attributeId'] ) ) {
-                        $attr_id = strtolower( trim( (string) $attr['attributeId'] ) );
-                    } elseif ( ! empty( $attr['name'] ) ) {
-                        $parts   = explode( '/attributes/', (string) $attr['name'] );
-                        $attr_id = strtolower( trim( end( $parts ), '/' ) );
-                    }
-
-                    if ( in_array( $attr_id, $contact_attribute_ids, true ) ) {
+                    $attr_id = self::get_contact_attribute_id_from_payload( $attr );
+                    if ( $attr_id && in_array( $attr_id, $contact_attribute_ids, true ) ) {
                         $existing_contact_signature[ $attr_id ] = $attr;
-                        continue;
                     }
-
-                    $merged_attributes[] = $attr;
                 }
-            }
-
-            foreach ( $attribute_replacements as $attr ) {
-                $merged_attributes[] = $attr;
             }
 
             $before_signature = self::normalize_for_log_compare( $existing_contact_signature );
@@ -4230,22 +4547,12 @@ public static function push_location_address( $business_id, $location_name, arra
             $should_patch_attributes = ( $before_signature !== $after_signature );
 
             if ( $should_patch_attributes ) {
-                if ( empty( $merged_attributes ) ) {
-                    $attribute_result = self::make_request(
-                        $business_id,
-                        '/' . rtrim( $normalized, '/' ) . '/attributes',
-                        self::$business_api_base,
-                        'PATCH',
-                        array(
-                            'name'       => rtrim( $normalized, '/' ) . '/attributes',
-                            'attributes' => array(),
-                        ),
-                        false,
-                        array( 'updateMask' => 'attributes' )
-                    );
-                } else {
-                    $attribute_result = self::update_location_attributes( $business_id, $normalized, $merged_attributes );
-                }
+                $attribute_result = self::update_location_attributes(
+                    $business_id,
+                    $normalized,
+                    array_values( $attribute_replacements ),
+                    $contact_attribute_ids
+                );
 
                 if ( is_wp_error( $attribute_result ) ) {
                     $warnings[] = array(
@@ -4287,6 +4594,7 @@ public static function push_location_address( $business_id, $location_name, arra
                     'warnings'          => $warnings,
                     'native_updateMask' => $update_mask_str,
                     'attributes_count'  => count( $attribute_replacements ),
+                    'attributeMask'     => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $contact_attribute_ids ) ),
                     'place_actions'     => $place_action_result,
                 )
             );
@@ -4298,6 +4606,7 @@ public static function push_location_address( $business_id, $location_name, arra
             'submitted'             => $contact_data,
             'native_payload'        => $body,
             'attributes_submitted'  => $attribute_replacements,
+            'attribute_mask'        => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $contact_attribute_ids ) ),
             'attributes_response'   => is_wp_error( $attribute_result ) ? null : $attribute_result,
             'place_actions_response'=> is_wp_error( $place_action_result ) ? null : $place_action_result,
             'warnings'              => $warnings,
