@@ -97,7 +97,7 @@ public function __construct() {
     add_action( 'oy_poll_address_push_status', array( 'OY_Location_Address_Metabox', 'cron_poll_address_push_status' ) );
 
     // ✅ WP-Cron: polling de estado de push de contacto → GMB
-    // Registrado también en el CPT para que el hook esté disponible en requests de cron.
+    // Mantiene disponible el verificador aunque el cron corra fuera del admin.
     add_action( 'oy_poll_contact_push_status', array( 'OY_Location_Contact_Metabox', 'cron_poll_contact_push_status' ) );
 
     /**
@@ -3458,7 +3458,7 @@ private function humanize_attribute_id( $attr_id ) {
             if ( $address_local_pending || $address_push_pending || $contact_local_pending || $contact_push_pending ) {
                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
                     error_log(
-                        '[OY Location] save_meta_boxes — import_on_save omitido para proteger cambios locales de Dirección, Geolocalización o Contacto. '
+                        '[OY Location] save_meta_boxes — import_on_save omitido para proteger cambios locales pendientes de Dirección/Geolocalización o Contacto. '
                         . 'address_local_pending=' . ( $address_local_pending ? '1' : '0' )
                         . ' | address_push_pending=' . ( $address_push_pending ? '1' : '0' )
                         . ' | contact_local_pending=' . ( $contact_local_pending ? '1' : '0' )
