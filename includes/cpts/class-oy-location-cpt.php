@@ -2187,7 +2187,7 @@ function _normalizePeriod(p) {
         //   - attr.name = 'attributes/url_whatsapp'  (formato resource name)
         //   - attr.name = 'locations/123/attributes/url_whatsapp'  (formato completo)
         if(loc.attributes && Array.isArray(loc.attributes)){
-            var chatOfficialIds = ['url_whatsapp', 'url_text_messaging', 'url_text_messaging3'];
+            var chatOfficialIds = ['url_whatsapp', 'url_text_messaging'];
             var gmbChatUrl = '';
 
             for(var ai = 0; ai < loc.attributes.length; ai++){
@@ -2233,6 +2233,10 @@ function _normalizePeriod(p) {
                 if($chatField.length){
                     // Siempre actualizar desde GMB (es la fuente de verdad para este campo)
                     $chatField.val(gmbChatUrl);
+                    var $chatTypeField = $('#location_chat_type');
+                    if ($chatTypeField.length) {
+                        $chatTypeField.val((String(gmbChatUrl).toLowerCase().indexOf('wa.me/') !== -1 || String(gmbChatUrl).toLowerCase().indexOf('whatsapp') !== -1) ? 'whatsapp' : 'sms').trigger('change');
+                    }
                 }
                 if(window.console && window.console.log){
                     console.log('[OY Location] GMB chat URL aplicado desde atributo oficial:', gmbChatUrl);
@@ -4224,7 +4228,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                     // Coincidencia exacta o que el ID contenga la clave (p.ej. "url_facebook" dentro de un nombre compuesto)
                     if ( $attr_id_lower === $gmb_key || strpos( $attr_id_lower, $gmb_key ) !== false ) {
                         if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
-                            $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+                            $uri = isset( $attr['uriValues'][0]['uri'] ) ? sanitize_text_field( (string) $attr['uriValues'][0]['uri'] ) : '';
                             if ( $uri ) {
                                 $gmb_social_profiles[ $network_key ] = $uri;
                                 if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
@@ -4273,7 +4277,6 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
             $chat_official_ids = array(
                 'url_whatsapp',       // WhatsApp — ID oficial
                 'url_text_messaging', // SMS/texto — ID oficial
-                'url_text_messaging3',// Variante documentada en ejemplos de Google
             );
 
             $gmb_chat_url     = '';
@@ -4324,7 +4327,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
                 // ── Extraer el URI del atributo ────────────────────────────────
                 if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
-                    $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+                    $uri = isset( $attr['uriValues'][0]['uri'] ) ? sanitize_text_field( (string) $attr['uriValues'][0]['uri'] ) : '';
                     if ( $uri ) {
                         $gmb_chat_url  = $uri;
                         $gmb_chat_type = ( strpos( $attr_id_lower, 'whatsapp' ) !== false ) ? 'whatsapp' : 'sms';
@@ -4338,9 +4341,18 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 // Guardar raw para auditoría/debug
                 update_post_meta( $post_id, 'gmb_chat_url_raw', $gmb_chat_url );
                 update_post_meta( $post_id, 'gmb_chat_type', $gmb_chat_type );
+                update_post_meta( $post_id, 'location_chat_type', $gmb_chat_type ? $gmb_chat_type : 'whatsapp' );
+                update_post_meta( $post_id, 'location_chat_country', 'CO' );
 
-                // Siempre actualizar location_chat_url desde GMB (es la fuente de verdad)
-                update_post_meta( $post_id, 'location_chat_url', $gmb_chat_url );
+                // Siempre actualizar location_chat_url desde GMB (es la fuente de verdad),
+                // pero en SMS se guarda como número visible, no como URI técnico sms:+...
+                if ( class_exists( 'Lealez_GMB_API' ) && 'sms' === $gmb_chat_type && method_exists( 'Lealez_GMB_API', 'normalize_contact_sms_phone_for_profile' ) ) {
+                    update_post_meta( $post_id, 'location_chat_url', Lealez_GMB_API::normalize_contact_sms_phone_for_profile( $gmb_chat_url, 'CO' ) );
+                } elseif ( class_exists( 'Lealez_GMB_API' ) && 'whatsapp' === $gmb_chat_type && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_value_for_google' ) ) {
+                    update_post_meta( $post_id, 'location_chat_url', Lealez_GMB_API::normalize_contact_chat_value_for_google( 'whatsapp', $gmb_chat_url, 'CO' ) );
+                } else {
+                    update_post_meta( $post_id, 'location_chat_url', $gmb_chat_url );
+                }
 
                 // Backward compat: también llenar el campo legacy location_whatsapp
                 if ( 'whatsapp' === $gmb_chat_type ) {
@@ -4436,7 +4448,7 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
                     $uri = '';
                     if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
-                        $uri = isset( $attr['uriValues'][0]['uri'] ) ? esc_url_raw( (string) $attr['uriValues'][0]['uri'] ) : '';
+                        $uri = isset( $attr['uriValues'][0]['uri'] ) ? sanitize_text_field( (string) $attr['uriValues'][0]['uri'] ) : '';
                     }
 
                     if ( ! $uri ) {
