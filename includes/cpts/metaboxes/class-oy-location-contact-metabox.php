@@ -195,6 +195,50 @@ class OY_Location_Contact_Metabox {
     }
 
     /**
+     * Normaliza el ID corto de un atributo de Google Business Profile.
+     *
+     * Google puede devolver el mismo atributo como:
+     * - attributes/url_whatsapp
+     * - locations/{id}/attributes/url_whatsapp
+     * - accounts/{id}/locations/{id}/attributes/url_whatsapp
+     *
+     * Para Lealez siempre se debe trabajar con el ID corto: url_whatsapp.
+     *
+     * @param array|string $attribute Atributo completo o nombre del atributo.
+     * @return string
+     */
+    private static function normalize_gmb_attribute_id( $attribute ) {
+        $raw = '';
+
+        if ( is_array( $attribute ) ) {
+            if ( ! empty( $attribute['attributeId'] ) ) {
+                $raw = (string) $attribute['attributeId'];
+            } elseif ( ! empty( $attribute['name'] ) ) {
+                $raw = (string) $attribute['name'];
+            }
+        } else {
+            $raw = (string) $attribute;
+        }
+
+        $raw = trim( $raw );
+        if ( '' === $raw ) {
+            return '';
+        }
+
+        if ( false !== strpos( $raw, '/attributes/' ) ) {
+            $parts = explode( '/attributes/', $raw, 2 );
+            $raw   = end( $parts );
+        } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
+            $raw = substr( $raw, strlen( 'attributes/' ) );
+        } elseif ( false !== strpos( $raw, 'attributes/' ) ) {
+            $parts = explode( 'attributes/', $raw, 2 );
+            $raw   = end( $parts );
+        }
+
+        return strtolower( sanitize_key( trim( $raw, '/' ) ) );
+    }
+
+    /**
      * Normaliza el tipo del campo Usuario de chat.
      *
      * @param string $chat_type Tipo recibido.
@@ -354,18 +398,25 @@ class OY_Location_Contact_Metabox {
      */
     private function extract_chat_payload_from_attributes( array $attributes ) {
         $raw_channels = array();
+        $preferred    = '';
 
         foreach ( $attributes as $attr ) {
             if ( ! is_array( $attr ) ) {
                 continue;
             }
 
-            $attr_id = '';
-            if ( ! empty( $attr['attributeId'] ) ) {
-                $attr_id = strtolower( trim( (string) $attr['attributeId'] ) );
-            } elseif ( ! empty( $attr['name'] ) ) {
-                $parts   = explode( '/attributes/', (string) $attr['name'], 2 );
-                $attr_id = strtolower( trim( end( $parts ), '/' ) );
+            $attr_id = self::normalize_gmb_attribute_id( $attr );
+
+            if ( 'preferred_messaging_service' === $attr_id ) {
+                if ( ! empty( $attr['values'] ) && is_array( $attr['values'] ) ) {
+                    $preferred_raw = strtolower( trim( (string) reset( $attr['values'] ) ) );
+                    if ( in_array( $preferred_raw, array( 'whatsapp', 'url_whatsapp' ), true ) ) {
+                        $preferred = 'whatsapp';
+                    } elseif ( in_array( $preferred_raw, array( 'text_messaging', 'url_text_messaging', 'sms' ), true ) ) {
+                        $preferred = 'sms';
+                    }
+                }
+                continue;
             }
 
             if ( ! in_array( $attr_id, array( 'url_whatsapp', 'url_text_messaging' ), true ) ) {
@@ -392,6 +443,16 @@ class OY_Location_Contact_Metabox {
         }
 
         $channels = $this->normalize_chat_channels( $raw_channels, '', array(), 'CO' );
+        if ( $preferred && count( $channels ) > 1 ) {
+            usort( $channels, static function( $a, $b ) use ( $preferred ) {
+                $a_is_preferred = isset( $a['type'] ) && $a['type'] === $preferred;
+                $b_is_preferred = isset( $b['type'] ) && $b['type'] === $preferred;
+                if ( $a_is_preferred === $b_is_preferred ) {
+                    return 0;
+                }
+                return $a_is_preferred ? -1 : 1;
+            } );
+        }
         $first    = ! empty( $channels[0] ) ? $channels[0] : array();
 
         return array(
@@ -729,13 +790,7 @@ class OY_Location_Contact_Metabox {
             if ( ! is_array( $attr ) ) {
                 continue;
             }
-            $attr_id = '';
-            if ( ! empty( $attr['attributeId'] ) ) {
-                $attr_id = strtolower( trim( (string) $attr['attributeId'] ) );
-            } elseif ( ! empty( $attr['name'] ) ) {
-                $parts   = explode( '/attributes/', (string) $attr['name'], 2 );
-                $attr_id = strtolower( trim( end( $parts ), '/' ) );
-            }
+            $attr_id = self::normalize_gmb_attribute_id( $attr );
             if ( '' === $attr_id ) {
                 continue;
             }
@@ -1286,13 +1341,7 @@ class OY_Location_Contact_Metabox {
                 if ( ! is_array( $attr ) ) {
                     continue;
                 }
-                $attr_id = '';
-                if ( ! empty( $attr['attributeId'] ) ) {
-                    $attr_id = strtolower( trim( (string) $attr['attributeId'] ) );
-                } elseif ( ! empty( $attr['name'] ) ) {
-                    $parts   = explode( '/attributes/', (string) $attr['name'], 2 );
-                    $attr_id = strtolower( trim( end( $parts ), '/' ) );
-                }
+                $attr_id = self::normalize_gmb_attribute_id( $attr );
                 foreach ( $keys as $key ) {
                     if ( $attr_id === $key || false !== strpos( $attr_id, $key ) ) {
                         if ( ! empty( $attr['uriValues'] ) && is_array( $attr['uriValues'] ) ) {
