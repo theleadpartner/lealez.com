@@ -2597,13 +2597,18 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             // enviar "locations/{id}/attributes/{attribute_id}" dentro del item,
             // porque Google lo trata como nombre inválido para el Attribute.
             $attribute['name'] = 'attributes/' . sanitize_key( $attr_id );
-
-            // En el recurso Attribute que se envía a locations.updateAttributes
-            // no forzamos valueType. Google lo devuelve en las lecturas, pero en
-            // escritura puede rechazarlo como argumento inválido para algunos
-            // atributos/categorías. El tipo queda determinado por el atributo y
-            // por el contenido enviado: uriValues para URL y values para ENUM.
-            unset( $attribute['valueType'] );
+            // El endpoint locations.updateAttributes espera el recurso Attribute
+            // completo. Para los campos de chat, redes y vínculos se conserva
+            // valueType=URL cuando hay uriValues. No se elimina valueType porque
+            // algunos atributos de Business Profile rechazan el body si el tipo no
+            // viaja explícito.
+            if ( empty( $attribute['valueType'] ) ) {
+                if ( ! empty( $attribute['uriValues'] ) ) {
+                    $attribute['valueType'] = 'URL';
+                } elseif ( ! empty( $attribute['values'] ) ) {
+                    $attribute['valueType'] = 'ENUM';
+                }
+            }
 
             if ( ! empty( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) ) {
                 foreach ( $attribute['uriValues'] as $idx => $uri_value ) {
@@ -2765,12 +2770,13 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                 'response' => $group_result,
             );
         }
-
-        $warnings[] = array(
-            'scope'   => 'attributes_' . $group_label,
+        // El error del PATCH agrupado no se expone como warning final todavía.
+        // Solo indica que Google rechazó el lote y que debemos reintentar atributo
+        // por atributo. Si los reintentos individuales aplican, no debe quedar un
+        // falso "Request contains an invalid argument" en el panel.
+        $group_error = array(
             'message' => $group_result->get_error_message(),
             'code'    => $group_result->get_error_code(),
-            'mode'    => 'group_retry_individual',
             'mask'    => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $mask_items ) ),
         );
 
@@ -2799,8 +2805,9 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                     'scope'   => 'attribute_' . $attr_id,
                     'message' => $single_result->get_error_message(),
                     'code'    => $single_result->get_error_code(),
-                    'mode'    => 'individual_retry_failed',
-                    'mask'    => self::normalize_contact_attribute_mask_item( $attr_id ),
+                    'mode'        => 'individual_retry_failed',
+                    'mask'        => self::normalize_contact_attribute_mask_item( $attr_id ),
+                    'group_error' => $group_error,
                 );
             } else {
                 $responses[ $attr_id ] = $single_result;
@@ -2813,10 +2820,7 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             'mask'        => array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), $mask_items ),
             'responses'   => $responses,
             'errors'      => $errors,
-            'group_error' => array(
-                'message' => $group_result->get_error_message(),
-                'code'    => $group_result->get_error_code(),
-            ),
+            'group_error' => $group_error,
         );
     }
 
@@ -4773,7 +4777,6 @@ public static function push_location_address( $business_id, $location_name, arra
         $contact_attribute_ids  = array(
             'url_whatsapp',
             'url_text_messaging',
-            'preferred_messaging_service',
             'url_menu',
             'url_facebook',
             'url_instagram',
@@ -4835,11 +4838,10 @@ public static function push_location_address( $business_id, $location_name, arra
             }
             $attribute_replacements[ $chat_channel['attribute_id'] ] = self::build_contact_url_attribute( $normalized, $chat_channel['attribute_id'], $chat_channel['api_uri'] );
         }
-
-        if ( ! empty( $chat_channels[0]['type'] ) ) {
-            $preferred_messaging_service = 'sms' === $chat_channels[0]['type'] ? 'text_messaging' : 'whatsapp';
-            $attribute_replacements['preferred_messaging_service'] = self::build_contact_enum_attribute( 'preferred_messaging_service', $preferred_messaging_service );
-        }
+        // preferred_messaging_service se lee desde GMB para ordenar el canal principal,
+        // pero no se envía desde Lealez. Google puede devolver este atributo como ENUM,
+        // pero en algunas cuentas/categorías rechaza su escritura con "invalid argument".
+        // La actualización funcional de Usuario de chat depende de url_whatsapp y url_text_messaging.
 
         $menu_url = isset( $contact_data['menuUrl'] )
             ? esc_url_raw( (string) $contact_data['menuUrl'] )
@@ -4909,7 +4911,7 @@ public static function push_location_address( $business_id, $location_name, arra
             }
 
             if ( ! empty( $changed_attribute_ids ) ) {
-                $chat_attribute_ids = array( 'url_whatsapp', 'url_text_messaging', 'preferred_messaging_service' );
+                $chat_attribute_ids = array( 'url_whatsapp', 'url_text_messaging' );
                 $chat_mask          = array_values( array_intersect( $changed_attribute_ids, $chat_attribute_ids ) );
                 $other_mask         = array_values( array_diff( $changed_attribute_ids, $chat_attribute_ids ) );
                 $attribute_result   = array(
