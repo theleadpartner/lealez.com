@@ -2591,7 +2591,16 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                 continue;
             }
 
-            $attribute['name'] = $normalized_location . '/attributes/' . sanitize_key( $attr_id );
+            // En el body de locations.updateAttributes, el recurso padre va en
+            // body.name="locations/{id}/attributes" y cada atributo individual
+            // debe enviarse con name="attributes/{attribute_id}". No se debe
+            // enviar "locations/{id}/attributes/{attribute_id}" dentro del item,
+            // porque Google lo trata como nombre inválido para el Attribute.
+            $attribute['name'] = 'attributes/' . sanitize_key( $attr_id );
+
+            if ( ! isset( $attribute['valueType'] ) && ! empty( $attribute['uriValues'] ) ) {
+                $attribute['valueType'] = 'URL';
+            }
 
             if ( ! empty( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) ) {
                 foreach ( $attribute['uriValues'] as $idx => $uri_value ) {
@@ -3965,8 +3974,9 @@ public static function push_location_address( $business_id, $location_name, arra
      */
     private static function build_contact_url_attribute( $normalized_location, $attribute_id, $url ) {
         return array(
-            'name'      => rtrim( $normalized_location, '/' ) . '/attributes/' . sanitize_key( $attribute_id ),
+            'name'      => 'attributes/' . sanitize_key( $attribute_id ),
             'valueType' => 'URL',
+            'values'    => array(),
             'uriValues' => array(
                 array(
                     'uri' => self::sanitize_contact_attribute_uri( (string) $url ),
@@ -4176,14 +4186,9 @@ public static function push_location_address( $business_id, $location_name, arra
         $region_code = self::normalize_contact_chat_country( $region_code );
         $chat_type   = self::normalize_contact_chat_type( $chat_type, $chat_value );
 
-        if ( '' === $chat_value && 'whatsapp' === $chat_type ) {
-            if ( ! empty( $additional_phones[0] ) ) {
-                $chat_value = (string) $additional_phones[0];
-            } elseif ( '' !== trim( (string) $primary_phone ) ) {
-                $chat_value = (string) $primary_phone;
-            }
-        }
-
+        // Importante: no usar teléfonos como fallback automático.
+        // Si el usuario borra el campo en Lealez, debe quedar realmente vacío y
+        // el attributeMask debe limpiar el atributo correspondiente en Google.
         if ( '' === $chat_value ) {
             return '';
         }
@@ -4221,6 +4226,186 @@ public static function push_location_address( $business_id, $location_name, arra
         }
 
         return 'https://wa.me/' . $digits;
+    }
+
+    /**
+     * Normaliza varios canales de chat de Lealez/GMB.
+     *
+     * Google Business Profile expone los canales de chat como atributos URL
+     * independientes. En la práctica, Lealez debe poder enviar al mismo tiempo
+     * `url_whatsapp` y `url_text_messaging`, en vez de forzar un único campo.
+     *
+     * Cada entrada normalizada conserva:
+     * - type: whatsapp|sms
+     * - country: ISO-2 usado para normalizar teléfonos
+     * - value: valor visible/guardado en Lealez (wa.me para WhatsApp, +número para SMS)
+     * - api_uri: valor técnico enviado a Business Information API
+     * - attribute_id: url_whatsapp|url_text_messaging
+     *
+     * @param mixed  $channels          Array de canales o payload legacy.
+     * @param string $primary_phone     Teléfono principal, solo para compatibilidad externa. No se usa como fallback.
+     * @param array  $additional_phones Teléfonos adicionales, solo para compatibilidad externa. No se usa como fallback.
+     * @param string $default_country   País por defecto.
+     * @return array
+     */
+    public static function normalize_contact_chat_channels( $channels, $primary_phone = '', array $additional_phones = array(), $default_country = 'CO' ) {
+        $default_country = self::normalize_contact_chat_country( $default_country );
+
+        if ( ! is_array( $channels ) ) {
+            $channels = array();
+        }
+
+        // Compatibilidad: si llega un payload asociativo legacy, convertirlo en una fila.
+        $is_assoc = array_keys( $channels ) !== range( 0, count( $channels ) - 1 );
+        if ( $is_assoc && ( isset( $channels['type'] ) || isset( $channels['value'] ) || isset( $channels['url'] ) || isset( $channels['location_chat_type'] ) || isset( $channels['location_chat_url'] ) ) ) {
+            $channels = array( $channels );
+        }
+
+        $out = array();
+        foreach ( $channels as $entry ) {
+            if ( ! is_array( $entry ) ) {
+                continue;
+            }
+
+            $raw_value = '';
+            if ( isset( $entry['value'] ) ) {
+                $raw_value = (string) $entry['value'];
+            } elseif ( isset( $entry['url'] ) ) {
+                $raw_value = (string) $entry['url'];
+            } elseif ( isset( $entry['uri'] ) ) {
+                $raw_value = (string) $entry['uri'];
+            } elseif ( isset( $entry['location_chat_url'] ) ) {
+                $raw_value = (string) $entry['location_chat_url'];
+            }
+
+            $raw_value = trim( $raw_value );
+            if ( '' === $raw_value ) {
+                continue;
+            }
+
+            $type = '';
+            if ( isset( $entry['type'] ) ) {
+                $type = (string) $entry['type'];
+            } elseif ( isset( $entry['chat_type'] ) ) {
+                $type = (string) $entry['chat_type'];
+            } elseif ( isset( $entry['location_chat_type'] ) ) {
+                $type = (string) $entry['location_chat_type'];
+            }
+
+            $country = '';
+            if ( isset( $entry['country'] ) ) {
+                $country = (string) $entry['country'];
+            } elseif ( isset( $entry['chat_country'] ) ) {
+                $country = (string) $entry['chat_country'];
+            } elseif ( isset( $entry['location_chat_country'] ) ) {
+                $country = (string) $entry['location_chat_country'];
+            }
+            $country = self::normalize_contact_chat_country( $country ? $country : $default_country );
+            $type    = self::normalize_contact_chat_type( $type, $raw_value );
+            $api_uri = self::normalize_contact_chat_value_for_google( $type, $raw_value, $country, '', array() );
+
+            if ( '' === $api_uri ) {
+                continue;
+            }
+
+            if ( 'sms' === $type ) {
+                $value        = self::normalize_contact_sms_phone_for_profile( $api_uri, $country );
+                $attribute_id = 'url_text_messaging';
+            } else {
+                $value        = $api_uri;
+                $attribute_id = 'url_whatsapp';
+            }
+
+            $out[ $type ] = array(
+                'type'         => $type,
+                'country'      => $country,
+                'value'        => $value,
+                'api_uri'      => $api_uri,
+                'attribute_id' => $attribute_id,
+            );
+        }
+
+        // Orden consistente con la UI de Google: primero WhatsApp si existe, luego SMS.
+        $ordered = array();
+        foreach ( array( 'whatsapp', 'sms' ) as $type ) {
+            if ( isset( $out[ $type ] ) ) {
+                $ordered[] = $out[ $type ];
+            }
+        }
+
+        return $ordered;
+    }
+
+    /**
+     * Crea una firma estable de atributos de contacto para comparar GMB vs Lealez.
+     *
+     * Google puede devolver los atributos como `attributes/url_whatsapp`, mientras
+     * que internamente algunas versiones antiguas de Lealez pudieron guardar
+     * `locations/{id}/attributes/url_whatsapp`. Para la comparación solamente
+     * importa el atributo corto, el valueType y sus uriValues normalizados.
+     *
+     * @param array $attributes Mapa o lista de atributos.
+     * @return array
+     */
+    private static function normalize_contact_attribute_signature_map( array $attributes ) {
+        $signature = array();
+
+        foreach ( $attributes as $attribute ) {
+            if ( ! is_array( $attribute ) ) {
+                continue;
+            }
+
+            $attr_id = self::get_contact_attribute_id_from_payload( $attribute );
+            if ( '' === $attr_id ) {
+                continue;
+            }
+
+            $attr_id    = sanitize_key( $attr_id );
+            $value_type = isset( $attribute['valueType'] ) ? strtoupper( trim( (string) $attribute['valueType'] ) ) : '';
+            $uris       = array();
+
+            if ( ! empty( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) ) {
+                foreach ( $attribute['uriValues'] as $uri_value ) {
+                    if ( ! is_array( $uri_value ) || empty( $uri_value['uri'] ) ) {
+                        continue;
+                    }
+                    $uri = self::sanitize_contact_attribute_uri( (string) $uri_value['uri'] );
+                    if ( '' !== $uri ) {
+                        $uris[] = strtolower( rtrim( trim( $uri ), '/' ) );
+                    }
+                }
+            }
+
+            $uris = array_values( array_unique( $uris ) );
+            sort( $uris );
+
+            $entry = array(
+                'name'      => 'attributes/' . $attr_id,
+                'valueType' => $value_type,
+                'uriValues' => $uris,
+            );
+
+            if ( ! empty( $attribute['values'] ) && is_array( $attribute['values'] ) ) {
+                $values = array();
+                foreach ( $attribute['values'] as $value ) {
+                    if ( is_scalar( $value ) || null === $value ) {
+                        $values[] = strtolower( trim( (string) $value ) );
+                    }
+                }
+                $values = array_values( array_unique( array_filter( $values, static function( $value ) {
+                    return '' !== trim( (string) $value );
+                } ) ) );
+                sort( $values );
+                if ( ! empty( $values ) ) {
+                    $entry['values'] = $values;
+                }
+            }
+
+            $signature[ $attr_id ] = $entry;
+        }
+
+        ksort( $signature );
+        return $signature;
     }
 
     /**
@@ -4452,42 +4637,56 @@ public static function push_location_address( $business_id, $location_name, arra
             'url_pinterest',
         );
 
-        $chat_value_raw = isset( $contact_data['chatValue'] )
-            ? (string) $contact_data['chatValue']
-            : ( isset( $contact_data['chatUrl'] )
-                ? (string) $contact_data['chatUrl']
-                : ( isset( $contact_data['location_chat_url'] ) ? (string) $contact_data['location_chat_url'] : '' ) );
-
-        $chat_type = isset( $contact_data['chatType'] )
-            ? (string) $contact_data['chatType']
-            : ( isset( $contact_data['location_chat_type'] ) ? (string) $contact_data['location_chat_type'] : '' );
-
-        $chat_country = isset( $contact_data['location_chat_country'] )
-            ? (string) $contact_data['location_chat_country']
-            : ( isset( $contact_data['location_country'] ) ? (string) $contact_data['location_country'] : 'CO' );
-
-        $chat_type    = self::normalize_contact_chat_type( $chat_type, $chat_value_raw );
-        $chat_country = self::normalize_contact_chat_country( $chat_country );
-        $chat_uri     = self::normalize_contact_chat_value_for_google( $chat_type, $chat_value_raw, $chat_country, $primary_phone, $additional_phones );
-
-        $contact_data['location_chat_type']    = $chat_type;
-        $contact_data['location_chat_country'] = $chat_country;
-        $contact_data['location_chat_api_uri'] = $chat_uri;
-
-        if ( 'sms' === $chat_type ) {
-            $contact_data['location_chat_url'] = $chat_uri ? self::normalize_contact_sms_phone_for_profile( $chat_uri, $chat_country ) : '';
+        $raw_chat_channels = array();
+        if ( isset( $contact_data['location_chat_channels'] ) && is_array( $contact_data['location_chat_channels'] ) ) {
+            $raw_chat_channels = $contact_data['location_chat_channels'];
+        } elseif ( isset( $contact_data['chatChannels'] ) && is_array( $contact_data['chatChannels'] ) ) {
+            $raw_chat_channels = $contact_data['chatChannels'];
         } else {
-            $contact_data['location_chat_url'] = $chat_uri;
+            $legacy_chat_value = isset( $contact_data['chatValue'] )
+                ? (string) $contact_data['chatValue']
+                : ( isset( $contact_data['chatUrl'] )
+                    ? (string) $contact_data['chatUrl']
+                    : ( isset( $contact_data['location_chat_url'] ) ? (string) $contact_data['location_chat_url'] : '' ) );
+
+            $legacy_chat_type = isset( $contact_data['chatType'] )
+                ? (string) $contact_data['chatType']
+                : ( isset( $contact_data['location_chat_type'] ) ? (string) $contact_data['location_chat_type'] : '' );
+
+            $legacy_chat_country = isset( $contact_data['location_chat_country'] )
+                ? (string) $contact_data['location_chat_country']
+                : ( isset( $contact_data['location_country'] ) ? (string) $contact_data['location_country'] : 'CO' );
+
+            if ( '' !== trim( $legacy_chat_value ) ) {
+                $raw_chat_channels[] = array(
+                    'type'    => $legacy_chat_type,
+                    'country' => $legacy_chat_country,
+                    'value'   => $legacy_chat_value,
+                );
+            }
         }
 
-        if ( '' !== $chat_uri ) {
-            if ( 'sms' === $chat_type ) {
-                // GMB muestra "Mensaje de texto" como número, pero en Attributes se publica como URI sms:+...
-                $attribute_replacements['url_text_messaging'] = self::build_contact_url_attribute( $normalized, 'url_text_messaging', $chat_uri );
-            } else {
-                // GMB muestra "WhatsApp" como URL click-to-chat.
-                $attribute_replacements['url_whatsapp'] = self::build_contact_url_attribute( $normalized, 'url_whatsapp', $chat_uri );
+        $chat_country  = isset( $contact_data['location_chat_country'] ) ? (string) $contact_data['location_chat_country'] : ( isset( $contact_data['location_country'] ) ? (string) $contact_data['location_country'] : 'CO' );
+        $chat_channels = self::normalize_contact_chat_channels( $raw_chat_channels, $primary_phone, $additional_phones, $chat_country );
+
+        $contact_data['location_chat_channels'] = $chat_channels;
+        if ( ! empty( $chat_channels[0] ) ) {
+            $contact_data['location_chat_type']        = $chat_channels[0]['type'];
+            $contact_data['location_chat_country']     = $chat_channels[0]['country'];
+            $contact_data['location_chat_url']         = $chat_channels[0]['value'];
+            $contact_data['location_chat_api_uri']     = $chat_channels[0]['api_uri'];
+        } else {
+            $contact_data['location_chat_type']        = '';
+            $contact_data['location_chat_country']     = self::normalize_contact_chat_country( $chat_country );
+            $contact_data['location_chat_url']         = '';
+            $contact_data['location_chat_api_uri']     = '';
+        }
+
+        foreach ( $chat_channels as $chat_channel ) {
+            if ( empty( $chat_channel['attribute_id'] ) || empty( $chat_channel['api_uri'] ) ) {
+                continue;
             }
+            $attribute_replacements[ $chat_channel['attribute_id'] ] = self::build_contact_url_attribute( $normalized, $chat_channel['attribute_id'], $chat_channel['api_uri'] );
         }
 
         $menu_url = isset( $contact_data['menuUrl'] )
@@ -4542,8 +4741,8 @@ public static function push_location_address( $business_id, $location_name, arra
                 }
             }
 
-            $before_signature = self::normalize_for_log_compare( $existing_contact_signature );
-            $after_signature  = self::normalize_for_log_compare( $attribute_replacements );
+            $before_signature = self::normalize_contact_attribute_signature_map( $existing_contact_signature );
+            $after_signature  = self::normalize_contact_attribute_signature_map( $attribute_replacements );
             $should_patch_attributes = ( $before_signature !== $after_signature );
 
             if ( $should_patch_attributes ) {
