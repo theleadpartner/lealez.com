@@ -2671,6 +2671,12 @@ function _normalizePeriod(p) {
                     continue;
                 }
                 $attr_id_raw = (string) $attr['attributeId'];
+                if ( 0 === strpos( $attr_id_raw, 'attributes/' ) ) {
+                    $attr_id_raw = substr( $attr_id_raw, strlen( 'attributes/' ) );
+                } elseif ( false !== strpos( $attr_id_raw, 'attributes/' ) ) {
+                    $_attr_parts = explode( 'attributes/', $attr_id_raw, 2 );
+                    $attr_id_raw = trim( end( $_attr_parts ), '/' );
+                }
                 $attr_id     = strtolower( $attr_id_raw );
                 $attr_name   = $this->humanize_attribute_id( $attr_id_raw );
                 $value_str   = $get_attr_value( $attr );
@@ -4200,12 +4206,24 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 if ( ! empty( $attr['attributeId'] ) ) {
                     // Formato legacy / algunos wrappers
                     $attr_id_raw = (string) $attr['attributeId'];
+                    if ( 0 === strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $attr_id_raw = substr( $attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts = explode( 'attributes/', $attr_id_raw, 2 );
+                        $attr_id_raw = trim( end( $_attr_parts ), '/' );
+                    }
                 } elseif ( ! empty( $attr['name'] ) ) {
                     // Formato real de Business Information API v1:
                     // "locations/{id}/attributes/url_facebook"
                     $name_str    = (string) $attr['name'];
-                    $parts       = explode( '/attributes/', $name_str );
+                    $parts       = explode( '/attributes/', $name_str, 2 );
                     $attr_id_raw = trim( end( $parts ), '/' );
+                    if ( 0 === strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $attr_id_raw = substr( $attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts = explode( 'attributes/', $attr_id_raw, 2 );
+                        $attr_id_raw = trim( end( $_attr_parts ), '/' );
+                    }
                 }
 
                 if ( '' === $attr_id_raw ) {
@@ -4260,7 +4278,8 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
             // al mismo tiempo, como en la interfaz de GMB.
             // ─────────────────────────────────────────────────────────────────────
 
-            $gmb_chat_channels = array();
+            $gmb_chat_channels  = array();
+            $gmb_chat_preferred = '';
 
             foreach ( $data['attributes'] as $attr ) {
                 if ( ! is_array( $attr ) ) {
@@ -4270,10 +4289,22 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 $attr_id_raw = '';
                 if ( ! empty( $attr['attributeId'] ) ) {
                     $attr_id_raw = (string) $attr['attributeId'];
+                    if ( 0 === strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $attr_id_raw = substr( $attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts = explode( 'attributes/', $attr_id_raw, 2 );
+                        $attr_id_raw = trim( end( $_attr_parts ), '/' );
+                    }
                 } elseif ( ! empty( $attr['name'] ) ) {
                     $name_str    = (string) $attr['name'];
-                    $parts       = explode( '/attributes/', $name_str );
+                    $parts       = explode( '/attributes/', $name_str, 2 );
                     $attr_id_raw = trim( end( $parts ), '/' );
+                    if ( 0 === strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $attr_id_raw = substr( $attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts = explode( 'attributes/', $attr_id_raw, 2 );
+                        $attr_id_raw = trim( end( $_attr_parts ), '/' );
+                    }
                 }
 
                 if ( '' === $attr_id_raw ) {
@@ -4281,6 +4312,19 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                 }
 
                 $attr_id_lower = strtolower( $attr_id_raw );
+
+                if ( 'preferred_messaging_service' === $attr_id_lower ) {
+                    if ( ! empty( $attr['values'] ) && is_array( $attr['values'] ) ) {
+                        $preferred_raw = strtolower( trim( (string) reset( $attr['values'] ) ) );
+                        if ( in_array( $preferred_raw, array( 'whatsapp', 'url_whatsapp' ), true ) ) {
+                            $gmb_chat_preferred = 'whatsapp';
+                        } elseif ( in_array( $preferred_raw, array( 'text_messaging', 'url_text_messaging', 'sms' ), true ) ) {
+                            $gmb_chat_preferred = 'sms';
+                        }
+                    }
+                    continue;
+                }
+
                 if ( ! in_array( $attr_id_lower, array( 'url_whatsapp', 'url_text_messaging' ), true ) ) {
                     continue;
                 }
@@ -4303,6 +4347,17 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
 
             if ( class_exists( 'Lealez_GMB_API' ) && method_exists( 'Lealez_GMB_API', 'normalize_contact_chat_channels' ) ) {
                 $gmb_chat_channels = Lealez_GMB_API::normalize_contact_chat_channels( $gmb_chat_channels, '', array(), 'CO' );
+            }
+
+            if ( $gmb_chat_preferred && count( $gmb_chat_channels ) > 1 ) {
+                usort( $gmb_chat_channels, static function( $a, $b ) use ( $gmb_chat_preferred ) {
+                    $a_is_preferred = isset( $a['type'] ) && $a['type'] === $gmb_chat_preferred;
+                    $b_is_preferred = isset( $b['type'] ) && $b['type'] === $gmb_chat_preferred;
+                    if ( $a_is_preferred === $b_is_preferred ) {
+                        return 0;
+                    }
+                    return $a_is_preferred ? -1 : 1;
+                } );
             }
 
             if ( ! empty( $gmb_chat_channels ) ) {
@@ -4379,8 +4434,14 @@ update_post_meta( $post_id, 'gmb_location_raw', $data );
                     $attr_name_full = $attr_id_raw;
                 } elseif ( ! empty( $attr['name'] ) ) {
                     $attr_name_full = (string) $attr['name'];
-                    $parts          = explode( '/attributes/', $attr_name_full );
+                    $parts          = explode( '/attributes/', $attr_name_full, 2 );
                     $attr_id_raw    = trim( end( $parts ), '/' );
+                    if ( 0 === strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $attr_id_raw = substr( $attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts = explode( 'attributes/', $attr_id_raw, 2 );
+                        $attr_id_raw = trim( end( $_attr_parts ), '/' );
+                    }
                 }
 
                 if ( '' === $attr_id_raw ) {
@@ -5764,8 +5825,20 @@ public function ajax_get_gmb_location_details() {
                     $_attr_name_full = strtolower( (string) $_attr['name'] );
                     $_parts          = explode( '/attributes/', (string) $_attr['name'], 2 );
                     $_attr_id_raw    = strtolower( trim( end( $_parts ), '/' ) );
+                    if ( 0 === strpos( $_attr_id_raw, 'attributes/' ) ) {
+                        $_attr_id_raw = substr( $_attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $_attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts  = explode( 'attributes/', $_attr_id_raw, 2 );
+                        $_attr_id_raw = strtolower( trim( end( $_attr_parts ), '/' ) );
+                    }
                 } elseif ( ! empty( $_attr['attributeId'] ) ) {
                     $_attr_id_raw    = strtolower( trim( (string) $_attr['attributeId'] ) );
+                    if ( 0 === strpos( $_attr_id_raw, 'attributes/' ) ) {
+                        $_attr_id_raw = substr( $_attr_id_raw, strlen( 'attributes/' ) );
+                    } elseif ( false !== strpos( $_attr_id_raw, 'attributes/' ) ) {
+                        $_attr_parts  = explode( 'attributes/', $_attr_id_raw, 2 );
+                        $_attr_id_raw = strtolower( trim( end( $_attr_parts ), '/' ) );
+                    }
                     $_attr_name_full = $_attr_id_raw;
                 }
 
