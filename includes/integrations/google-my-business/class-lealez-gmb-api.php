@@ -100,6 +100,62 @@ private static $performance_api_base = 'https://businessprofileperformance.googl
     private static $cache_duration_locations = 86400;
 
     /**
+     * Indica si se deben escribir trazas técnicas en wp-content/debug.log.
+     *
+     * @return bool
+     */
+    private static function is_gmb_debug_enabled() {
+        return defined( 'WP_DEBUG' ) && WP_DEBUG;
+    }
+
+    /**
+     * Redacta datos sensibles antes de enviarlos al debug.log.
+     *
+     * @param mixed $value Valor a limpiar.
+     * @return mixed
+     */
+    private static function redact_debug_value( $value ) {
+        if ( is_array( $value ) ) {
+            $out = array();
+            foreach ( $value as $key => $item ) {
+                $key_string = strtolower( (string) $key );
+                if ( in_array( $key_string, array( 'authorization', 'access_token', 'refresh_token', 'client_secret', 'id_token' ), true ) ) {
+                    $out[ $key ] = '[redacted]';
+                    continue;
+                }
+                $out[ $key ] = self::redact_debug_value( $item );
+            }
+            return $out;
+        }
+
+        if ( is_object( $value ) ) {
+            return self::redact_debug_value( (array) $value );
+        }
+
+        return $value;
+    }
+
+    /**
+     * Escribe una línea de diagnóstico solo cuando WP_DEBUG está activo.
+     *
+     * @param string $message Mensaje corto.
+     * @param array  $context Contexto técnico.
+     */
+    private static function gmb_debug_log( $message, array $context = array() ) {
+        if ( ! self::is_gmb_debug_enabled() ) {
+            return;
+        }
+
+        $context = self::redact_debug_value( $context );
+        $encoded = ! empty( $context ) ? wp_json_encode( $context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) : '';
+        if ( false === $encoded ) {
+            $encoded = '[context_json_encode_failed]';
+        }
+
+        error_log( '[Lealez GMB DEBUG] ' . $message . ( $encoded ? ' | ' . $encoded : '' ) );
+    }
+
+    /**
      * Check if we can refresh now
      *
      * @param int $business_id Business post ID
@@ -603,6 +659,19 @@ private static function make_request( $business_id, $endpoint, $api_base, $metho
         $args['body'] = wp_json_encode( $body );
     }
 
+    if ( self::is_gmb_debug_enabled() && in_array( $method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true ) ) {
+        self::gmb_debug_log( 'HTTP request prepared', array(
+            'business_id'       => $business_id,
+            'method'            => $method,
+            'api_base'          => $api_base,
+            'endpoint'          => $endpoint,
+            'query_args'        => $query_args,
+            'request_url'       => $url,
+            'request_body'      => $body,
+            'request_body_json' => isset( $args['body'] ) ? $args['body'] : '',
+        ) );
+    }
+
     // ✅ Local limiter (evita bursts desde el mismo WP)
     if ( class_exists( 'Lealez_GMB_Rate_Limiter' ) ) {
         $endpoint_key = $api_base . $endpoint;
@@ -700,14 +769,30 @@ private static function make_request( $business_id, $endpoint, $api_base, $metho
 
         // Build rich error data (IMPORTANT for readMask fallback decisions)
         $rich_error_data = array(
-            'code'      => (int) $response_code,
-            'endpoint'  => (string) $endpoint,
-            'api_base'  => (string) $api_base,
-            'method'    => (string) $method,
-            'query'     => is_array( $query_args ) ? $query_args : array(),
-            'body'      => is_array( $data ) ? $data : array(),
-            'raw_body'  => (string) $response_body,
+            'code'              => (int) $response_code,
+            'endpoint'          => (string) $endpoint,
+            'api_base'          => (string) $api_base,
+            'method'            => (string) $method,
+            'query'             => is_array( $query_args ) ? $query_args : array(),
+            'body'              => is_array( $data ) ? $data : array(),
+            'raw_body'          => (string) $response_body,
+            'request_url'       => (string) $url,
+            'request_body'      => $body,
+            'request_body_json' => isset( $args['body'] ) ? (string) $args['body'] : '',
         );
+
+        if ( self::is_gmb_debug_enabled() ) {
+            self::gmb_debug_log( 'HTTP request failed', array(
+                'business_id'       => $business_id,
+                'http_code'         => $response_code,
+                'method'            => $method,
+                'api_base'          => $api_base,
+                'endpoint'          => $endpoint,
+                'query_args'        => $query_args,
+                'request_body'      => $body,
+                'response_raw_body' => substr( (string) $response_body, 0, 2500 ),
+            ) );
+        }
 
         // Rate limit error - NO REINTENTAR
         if ( 429 === $response_code || ( isset( $data['error']['status'] ) && 'RESOURCE_EXHAUSTED' === $data['error']['status'] ) ) {
@@ -2772,7 +2857,18 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
                 );
             }
             if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                $debug_error_data = $result->get_error_data();
                 error_log( '[OY GMB More] update_location_attributes error: ' . $result->get_error_message() . ' (attributeMask=' . $attribute_mask_str . ')' );
+                self::gmb_debug_log( 'update_location_attributes failed', array(
+                    'location'          => $normalized_location,
+                    'endpoint'          => $endpoint,
+                    'attributeMask'     => $attribute_mask_str,
+                    'request_body'      => $body,
+                    'error_code'        => $result->get_error_code(),
+                    'error_message'     => $result->get_error_message(),
+                    'error_data'        => is_array( $debug_error_data ) ? $debug_error_data : array(),
+                    'raw_body_preview'  => is_array( $debug_error_data ) ? substr( (string) ( $debug_error_data['raw_body'] ?? '' ), 0, 2500 ) : '',
+                ) );
             }
             return $result;
         }
@@ -4760,6 +4856,17 @@ public static function push_location_address( $business_id, $location_name, arra
             return is_wp_error( $normalized ) ? $normalized : new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios.', 'lealez' ) );
         }
 
+        $snapshot_before = array();
+        if ( isset( $contact_data['_gmb_snapshot_before'] ) && is_array( $contact_data['_gmb_snapshot_before'] ) ) {
+            $snapshot_before = $contact_data['_gmb_snapshot_before'];
+            unset( $contact_data['_gmb_snapshot_before'] );
+        }
+
+        $warnings                 = array();
+        $attribute_result          = null;
+        $attribute_mask_attempted  = array();
+        $place_action_result       = null;
+
         $primary_phone = isset( $contact_data['primaryPhone'] )
             ? trim( sanitize_text_field( (string) $contact_data['primaryPhone'] ) )
             : ( isset( $contact_data['location_phone'] ) ? trim( sanitize_text_field( (string) $contact_data['location_phone'] ) ) : '' );
@@ -4781,12 +4888,22 @@ public static function push_location_address( $business_id, $location_name, arra
             }
         }
 
+        if ( '' === $primary_phone && ! empty( $additional_phones ) ) {
+            $warnings[] = array(
+                'scope'   => 'native_phoneNumbers_prevalidation',
+                'message' => __( 'Google puede rechazar teléfonos adicionales cuando no existe teléfono principal. Se enviará el payload para dejar evidencia en debug.log.', 'lealez' ),
+                'code'    => 'additional_without_primary',
+            );
+        }
+
         $website_uri = isset( $contact_data['websiteUri'] )
             ? esc_url_raw( (string) $contact_data['websiteUri'] )
             : ( isset( $contact_data['location_website'] ) ? esc_url_raw( (string) $contact_data['location_website'] ) : '' );
 
-        $body        = array();
-        $update_mask = array();
+        $current_phone_numbers = isset( $snapshot_before['phoneNumbers'] ) && is_array( $snapshot_before['phoneNumbers'] ) ? $snapshot_before['phoneNumbers'] : array();
+        $current_primary_phone = isset( $current_phone_numbers['primaryPhone'] ) ? trim( (string) $current_phone_numbers['primaryPhone'] ) : '';
+        $current_extra_phones  = isset( $current_phone_numbers['additionalPhones'] ) && is_array( $current_phone_numbers['additionalPhones'] ) ? array_values( $current_phone_numbers['additionalPhones'] ) : array();
+        $current_website_uri   = isset( $snapshot_before['websiteUri'] ) ? esc_url_raw( (string) $snapshot_before['websiteUri'] ) : '';
 
         $phone_numbers = array();
         if ( '' !== $primary_phone ) {
@@ -4796,16 +4913,42 @@ public static function push_location_address( $business_id, $location_name, arra
             $phone_numbers['additionalPhones'] = array_values( $additional_phones );
         }
 
-        // Se envía aunque quede vacío para permitir limpiar teléfonos desde Lealez.
-        $body['phoneNumbers'] = ! empty( $phone_numbers ) ? $phone_numbers : new stdClass();
-        $update_mask[]        = 'phoneNumbers';
+        $body        = array();
+        $update_mask = array();
 
-        // Se envía siempre para permitir limpiar o reemplazar websiteUri.
-        $body['websiteUri'] = $website_uri;
-        $update_mask[]      = 'websiteUri';
+        $has_snapshot_before = ! empty( $snapshot_before );
+        $current_has_phone   = ( '' !== $current_primary_phone || ! empty( $current_extra_phones ) );
+        $desired_has_phone   = ! empty( $phone_numbers );
+
+        // No enviar phoneNumbers vacío cuando Google ya no tiene teléfonos: ese PATCH vacío
+        // produce errores 400 genéricos en algunas ubicaciones. Sí se envía cuando hay valor
+        // local o cuando el snapshot demuestra que se está intentando limpiar un valor previo.
+        if ( $desired_has_phone || ( $has_snapshot_before && $current_has_phone ) ) {
+            $body['phoneNumbers'] = $desired_has_phone ? $phone_numbers : new stdClass();
+            $update_mask[]        = 'phoneNumbers';
+        }
+
+        // Igual para websiteUri: si Lealez y GMB están vacíos, no se envía updateMask.
+        // Si GMB tenía sitio y Lealez lo borró, se conserva el PATCH para permitir limpieza.
+        if ( '' !== $website_uri || ( $has_snapshot_before && '' !== $current_website_uri ) ) {
+            $body['websiteUri'] = $website_uri;
+            $update_mask[]      = 'websiteUri';
+        }
 
         $update_mask     = array_values( array_unique( $update_mask ) );
         $update_mask_str = implode( ',', $update_mask );
+
+        self::gmb_debug_log( 'push_location_contact normalized native payload', array(
+            'business_id'          => $business_id,
+            'location'             => $normalized,
+            'updateMask'           => $update_mask_str,
+            'native_payload'       => $body,
+            'current_native_state' => array(
+                'phoneNumbers' => $current_phone_numbers,
+                'websiteUri'   => $current_website_uri,
+            ),
+            'submitted_contact'    => $contact_data,
+        ) );
 
         if ( class_exists( 'Lealez_GMB_Logger' ) ) {
             Lealez_GMB_Logger::log(
@@ -4814,21 +4957,90 @@ public static function push_location_address( $business_id, $location_name, arra
                 'Pushing native contact fields to GMB.',
                 array(
                     'location'    => $normalized,
-                    'updateMask'  => $update_mask_str,
+                    'updateMask'  => $update_mask_str ? $update_mask_str : '(skipped)',
                     'body_preview'=> $body,
                 )
             );
         }
 
-        $native_result = self::make_request(
-            $business_id,
-            '/' . $normalized,
-            self::$business_api_base,
-            'PATCH',
-            $body,
-            false,
-            array( 'updateMask' => $update_mask_str )
-        );
+        if ( '' !== $update_mask_str ) {
+            $native_result = self::make_request(
+                $business_id,
+                '/' . $normalized,
+                self::$business_api_base,
+                'PATCH',
+                $body,
+                false,
+                array( 'updateMask' => $update_mask_str )
+            );
+        } else {
+            $native_result = array(
+                '_lealez_skipped' => true,
+                'reason'          => 'No native phoneNumbers/websiteUri changes to send.',
+            );
+        }
+
+        if ( is_wp_error( $native_result ) && count( $update_mask ) > 1 ) {
+            $group_error_data = $native_result->get_error_data();
+            self::gmb_debug_log( 'Native contact PATCH failed; retrying field by field', array(
+                'location'      => $normalized,
+                'updateMask'    => $update_mask_str,
+                'request_body'  => $body,
+                'error_message' => $native_result->get_error_message(),
+                'error_data'    => is_array( $group_error_data ) ? $group_error_data : array(),
+            ) );
+
+            $native_partial = array(
+                'mode'        => 'individual_retry',
+                'group_error' => array(
+                    'message' => $native_result->get_error_message(),
+                    'code'    => $native_result->get_error_code(),
+                    'data'    => is_array( $group_error_data ) ? $group_error_data : array(),
+                ),
+                'responses'   => array(),
+                'errors'      => array(),
+            );
+
+            foreach ( $update_mask as $single_mask ) {
+                if ( ! array_key_exists( $single_mask, $body ) ) {
+                    continue;
+                }
+
+                $single_body   = array( $single_mask => $body[ $single_mask ] );
+                $single_result = self::make_request(
+                    $business_id,
+                    '/' . $normalized,
+                    self::$business_api_base,
+                    'PATCH',
+                    $single_body,
+                    false,
+                    array( 'updateMask' => $single_mask )
+                );
+
+                if ( is_wp_error( $single_result ) ) {
+                    $single_error_data = $single_result->get_error_data();
+                    $native_partial['errors'][ $single_mask ] = array(
+                        'message' => $single_result->get_error_message(),
+                        'code'    => $single_result->get_error_code(),
+                        'data'    => is_array( $single_error_data ) ? $single_error_data : array(),
+                    );
+                    $warnings[] = array(
+                        'scope'       => 'native_' . $single_mask,
+                        'message'     => $single_result->get_error_message(),
+                        'code'        => $single_result->get_error_code(),
+                        'mode'        => 'individual_retry_failed',
+                        'updateMask'  => $single_mask,
+                        'group_error' => $native_partial['group_error'],
+                    );
+                } else {
+                    $native_partial['responses'][ $single_mask ] = is_array( $single_result ) ? $single_result : array();
+                }
+            }
+
+            if ( ! empty( $native_partial['responses'] ) ) {
+                $native_result = $native_partial;
+            }
+        }
 
         if ( is_wp_error( $native_result ) ) {
             $err_data = $native_result->get_error_data();
@@ -4836,19 +5048,31 @@ public static function push_location_address( $business_id, $location_name, arra
                 array_merge(
                     is_array( $err_data ) ? $err_data : array(),
                     array(
-                        'update_mask' => $update_mask_str,
-                        'payload'     => $body,
+                        'update_mask'          => $update_mask_str,
+                        'payload'              => $body,
+                        'snapshot_before_used' => $snapshot_before,
+                        'debug_context'        => array(
+                            'stage'                => 'native_contact_patch',
+                            'location'             => $normalized,
+                            'current_phoneNumbers' => $current_phone_numbers,
+                            'current_websiteUri'   => $current_website_uri,
+                            'submitted_contact'    => $contact_data,
+                        ),
                     )
                 ),
                 $native_result->get_error_code()
             );
+
+            self::gmb_debug_log( 'push_location_contact native PATCH failed', array(
+                'location'      => $normalized,
+                'updateMask'    => $update_mask_str,
+                'request_body'  => $body,
+                'error_message' => $native_result->get_error_message(),
+                'error_data'    => $native_result->get_error_data(),
+            ) );
+
             return $native_result;
         }
-
-        $warnings = array();
-        $attribute_result = null;
-        $attribute_mask_attempted = array();
-        $place_action_result = null;
 
         // ── Atributos URL/URI: chat, menú/servicios y redes sociales ──────────────
         // El endpoint correcto para atributos es locations.updateAttributes con
@@ -4952,6 +5176,14 @@ public static function push_location_address( $business_id, $location_name, arra
             $attribute_replacements[ $social_map[ $network ] ] = self::build_contact_url_attribute( $normalized, $social_map[ $network ], $url );
         }
 
+        self::gmb_debug_log( 'push_location_contact normalized attribute payload', array(
+            'location'                => $normalized,
+            'raw_chat_channels'       => $raw_chat_channels,
+            'normalized_chat_channels'=> $chat_channels,
+            'attribute_replacements'  => $attribute_replacements,
+            'contact_attribute_ids'   => $contact_attribute_ids,
+        ) );
+
         $current_attributes = self::get_location_attributes( $business_id, $normalized, false );
         if ( is_wp_error( $current_attributes ) ) {
             $warnings[] = array(
@@ -4959,6 +5191,11 @@ public static function push_location_address( $business_id, $location_name, arra
                 'message' => $current_attributes->get_error_message(),
                 'code'    => $current_attributes->get_error_code(),
             );
+            self::gmb_debug_log( 'push_location_contact attributes read failed', array(
+                'location'      => $normalized,
+                'error_message' => $current_attributes->get_error_message(),
+                'error_data'    => $current_attributes->get_error_data(),
+            ) );
         } else {
             $existing_contact_signature = array();
 
@@ -4989,6 +5226,13 @@ public static function push_location_address( $business_id, $location_name, arra
                     $changed_attribute_ids[] = sanitize_key( $attr_id );
                 }
             }
+
+            self::gmb_debug_log( 'push_location_contact attribute diff calculated', array(
+                'location'              => $normalized,
+                'before_signature'      => $before_signature,
+                'after_signature'       => $after_signature,
+                'changed_attribute_ids' => $changed_attribute_ids,
+            ) );
 
             if ( ! empty( $changed_attribute_ids ) ) {
                 $chat_attribute_ids = array( 'url_whatsapp', 'url_text_messaging' );
@@ -5036,13 +5280,26 @@ public static function push_location_address( $business_id, $location_name, arra
         $order_urls   = isset( $contact_data['orderUrls'] ) && is_array( $contact_data['orderUrls'] )
             ? $contact_data['orderUrls']
             : ( ( isset( $contact_data['location_order_urls'] ) && is_array( $contact_data['location_order_urls'] ) ) ? $contact_data['location_order_urls'] : array() );
+
+        self::gmb_debug_log( 'push_location_contact place action payload', array(
+            'location'     => $normalized,
+            'booking_urls' => $booking_urls,
+            'order_urls'   => $order_urls,
+        ) );
+
         $place_action_result = self::sync_location_place_action_links( $business_id, $normalized, $booking_urls, $order_urls );
         if ( is_wp_error( $place_action_result ) ) {
             $warnings[] = array(
                 'scope'   => 'placeActionLinks',
                 'message' => $place_action_result->get_error_message(),
                 'code'    => $place_action_result->get_error_code(),
+                'data'    => $place_action_result->get_error_data(),
             );
+            self::gmb_debug_log( 'push_location_contact place actions failed', array(
+                'location'      => $normalized,
+                'error_message' => $place_action_result->get_error_message(),
+                'error_data'    => $place_action_result->get_error_data(),
+            ) );
         } else {
             delete_transient( 'lealez_pal_' . md5( (string) $business_id . '|' . rtrim( $normalized, '/' ) ) );
         }
@@ -5062,6 +5319,16 @@ public static function push_location_address( $business_id, $location_name, arra
                 )
             );
         }
+
+        self::gmb_debug_log( 'push_location_contact completed', array(
+            'location'               => $normalized,
+            'native_updateMask'      => $update_mask_str,
+            'attributeMask'          => implode( ',', array_map( array( __CLASS__, 'normalize_contact_attribute_mask_item' ), array_values( array_unique( $attribute_mask_attempted ) ) ) ),
+            'warnings'               => $warnings,
+            'native_result'          => $native_result,
+            'attribute_result'       => $attribute_result,
+            'place_action_result'    => is_wp_error( $place_action_result ) ? $place_action_result->get_error_message() : $place_action_result,
+        ) );
 
         return array(
             'patch_response'        => is_array( $native_result ) ? $native_result : array(),
