@@ -2613,12 +2613,32 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             if ( ! empty( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) ) {
                 foreach ( $attribute['uriValues'] as $idx => $uri_value ) {
                     if ( ! is_array( $uri_value ) ) {
+                        unset( $attribute['uriValues'][ $idx ] );
                         continue;
                     }
                     if ( isset( $uri_value['uri'] ) ) {
-                        $attribute['uriValues'][ $idx ]['uri'] = self::sanitize_contact_attribute_uri( (string) $uri_value['uri'] );
+                        $uri = self::sanitize_contact_attribute_uri( (string) $uri_value['uri'] );
+                        if ( '' !== $uri ) {
+                            $attribute['uriValues'][ $idx ]['uri'] = $uri;
+                        } else {
+                            unset( $attribute['uriValues'][ $idx ] );
+                        }
+                    } else {
+                        unset( $attribute['uriValues'][ $idx ] );
                     }
                 }
+                $attribute['uriValues'] = array_values( $attribute['uriValues'] );
+            }
+
+            // Google rechaza algunos atributos URL cuando se envía `values: []`.
+            // Para atributos con uriValues, el body debe llevar solamente uriValues
+            // y no un arreglo vacío de values. Para limpiar un atributo se incluye
+            // su ID en attributeMask y se omite el atributo del body.
+            if ( isset( $attribute['values'] ) && is_array( $attribute['values'] ) && empty( $attribute['values'] ) ) {
+                unset( $attribute['values'] );
+            }
+            if ( isset( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) && empty( $attribute['uriValues'] ) ) {
+                unset( $attribute['uriValues'] );
             }
 
             $body_attributes[] = $attribute;
@@ -2677,6 +2697,67 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             false, // No caché en PATCH
             array( 'attributeMask' => $attribute_mask_str )
         );
+
+        // Algunos atributos URL de Business Profile, especialmente los de chat,
+        // pueden rechazar un PATCH si Google interpreta valueType como campo no
+        // escribible para esa cuenta/categoría. Si el primer intento falla por
+        // invalid argument, se reintenta el mismo attributeMask sin valueType,
+        // manteniendo name y uriValues. Esto evita romper el envío nativo de
+        // teléfonos/sitio web y permite aplicar los formatos aceptados por GMB.
+        if ( is_wp_error( $result ) && false !== stripos( $result->get_error_message(), 'invalid argument' ) && ! empty( $body_attributes ) ) {
+            $retry_body = $body;
+            foreach ( $retry_body['attributes'] as $idx => $retry_attribute ) {
+                if ( is_array( $retry_attribute ) && ! empty( $retry_attribute['uriValues'] ) ) {
+                    unset( $retry_body['attributes'][ $idx ]['valueType'] );
+                }
+            }
+
+            if ( $retry_body !== $body ) {
+                if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                    Lealez_GMB_Logger::log(
+                        $business_id,
+                        'warning',
+                        'Retrying update_location_attributes without valueType after invalid argument.',
+                        array(
+                            'location'      => $normalized_location,
+                            'attributeMask' => $attribute_mask_str,
+                            'body_preview'  => $retry_body,
+                        )
+                    );
+                }
+
+                $retry_result = self::make_request(
+                    $business_id,
+                    $endpoint,
+                    self::$business_api_base,
+                    'PATCH',
+                    $retry_body,
+                    false,
+                    array( 'attributeMask' => $attribute_mask_str )
+                );
+
+                if ( ! is_wp_error( $retry_result ) ) {
+                    $result = $retry_result;
+                    $body   = $retry_body;
+                } else {
+                    $result->add_data(
+                        array_merge(
+                            is_array( $result->get_error_data() ) ? $result->get_error_data() : array(),
+                            array(
+                                'request_body'       => $body,
+                                'retry_request_body' => $retry_body,
+                                'retry_error'        => array(
+                                    'message' => $retry_result->get_error_message(),
+                                    'code'    => $retry_result->get_error_code(),
+                                    'data'    => $retry_result->get_error_data(),
+                                ),
+                            )
+                        ),
+                        $result->get_error_code()
+                    );
+                }
+            }
+        }
 
         if ( is_wp_error( $result ) ) {
             if ( class_exists( 'Lealez_GMB_Logger' ) ) {
@@ -4085,7 +4166,6 @@ public static function push_location_address( $business_id, $location_name, arra
         return array(
             'name'      => 'attributes/' . sanitize_key( $attribute_id ),
             'valueType' => 'URL',
-            'values'    => array(),
             'uriValues' => array(
                 array(
                     'uri' => self::sanitize_contact_attribute_uri( (string) $url ),
