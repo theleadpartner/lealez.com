@@ -80,6 +80,52 @@ class OY_Location_Contact_Metabox {
     }
 
     /**
+     * Escribe trazas técnicas del metabox Contacto solo cuando WP_DEBUG está activo.
+     *
+     * @param string $message Mensaje corto.
+     * @param array  $context Contexto técnico.
+     */
+    private function contact_debug_log( $message, array $context = array() ) {
+        if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+            return;
+        }
+
+        $encoded = ! empty( $context ) ? wp_json_encode( $context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) : '';
+        if ( false === $encoded ) {
+            $encoded = '[context_json_encode_failed]';
+        }
+
+        error_log( '[Lealez GMB Contact Metabox DEBUG] ' . $message . ( $encoded ? ' | ' . $encoded : '' ) );
+    }
+
+    /**
+     * Reduce un array técnico para devolverlo por AJAX cuando WP_DEBUG está activo.
+     *
+     * @param mixed $value Valor original.
+     * @return mixed
+     */
+    private function normalize_debug_response_value( $value ) {
+        if ( is_array( $value ) ) {
+            $out = array();
+            foreach ( $value as $key => $item ) {
+                $key_string = strtolower( (string) $key );
+                if ( in_array( $key_string, array( 'authorization', 'access_token', 'refresh_token', 'client_secret', 'id_token' ), true ) ) {
+                    $out[ $key ] = '[redacted]';
+                    continue;
+                }
+                $out[ $key ] = $this->normalize_debug_response_value( $item );
+            }
+            return $out;
+        }
+
+        if ( is_string( $value ) && strlen( $value ) > 3000 ) {
+            return substr( $value, 0, 3000 ) . '…[truncated]';
+        }
+
+        return $value;
+    }
+
+    /**
      * Registra el metabox Información de Contacto.
      */
     public function add_meta_box() {
@@ -1038,19 +1084,58 @@ class OY_Location_Contact_Metabox {
         $payload            = $this->get_contact_payload_from_db( $post_id );
         $gmb_payload_before = $this->build_contact_payload_from_gmb_snapshot( is_array( $snapshot ) ? $snapshot : array() );
         $diff_before_push   = $this->build_contact_diff_rows( $gmb_payload_before, $payload );
-        $result             = Lealez_GMB_API::push_location_contact( $business_id, $location_name, $payload );
+
+        $this->contact_debug_log( 'Preparing contact push to GMB', array(
+            'post_id'            => $post_id,
+            'business_id'        => $business_id,
+            'location_name'      => $location_name,
+            'local_payload'      => $payload,
+            'gmb_payload_before' => $gmb_payload_before,
+            'diff_before_push'   => $diff_before_push,
+            'snapshot_counts'    => array(
+                'attributes'       => isset( $snapshot['attributes'] ) && is_array( $snapshot['attributes'] ) ? count( $snapshot['attributes'] ) : 0,
+                'placeActionLinks' => isset( $snapshot['placeActionLinks'] ) && is_array( $snapshot['placeActionLinks'] ) ? count( $snapshot['placeActionLinks'] ) : 0,
+            ),
+        ) );
+
+        $payload_for_push = $payload;
+        $payload_for_push['_gmb_snapshot_before'] = is_array( $snapshot ) ? $snapshot : array();
+        $result = Lealez_GMB_API::push_location_contact( $business_id, $location_name, $payload_for_push );
         if ( is_wp_error( $result ) ) {
-            $err_data   = $result->get_error_data();
-            $raw_preview = '';
-            if ( defined( 'WP_DEBUG' ) && WP_DEBUG && ! empty( $err_data['raw_body'] ) ) {
-                $raw_preview = substr( (string) $err_data['raw_body'], 0, 500 );
+            $err_data = $result->get_error_data();
+            $this->contact_debug_log( 'Contact push to GMB failed', array(
+                'post_id'       => $post_id,
+                'business_id'   => $business_id,
+                'location_name' => $location_name,
+                'error_code'    => $result->get_error_code(),
+                'error_message' => $result->get_error_message(),
+                'error_data'    => is_array( $err_data ) ? $err_data : array(),
+            ) );
+
+            $response_arr = array(
+                'message'    => $result->get_error_message(),
+                'panel_html' => $this->render_contact_push_panel( $post_id ),
+            );
+
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                $response_arr['debug'] = array(
+                    'error_code'       => $result->get_error_code(),
+                    'error_data'       => $this->normalize_debug_response_value( is_array( $err_data ) ? $err_data : array() ),
+                    'local_payload'    => $this->normalize_debug_response_value( $payload ),
+                    'gmb_before'       => $this->normalize_debug_response_value( $gmb_payload_before ),
+                    'diff_before_push' => $this->normalize_debug_response_value( $diff_before_push ),
+                );
             }
-            $response_arr = array( 'message' => $result->get_error_message() );
-            if ( $raw_preview ) {
-                $response_arr['debug_raw'] = $raw_preview;
-            }
+
             wp_send_json_error( $response_arr );
         }
+
+        $this->contact_debug_log( 'Contact push to GMB finished', array(
+            'post_id'       => $post_id,
+            'business_id'   => $business_id,
+            'location_name' => $location_name,
+            'result'        => $result,
+        ) );
 
         $current_user = wp_get_current_user();
         $user_login   = ( $current_user instanceof WP_User && $current_user->user_login ) ? $current_user->user_login : 'system';
@@ -1964,10 +2049,25 @@ class OY_Location_Contact_Metabox {
                 $btn.prop('disabled', true); $btn.find('.dashicons').addClass('spin'); setPushMsg('Enviando contacto a Google Business Profile...','loading');
                 $.ajax({ url:ajaxUrl, type:'POST', timeout:60000, data:{ action:'oy_push_contact_to_gmb', nonce:nonce, post_id:postId } })
                     .done(function(resp){
-                        if (resp && resp.success) { setPushMsg((resp.data && resp.data.message) ? resp.data.message : 'Contacto enviado.','success'); addLogEntry(resp.data || {}, (resp.data && resp.data.diff) ? resp.data.diff : [], 'push'); if (resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); } }
-                        else { setPushMsg((resp && resp.data && resp.data.message) ? resp.data.message : 'Error desconocido al enviar.','error'); if (resp && resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); } }
+                        if (resp && resp.success) {
+                            setPushMsg((resp.data && resp.data.message) ? resp.data.message : 'Contacto enviado.','success');
+                            addLogEntry(resp.data || {}, (resp.data && resp.data.diff) ? resp.data.diff : [], 'push');
+                            if (resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); }
+                        } else {
+                            var errorMsg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Error desconocido al enviar.';
+                            setPushMsg(errorMsg,'error');
+                            if (resp && resp.data) {
+                                addLogEntry(resp.data || {}, (resp.data && resp.data.diff_before_push) ? resp.data.diff_before_push : [], 'push');
+                                if (window.console && console.error) { console.error('[Lealez GMB Contact Push Error]', resp.data); }
+                            }
+                            if (resp && resp.data && resp.data.panel_html) { replacePushPanel(resp.data.panel_html); }
+                        }
                     })
-                    .fail(function(xhr,status){ setPushMsg(status === 'timeout' ? 'Timeout: Google tardó demasiado. Intenta de nuevo.' : 'Error de red al enviar. Revisa la consola.','error'); })
+                    .fail(function(xhr,status){
+                        var message = status === 'timeout' ? 'Timeout: Google tardó demasiado. Intenta de nuevo.' : 'Error de red al enviar. Revisa la consola.';
+                        setPushMsg(message,'error');
+                        if (window.console && console.error) { console.error('[Lealez GMB Contact Push AJAX Fail]', status, xhr && xhr.responseText ? xhr.responseText : xhr); }
+                    })
                     .always(function(){ $btn.prop('disabled', false); $btn.find('.dashicons').removeClass('spin'); });
             });
 
