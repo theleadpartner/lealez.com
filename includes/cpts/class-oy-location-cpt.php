@@ -100,6 +100,10 @@ public function __construct() {
     // Mantiene disponible el verificador aunque el cron corra fuera del admin.
     add_action( 'oy_poll_contact_push_status', array( 'OY_Location_Contact_Metabox', 'cron_poll_contact_push_status' ) );
 
+    // ✅ WP-Cron: polling de estado de push de horarios → GMB
+    // Registrado en el CPT para que el verificador esté disponible aunque el cron corra fuera del admin.
+    add_action( 'oy_poll_hours_push_status', array( 'OY_Location_Hours_Metabox', 'cron_poll_hours_push_status' ) );
+
     /**
      * ✅ Metabox externo: Fotos del propietario (GBP Media)
      * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-media-metabox.php
