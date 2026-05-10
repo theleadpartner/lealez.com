@@ -6143,6 +6143,271 @@ if ( '' !== $opening_date ) {
         return self::get_location_basic_info_snapshot( $business_id, $location_name );
     }
 
+    /**
+     * Obtiene un snapshot específico de Horarios de Atención desde Google Business Profile.
+     *
+     * Campos usados por el metabox:
+     * - regularHours
+     * - specialHours
+     * - openInfo
+     * - metadata.hasPendingEdits / metadata.hasGoogleUpdated
+     *
+     * @param int    $business_id   WP post ID del oy_business.
+     * @param string $location_name Resource name "locations/XXXX" o "accounts/X/locations/Y".
+     * @return array|WP_Error
+     */
+    public static function get_location_hours_snapshot( $business_id, $location_name ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios para consultar horarios.', 'lealez' ) );
+        }
+
+        if ( 0 !== strpos( $location_name, 'locations/' ) ) {
+            if ( preg_match( '#(locations/[^/]+)$#', $location_name, $m ) ) {
+                $location_name = $m[1];
+            } else {
+                return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+            }
+        }
+
+        if ( Lealez_GMB_OAuth::is_token_expired( $business_id ) ) {
+            $refresh = Lealez_GMB_OAuth::refresh_access_token( $business_id );
+            if ( is_wp_error( $refresh ) ) {
+                return $refresh;
+            }
+        }
+
+        $tokens = Lealez_GMB_Encryption::get_tokens( $business_id );
+        if ( ! $tokens ) {
+            return new WP_Error( 'no_tokens', __( 'No se encontraron tokens válidos.', 'lealez' ) );
+        }
+
+        $read_mask = 'regularHours,specialHours,openInfo,metadata.hasPendingEdits,metadata.hasGoogleUpdated';
+        $url       = self::$business_api_base . '/' . $location_name . '?readMask=' . rawurlencode( $read_mask );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( '[Lealez GMB] get_location_hours_snapshot → GET ' . $location_name . ' | readMask=' . $read_mask );
+        }
+
+        $response = wp_remote_get( $url, array(
+            'timeout' => 30,
+            'headers' => array(
+                'Authorization'             => 'Bearer ' . $tokens['access_token'],
+                'Content-Type'              => 'application/json',
+                'X-GOOG-API-FORMAT-VERSION' => '2',
+            ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $code     = wp_remote_retrieve_response_code( $response );
+        $raw_body = wp_remote_retrieve_body( $response );
+        $body     = json_decode( $raw_body, true );
+
+        if ( $code < 200 || $code >= 300 ) {
+            $msg = isset( $body['error']['message'] ) ? (string) $body['error']['message'] : 'HTTP ' . $code;
+            return new WP_Error( 'gmb_hours_snapshot_error', $msg, array(
+                'code'     => $code,
+                'body'     => $body,
+                'raw_body' => $raw_body,
+            ) );
+        }
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log(
+                '[Lealez GMB] get_location_hours_snapshot OK — ' . $location_name .
+                ' | periods=' . ( isset( $body['regularHours']['periods'] ) && is_array( $body['regularHours']['periods'] ) ? count( $body['regularHours']['periods'] ) : 0 ) .
+                ' | special=' . ( isset( $body['specialHours']['specialHourPeriods'] ) && is_array( $body['specialHours']['specialHourPeriods'] ) ? count( $body['specialHours']['specialHourPeriods'] ) : 0 ) .
+                ' | hasPendingEdits=' . ( ! empty( $body['metadata']['hasPendingEdits'] ) ? 'true' : 'false' )
+            );
+        }
+
+        return is_array( $body ) ? $body : array();
+    }
+
+    /**
+     * Envía Horarios de Atención a Google Business Profile mediante PATCH.
+     *
+     * Espera un payload ya convertido al formato GBP:
+     * [
+     *   'openInfo'     => ['status' => 'OPEN|CLOSED_TEMPORARILY|CLOSED_PERMANENTLY'],
+     *   'regularHours' => ['periods' => [...]] o stdClass vacío para limpiar,
+     *   'specialHours' => ['specialHourPeriods' => [...]] o stdClass vacío para limpiar,
+     * ]
+     *
+     * @param int    $business_id
+     * @param string $location_name
+     * @param array  $hours_payload
+     * @return array|WP_Error
+     */
+    public static function push_location_hours( $business_id, $location_name, array $hours_payload ) {
+        $business_id   = absint( $business_id );
+        $location_name = trim( (string) $location_name );
+
+        if ( ! $business_id || '' === $location_name ) {
+            return new WP_Error( 'invalid_params', __( 'business_id y location_name son obligatorios para enviar horarios.', 'lealez' ) );
+        }
+
+        if ( 0 !== strpos( $location_name, 'locations/' ) ) {
+            if ( preg_match( '#(locations/[^/]+)$#', $location_name, $m ) ) {
+                $location_name = $m[1];
+            } else {
+                return new WP_Error( 'invalid_location_name', __( 'El location_name no tiene formato válido.', 'lealez' ) );
+            }
+        }
+
+        if ( Lealez_GMB_OAuth::is_token_expired( $business_id ) ) {
+            $refresh = Lealez_GMB_OAuth::refresh_access_token( $business_id );
+            if ( is_wp_error( $refresh ) ) {
+                return $refresh;
+            }
+        }
+
+        $tokens = Lealez_GMB_Encryption::get_tokens( $business_id );
+        if ( ! $tokens ) {
+            return new WP_Error( 'no_tokens', __( 'No se encontraron tokens válidos.', 'lealez' ) );
+        }
+
+        $body        = array();
+        $submitted   = array();
+        $update_mask = array();
+
+        if ( isset( $hours_payload['openInfo'] ) && is_array( $hours_payload['openInfo'] ) ) {
+            $status = isset( $hours_payload['openInfo']['status'] ) ? strtoupper( sanitize_text_field( (string) $hours_payload['openInfo']['status'] ) ) : '';
+            if ( '' !== $status ) {
+                $allowed_statuses = array( 'OPEN', 'CLOSED_TEMPORARILY', 'CLOSED_PERMANENTLY' );
+                if ( ! in_array( $status, $allowed_statuses, true ) ) {
+                    return new WP_Error( 'invalid_open_info_status', __( 'openInfo.status no es válido para GMB.', 'lealez' ) );
+                }
+                $body['openInfo']      = array( 'status' => $status );
+                $submitted['openInfo'] = $body['openInfo'];
+                $update_mask[]         = 'openInfo.status';
+            }
+        }
+
+        if ( array_key_exists( 'regularHours', $hours_payload ) ) {
+            if ( is_array( $hours_payload['regularHours'] ) && ! empty( $hours_payload['regularHours'] ) ) {
+                $body['regularHours']      = $hours_payload['regularHours'];
+                $submitted['regularHours'] = $hours_payload['regularHours'];
+            } else {
+                // En FieldMask, incluir el campo con objeto vacío fuerza limpieza del horario regular.
+                $body['regularHours']      = new stdClass();
+                $submitted['regularHours'] = array();
+            }
+            $update_mask[] = 'regularHours';
+        }
+
+        if ( array_key_exists( 'specialHours', $hours_payload ) ) {
+            if ( is_array( $hours_payload['specialHours'] ) && ! empty( $hours_payload['specialHours'] ) ) {
+                $body['specialHours']      = $hours_payload['specialHours'];
+                $submitted['specialHours'] = $hours_payload['specialHours'];
+            } else {
+                // Igual que regularHours: objeto vacío para limpiar horarios especiales en GMB.
+                $body['specialHours']      = new stdClass();
+                $submitted['specialHours'] = array();
+            }
+            $update_mask[] = 'specialHours';
+        }
+
+        if ( empty( $update_mask ) ) {
+            return new WP_Error( 'nothing_to_push', __( 'No hay campos de horarios soportados para enviar a GMB.', 'lealez' ) );
+        }
+
+        $update_mask     = array_values( array_unique( $update_mask ) );
+        $update_mask_str = implode( ',', $update_mask );
+        $url             = self::$business_api_base . '/' . $location_name . '?updateMask=' . rawurlencode( $update_mask_str );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] push_location_hours → PATCH %s | mask=%s | body=%s',
+                $location_name,
+                $update_mask_str,
+                wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
+            ) );
+        }
+
+        $response = wp_remote_request( $url, array(
+            'method'  => 'PATCH',
+            'timeout' => 45,
+            'headers' => array(
+                'Authorization'             => 'Bearer ' . $tokens['access_token'],
+                'Content-Type'              => 'application/json',
+                'X-GOOG-API-FORMAT-VERSION' => '2',
+            ),
+            'body' => wp_json_encode( $body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ),
+        ) );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $code      = wp_remote_retrieve_response_code( $response );
+        $raw_body  = wp_remote_retrieve_body( $response );
+        $body_data = json_decode( $raw_body, true );
+
+        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+            error_log( sprintf(
+                '[Lealez GMB] push_location_hours ← HTTP %d | body=%s',
+                $code,
+                substr( $raw_body, 0, 800 )
+            ) );
+        }
+
+        if ( $code < 200 || $code >= 300 ) {
+            $violations = array();
+            if ( isset( $body_data['error']['details'] ) && is_array( $body_data['error']['details'] ) ) {
+                foreach ( $body_data['error']['details'] as $detail ) {
+                    if ( isset( $detail['fieldViolations'] ) && is_array( $detail['fieldViolations'] ) ) {
+                        $violations = array_merge( $violations, $detail['fieldViolations'] );
+                    }
+                }
+            }
+
+            $msg = isset( $body_data['error']['message'] ) ? (string) $body_data['error']['message'] : 'HTTP ' . $code;
+            return new WP_Error( 'gmb_hours_patch_error', $msg, array(
+                'code'             => $code,
+                'body'             => $body_data,
+                'raw_body'         => $raw_body,
+                'field_violations' => $violations,
+                'update_mask'      => $update_mask_str,
+                'submitted'        => $submitted,
+            ) );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'info',
+                'Business hours PATCH accepted by Google.',
+                array(
+                    'location'    => $location_name,
+                    'update_mask' => $update_mask_str,
+                )
+            );
+        }
+
+        return array(
+            'patch_response' => is_array( $body_data ) ? $body_data : array(),
+            'update_mask'    => $update_mask_str,
+            'submitted'      => $submitted,
+        );
+    }
+
+    /**
+     * Consulta el estado actual de Horarios de Atención durante polling.
+     *
+     * @param int    $business_id
+     * @param string $location_name
+     * @return array|WP_Error
+     */
+    public static function poll_location_hours_status( $business_id, $location_name ) {
+        return self::get_location_hours_snapshot( $business_id, $location_name );
+    }
+
 
 // =========================================================================
     // LOCAL POSTS (GBP Posts / Publicaciones) — My Business API v4
