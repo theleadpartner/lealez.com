@@ -6302,13 +6302,21 @@ if ( '' !== $opening_date ) {
         }
 
         if ( array_key_exists( 'specialHours', $hours_payload ) ) {
-            if ( is_array( $hours_payload['specialHours'] ) && ! empty( $hours_payload['specialHours'] ) ) {
+            if ( is_array( $hours_payload['specialHours'] ) && array_key_exists( 'specialHourPeriods', $hours_payload['specialHours'] ) ) {
+                $special_periods = is_array( $hours_payload['specialHours']['specialHourPeriods'] )
+                    ? array_values( $hours_payload['specialHours']['specialHourPeriods'] )
+                    : array();
+
+                // Para limpiar horarios especiales, Google responde mejor cuando el campo repetido viaja explícitamente vacío.
+                $body['specialHours']      = array( 'specialHourPeriods' => $special_periods );
+                $submitted['specialHours'] = $body['specialHours'];
+            } elseif ( is_array( $hours_payload['specialHours'] ) && ! empty( $hours_payload['specialHours'] ) ) {
                 $body['specialHours']      = $hours_payload['specialHours'];
                 $submitted['specialHours'] = $hours_payload['specialHours'];
             } else {
-                // Igual que regularHours: objeto vacío para limpiar horarios especiales en GMB.
-                $body['specialHours']      = new stdClass();
-                $submitted['specialHours'] = array();
+                // Limpieza explícita: evita que un PATCH con specialHours={} sea ignorado por GMB.
+                $body['specialHours']      = array( 'specialHourPeriods' => array() );
+                $submitted['specialHours'] = $body['specialHours'];
             }
             $update_mask[] = 'specialHours';
         }
