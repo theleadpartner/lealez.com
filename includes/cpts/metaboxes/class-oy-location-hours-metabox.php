@@ -425,6 +425,7 @@ class OY_Location_Hours_Metabox {
             <p class="description" style="margin:0 0 12px;">
                 <?php _e( 'Importado desde GMB: <code>specialHours.specialHourPeriods</code>. Estos horarios aplican por fecha específica (feriados u horarios puntuales).', 'lealez' ); ?>
             </p>
+            <input type="hidden" name="location_special_hours_present" value="1" class="oy-special-hours-present-flag">
 
             <div id="oy-special-hours-list">
                 <?php if ( ! empty( $special_hours ) ) : ?>
@@ -646,7 +647,7 @@ class OY_Location_Hours_Metabox {
                 var closeVal  = row.close  ? String(row.close) : '18:00';
 
                 var dis = closedVal ? ' disabled' : '';
-                var closeDis = closedVal ? ' disabled' : '';
+                var closeDis = (closedVal || openVal === '24_hours') ? ' disabled' : '';
 
                 var html  = '';
                 html += '<div class="oy-special-row" data-idx="' + idx + '" style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; padding:10px 12px; border:1px solid #e5e5e5; border-radius:4px; margin-bottom:10px; background:#fafafa;">';
@@ -689,23 +690,60 @@ class OY_Location_Hours_Metabox {
                 }
             }
 
+            function reindexSpecialRows() {
+                $('#oy-special-hours-list .oy-special-row').each(function(idx) {
+                    $(this).attr('data-idx', idx);
+                    $(this).find('input[type="date"]').attr('name', 'location_special_hours[' + idx + '][date]');
+                    $(this).find('.oy-special-closed').attr('name', 'location_special_hours[' + idx + '][closed]');
+                    $(this).find('.oy-special-open').attr('name', 'location_special_hours[' + idx + '][open]');
+                    $(this).find('.oy-special-close').attr('name', 'location_special_hours[' + idx + '][close]');
+                });
+            }
+
+            function markHoursEditorDirty(message) {
+                if (oyHoursEditor.enabled) {
+                    refreshHoursDirtyState();
+                    setHoursEditorStatus(message || 'Cambios sin guardar en este metabox.', 'warn');
+                }
+            }
+
             // Add special row (manual)
-            $('#oy-add-special-hour').on('click', function(){
+            $('#oy-add-special-hour').on('click', function(e){
+                e.preventDefault();
                 var idx = specialNextIdx();
                 $('#oy-special-hours-list').append(buildSpecialRow(idx, {date:'', closed:false, open:'09:00', close:'18:00'}));
+                reindexSpecialRows();
+                enforceHoursConditionalDisabled();
+                markHoursEditorDirty('Cambios sin guardar en horario especial.');
             });
 
             // Remove special row
-            $(document).on('click', '.oy-remove-special', function(){
+            $(document).on('click', '.oy-remove-special', function(e){
+                e.preventDefault();
                 $(this).closest('.oy-special-row').remove();
+                reindexSpecialRows();
+                markHoursEditorDirty('Cambios sin guardar en horario especial.');
             });
 
             // Toggle closed → disable selects
             $(document).on('change', '.oy-special-closed', function(){
                 var $row = $(this).closest('.oy-special-row');
                 var closed = $(this).is(':checked');
-                $row.find('.oy-special-open, .oy-special-close').prop('disabled', closed);
+                $row.find('.oy-special-open').prop('disabled', closed);
+                $row.find('.oy-special-close').prop('disabled', closed || $row.find('.oy-special-open').val() === '24_hours');
                 enforceHoursConditionalDisabled();
+                markHoursEditorDirty('Cambios sin guardar en horario especial.');
+            });
+
+            // Select "Abre a la(s)" = 24h → deshabilitar cierre (horario especial)
+            $(document).on('change', '.oy-special-open', function(){
+                var $row = $(this).closest('.oy-special-row');
+                var isAllDay = $(this).val() === '24_hours';
+                if (isAllDay) {
+                    $row.find('.oy-special-close').val('');
+                }
+                enforceHoursConditionalDisabled();
+                markHoursEditorDirty('Cambios sin guardar en horario especial.');
             });
 
             // ─────────────────────────────────────────────────────────────────
@@ -754,11 +792,12 @@ class OY_Location_Hours_Metabox {
                 }
 
                 $('#oy-special-hours-list .oy-special-row').each(function() {
+                    var openVal = $(this).find('.oy-special-open').val() || '09:00';
                     var row = {
                         date: $(this).find('input[type="date"]').val() || '',
                         closed: $(this).find('.oy-special-closed').is(':checked') ? 1 : 0,
-                        open: $(this).find('.oy-special-open').val() || '09:00',
-                        close: $(this).find('.oy-special-close').val() || '18:00'
+                        open: openVal,
+                        close: openVal === '24_hours' ? '' : ($(this).find('.oy-special-close').val() || '18:00')
                     };
                     if (row.date) {
                         state.special_hours.push(row);
@@ -785,6 +824,8 @@ class OY_Location_Hours_Metabox {
                     }
                 }
                 rebuildSpecialHours(state.special_hours || []);
+                reindexSpecialRows();
+                enforceHoursConditionalDisabled();
             }
 
             function sameHoursState(a, b) {
@@ -825,7 +866,9 @@ class OY_Location_Hours_Metabox {
 
                 $('#oy-special-hours-list .oy-special-row').each(function() {
                     var closed = $(this).find('.oy-special-closed').is(':checked');
-                    $(this).find('.oy-special-open, .oy-special-close').prop('disabled', closed);
+                    var isAllDay = $(this).find('.oy-special-open').val() === '24_hours';
+                    $(this).find('.oy-special-open').prop('disabled', closed);
+                    $(this).find('.oy-special-close').prop('disabled', closed || isAllDay);
                 });
             }
 
@@ -1225,15 +1268,21 @@ class OY_Location_Hours_Metabox {
             );
         }
 
-        $special_raw = isset( $_POST['location_special_hours'] ) && is_array( $_POST['location_special_hours'] )
-            ? wp_unslash( $_POST['location_special_hours'] )
-            : array();
+        $special_present_in_request = array_key_exists( 'location_special_hours_present', $_POST ) || array_key_exists( 'location_special_hours', $_POST );
 
-        if ( empty( $special_raw ) && $post_id ) {
+        if ( isset( $_POST['location_special_hours'] ) && is_array( $_POST['location_special_hours'] ) ) {
+            $special_raw = wp_unslash( $_POST['location_special_hours'] );
+        } elseif ( $special_present_in_request ) {
+            // Importante: si el metabox envía la bandera pero no hay filas, significa que el usuario eliminó todos los horarios especiales.
+            $special_raw = array();
+        } elseif ( $post_id ) {
+            // Compatibilidad: si el metabox estaba bloqueado y sus campos no viajaron en POST, conservar el valor actual.
             $special_raw = get_post_meta( $post_id, 'location_special_hours', true );
             if ( ! is_array( $special_raw ) ) {
                 $special_raw = array();
             }
+        } else {
+            $special_raw = array();
         }
 
         $special_clean = $this->normalize_special_hours_rows( $special_raw );
