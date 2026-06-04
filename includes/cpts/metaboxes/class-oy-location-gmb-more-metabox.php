@@ -63,23 +63,17 @@ public function __construct() {
     // Encolar scripts/estilos solo en la pantalla correcta
     add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_scripts' ) );
 
-    // Guardar cuando WordPress hace save_post (compatibilidad con el flujo clásico del post)
+    // Guardar cuando WordPress hace save_post
     add_action( 'save_post_oy_location', array( $this, 'save_metabox' ), 15, 2 );
-
-    // AJAX: guardar cambios locales del metabox sin publicar el post completo
-    add_action( 'wp_ajax_oy_gmb_more_save_metabox', array( $this, 'ajax_save_metabox' ) );
 
     // AJAX: refrescar metadatos desde la API de Google
     add_action( 'wp_ajax_oy_gmb_more_refresh_metadata', array( $this, 'ajax_refresh_metadata' ) );
 
-    // AJAX: renderizar (pintar) los atributos en la UI del metabox sin llamar a Google
+    // ✅ AJAX: renderizar (pintar) los atributos en la UI del metabox sin llamar a Google
     add_action( 'wp_ajax_oy_gmb_more_render_attributes', array( $this, 'ajax_render_attributes' ) );
 
     // AJAX: enviar atributos editados a la API de Google
     add_action( 'wp_ajax_oy_gmb_more_push_to_gmb', array( $this, 'ajax_push_to_gmb' ) );
-
-    // AJAX: leer nuevamente los atributos desde Google y verificar el último envío
-    add_action( 'wp_ajax_oy_gmb_more_check_push_status', array( $this, 'ajax_check_push_status' ) );
 }
 
         // =========================================================================
@@ -150,17 +144,7 @@ public function enqueue_scripts( $hook ) {
                 'pushing'        => __( 'Enviando a Google...', 'lealez' ),
                 'pushDone'       => __( 'Atributos actualizados en Google Business Profile.', 'lealez' ),
                 'pushError'      => __( 'Error al enviar a Google.', 'lealez' ),
-                'confirmPush'    => __( '¿Enviar los cambios guardados localmente a Google Business Profile?', 'lealez' ),
-
-                'editMode'       => __( 'Modo edición activo.', 'lealez' ),
-                'readMode'       => __( 'Modo lectura.', 'lealez' ),
-                'dirtyState'     => __( 'Tienes cambios locales sin guardar.', 'lealez' ),
-                'saving'         => __( 'Guardando metabox...', 'lealez' ),
-                'saveDone'       => __( 'Cambios locales guardados.', 'lealez' ),
-                'saveError'      => __( 'No se pudieron guardar los cambios locales.', 'lealez' ),
-                'mustSaveFirst'  => __( 'Primero guarda los cambios locales del metabox antes de enviar a Google.', 'lealez' ),
-                'checking'       => __( 'Verificando estado en Google...', 'lealez' ),
-                'checkError'     => __( 'No se pudo verificar el estado en Google.', 'lealez' ),
+                'confirmPush'    => __( '¿Enviar los cambios directamente a Google Business Profile?', 'lealez' ),
             ),
         )
     );
@@ -270,33 +254,8 @@ public function render_metabox( $post ) {
                     </button>
 
                     <button type="button"
-                            class="button button-secondary oy-gmb-more-btn-edit"
-                            data-post-id="<?php echo esc_attr( $post_id ); ?>"
-                            <?php disabled( ! $has_metadata ); ?>>
-                        <span class="dashicons dashicons-edit" style="margin-top:3px;"></span>
-                        <?php esc_html_e( 'Editar atributos', 'lealez' ); ?>
-                    </button>
-
-                    <button type="button"
-                            class="button button-primary oy-gmb-more-btn-save"
-                            data-post-id="<?php echo esc_attr( $post_id ); ?>"
-                            style="display:none;">
-                        <span class="dashicons dashicons-saved" style="margin-top:3px;"></span>
-                        <?php esc_html_e( 'Guardar metabox', 'lealez' ); ?>
-                    </button>
-
-                    <button type="button"
-                            class="button oy-gmb-more-btn-cancel"
-                            data-post-id="<?php echo esc_attr( $post_id ); ?>"
-                            style="display:none;">
-                        <span class="dashicons dashicons-no-alt" style="margin-top:3px;"></span>
-                        <?php esc_html_e( 'Cancelar edición', 'lealez' ); ?>
-                    </button>
-
-                    <button type="button"
                             class="button button-primary oy-gmb-more-btn-push"
                             data-post-id="<?php echo esc_attr( $post_id ); ?>"
-                            data-base-disabled="<?php echo esc_attr( ! $has_metadata ? '1' : '0' ); ?>"
                             <?php disabled( ! $has_metadata ); ?>>
                         <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
                         <?php esc_html_e( 'Enviar a Google ↑', 'lealez' ); ?>
@@ -306,13 +265,7 @@ public function render_metabox( $post ) {
             </span>
         </div>
 
-        <div class="oy-gmb-more-editor-state" id="oy-gmb-more-editor-state-<?php echo esc_attr( $post_id ); ?>"></div>
-
         <div class="oy-gmb-more-notice" id="oy-gmb-more-notice-<?php echo esc_attr( $post_id ); ?>" style="display:none;"></div>
-
-        <?php echo $this->render_more_push_panel( $post_id ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
-
-        <?php echo $this->render_more_log_panel( $post_id ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
 
         <?php // ── Contenido principal ─────────────────────────────────────── ?>
         <div class="oy-gmb-more-content" id="oy-gmb-more-content-<?php echo esc_attr( $post_id ); ?>">
@@ -367,10 +320,6 @@ public function render_metabox( $post ) {
                name="oy_gmb_more_has_changes"
                id="oy_gmb_more_has_changes_<?php echo esc_attr( $post_id ); ?>"
                value="0" />
-        <input type="hidden"
-               name="oy_gmb_more_editor_active"
-               id="oy_gmb_more_editor_active_<?php echo esc_attr( $post_id ); ?>"
-               value="0" />
 
     </div><!-- /.oy-gmb-more-wrapper -->
     <?php
@@ -416,6 +365,15 @@ private function render_attribute_groups( $metadata, $current_values, $post_id )
         $group_name = ! empty( $attr_meta['groupDisplayName'] )
             ? (string) $attr_meta['groupDisplayName']
             : __( 'Otros atributos', 'lealez' );
+
+        // ── Pre-filtro: excluir grupo no funcional de Google ─────────────────
+        // El grupo "Atributos de la página de un lugar" solo muestra campos como
+        // "Chat principal" que no cumplen una función útil dentro de este metabox.
+        // Se filtra únicamente en la capa de edición local para no alterar la
+        // sincronización RAW existente con Google Business Profile.
+        if ( $this->should_exclude_attribute_group_from_more_metabox( $group_name ) ) {
+            continue;
+        }
 
         if ( ! isset( $groups[ $group_name ] ) ) {
             $groups[ $group_name ] = array();
@@ -540,14 +498,6 @@ private function render_single_attribute( $attr_id, $attr_meta, $current_values,
     <div class="oy-gmb-more-field"
          data-attr-id="<?php echo esc_attr( $attr_id ); ?>"
          data-value-type="<?php echo esc_attr( $value_type ); ?>">
-        <input type="hidden"
-               name="oy_gmb_more_attr_present[<?php echo esc_attr( $attr_id ); ?>]"
-               value="1"
-               class="oy-gmb-more-present-input" />
-        <input type="hidden"
-               name="oy_gmb_more_attr_type[<?php echo esc_attr( $attr_id ); ?>]"
-               value="<?php echo esc_attr( $value_type ); ?>"
-               class="oy-gmb-more-type-input" />
         <label class="oy-gmb-more-field-label" for="<?php echo esc_attr( $field_id ); ?>">
             <?php echo esc_html( $display_name ); ?>
         </label>
@@ -823,700 +773,40 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
                 return;
             }
 
-            // Si los campos están en modo lectura, los inputs visibles están deshabilitados.
-            // Los hidden técnicos sí viajan en POST, por eso exigimos la bandera de edición activa
-            // para no limpiar cambios al presionar el botón general "Actualizar" del post.
-            $editor_active = isset( $_POST['oy_gmb_more_editor_active'] )
-                ? sanitize_text_field( wp_unslash( $_POST['oy_gmb_more_editor_active'] ) )
-                : '0';
-            if ( '1' !== $editor_active ) {
+            // Si no viene el array de atributos, no hay nada que hacer
+            if ( ! isset( $_POST['oy_gmb_more_attr'] ) || ! is_array( $_POST['oy_gmb_more_attr'] ) ) {
                 return;
             }
 
-            if ( ! isset( $_POST['oy_gmb_more_attr_present'] ) && ! isset( $_POST['oy_gmb_more_attr'] ) ) {
-                return;
-            }
+            $raw_input  = wp_unslash( $_POST['oy_gmb_more_attr'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+            $sanitized  = array();
 
-            $payload = $this->build_more_attributes_payload_from_request();
-            $this->persist_more_attributes_payload( $post_id, $payload, 'post_update_save' );
-        }
-
-
-        /**
-         * Construye el payload normalizado de atributos desde la petición POST.
-         *
-         * @return array
-         */
-        private function build_more_attributes_payload_from_request() {
-            $raw_input = array();
-            if ( isset( $_POST['oy_gmb_more_attr'] ) && is_array( $_POST['oy_gmb_more_attr'] ) ) {
-                $raw_input = wp_unslash( $_POST['oy_gmb_more_attr'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-            }
-
-            $present = array();
-            if ( isset( $_POST['oy_gmb_more_attr_present'] ) && is_array( $_POST['oy_gmb_more_attr_present'] ) ) {
-                $present = array_keys( wp_unslash( $_POST['oy_gmb_more_attr_present'] ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-            } elseif ( ! empty( $raw_input ) ) {
-                $present = array_keys( $raw_input );
-            }
-
-            $types = array();
-            if ( isset( $_POST['oy_gmb_more_attr_type'] ) && is_array( $_POST['oy_gmb_more_attr_type'] ) ) {
-                $raw_types = wp_unslash( $_POST['oy_gmb_more_attr_type'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-                foreach ( $raw_types as $attr_id => $type ) {
-                    $types[ sanitize_key( $attr_id ) ] = strtoupper( sanitize_text_field( (string) $type ) );
-                }
-            }
-
-            $sanitized = array();
-
-            foreach ( $present as $attr_id ) {
+            foreach ( $raw_input as $attr_id => $value ) {
                 $attr_id = sanitize_key( $attr_id );
                 if ( '' === $attr_id ) {
                     continue;
                 }
 
-                $value_type = isset( $types[ $attr_id ] ) ? $types[ $attr_id ] : '';
-
-                if ( array_key_exists( $attr_id, $raw_input ) ) {
-                    $value = $raw_input[ $attr_id ];
-
-                    if ( is_array( $value ) ) {
-                        $clean_values = array();
-                        foreach ( $value as $item ) {
-                            $item = sanitize_text_field( (string) $item );
-                            if ( '' !== $item ) {
-                                $clean_values[] = $item;
-                            }
-                        }
-                        $sanitized[ $attr_id ] = array_values( array_unique( $clean_values ) );
-                    } else {
-                        $sanitized[ $attr_id ] = sanitize_text_field( (string) $value );
-                    }
+                if ( is_array( $value ) ) {
+                    // REPEATED_ENUM
+                    $sanitized[ $attr_id ] = array_map( 'sanitize_text_field', $value );
                 } else {
-                    // En REPEATED_ENUM, si no llega ningún checkbox marcado, significa limpiar el atributo.
-                    $sanitized[ $attr_id ] = ( 'REPEATED_ENUM' === $value_type ) ? array() : '';
+                    $sanitized[ $attr_id ] = sanitize_text_field( (string) $value );
                 }
             }
 
-            return $sanitized;
-        }
+            // Evitar que atributos de grupos ocultos queden guardados como cambios pendientes.
+            $sanitized = $this->filter_excluded_more_attributes_from_payload( $post_id, $sanitized );
 
-        /**
-         * Persiste cambios locales comparando contra lo último sincronizado desde GMB.
-         * Solo guarda overrides realmente diferentes para no reenviar atributos sin cambios.
-         *
-         * @param int    $post_id
-         * @param array  $submitted
-         * @param string $save_source
-         * @return array
-         */
-        private function persist_more_attributes_payload( $post_id, array $submitted, $save_source = 'manual_metabox_save' ) {
-            $post_id     = absint( $post_id );
-            $save_source = sanitize_key( (string) $save_source );
+            // Guardar como JSON en _gmb_more_attributes_overrides
+            update_post_meta( $post_id, '_gmb_more_attributes_overrides', wp_json_encode( $sanitized ) );
 
-            if ( ! $post_id ) {
-                return array();
-            }
-
-            $raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
-            if ( is_string( $raw_attributes ) && '' !== trim( $raw_attributes ) ) {
-                $decoded = json_decode( $raw_attributes, true );
-                if ( is_array( $decoded ) ) {
-                    $raw_attributes = $decoded;
-                }
-            }
-            if ( ! is_array( $raw_attributes ) ) {
-                $raw_attributes = array();
-            }
-
-            $base_values = $this->build_current_values_map( $raw_attributes );
-            $overrides   = array();
-
-            foreach ( $submitted as $attr_id => $value ) {
-                $attr_id = sanitize_key( $attr_id );
-                if ( '' === $attr_id ) {
-                    continue;
-                }
-
-                $base_value = array_key_exists( $attr_id, $base_values ) ? $base_values[ $attr_id ] : null;
-
-                if ( ! $this->attribute_values_equal( $base_value, $value ) ) {
-                    $overrides[ $attr_id ] = $value;
-                }
-            }
-
-            $now_ts   = current_time( 'timestamp' );
-            $user     = wp_get_current_user();
-            $by       = ( $user instanceof WP_User && ! empty( $user->user_login ) ) ? $user->user_login : 'system';
-            $at_label = date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $now_ts );
-
-            $save_meta = array(
-                'at'              => gmdate( 'Y-m-d\TH:i:s\Z', $now_ts ),
-                'at_ts'           => $now_ts,
-                'at_label'        => $at_label,
-                'by'              => $by,
-                'source'          => $save_source,
-                'submitted_count' => count( $submitted ),
-                'changed_count'   => count( $overrides ),
-            );
-
-            if ( ! empty( $overrides ) ) {
-                update_post_meta( $post_id, '_gmb_more_attributes_overrides', wp_json_encode( $overrides, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
-                update_post_meta( $post_id, 'oy_gmb_more_local_pending_publish', '1' );
-            } else {
-                delete_post_meta( $post_id, '_gmb_more_attributes_overrides' );
-                delete_post_meta( $post_id, 'oy_gmb_more_local_pending_publish' );
-            }
-
-            update_post_meta( $post_id, 'oy_gmb_more_last_manual_save', $save_meta );
-            update_post_meta( $post_id, 'date_modified', current_time( 'mysql' ) );
-            update_post_meta( $post_id, 'modified_by_user_id', get_current_user_id() );
-
-            $detail = ! empty( $overrides )
-                ? sprintf( 'Se guardaron %d cambio(s) local(es) del metabox Más. Pendiente por publicar en GMB.', count( $overrides ) )
-                : 'Se guardó el metabox Más, pero no quedaron diferencias locales frente a lo sincronizado desde GMB.';
-
-            $this->append_more_job_history( $post_id, array(
-                'event'  => 'local_metabox_save',
-                'at'     => $save_meta['at'],
-                'at_ts'  => $save_meta['at_ts'],
-                'by'     => $by,
-                'detail' => $detail,
-            ) );
-
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    (int) get_post_meta( $post_id, 'parent_business_id', true ),
-                    'info',
-                    'GMB More attributes saved locally in Lealez.',
-                    array(
-                        'post_id'         => $post_id,
-                        'submitted_count' => count( $submitted ),
-                        'changed_count'   => count( $overrides ),
-                        'source'          => $save_source,
-                    )
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log(
+                    '[OY GMB More] Overrides saved for post ' . $post_id . ': ' .
+                    count( $sanitized ) . ' attribute(s).'
                 );
             }
-
-            return $save_meta;
-        }
-
-        /**
-         * Renderiza el panel de publicación y estado del flujo de la sección Más.
-         *
-         * @param int $post_id
-         * @return string
-         */
-        private function render_more_push_panel( $post_id ) {
-            $post_id      = absint( $post_id );
-            $job          = get_post_meta( $post_id, 'gmb_more_push_job', true );
-            $business_id  = (int) get_post_meta( $post_id, 'parent_business_id', true );
-            $location     = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-            $connected    = ! empty( $business_id ) && ! empty( $location );
-            $pending      = (bool) get_post_meta( $post_id, 'oy_gmb_more_local_pending_publish', true );
-            $last_save    = get_post_meta( $post_id, 'oy_gmb_more_last_manual_save', true );
-            $last_label   = ( is_array( $last_save ) && ! empty( $last_save['at_label'] ) ) ? (string) $last_save['at_label'] : '';
-            $last_user    = ( is_array( $last_save ) && ! empty( $last_save['by'] ) ) ? (string) $last_save['by'] : '';
-            $changed_cnt  = ( is_array( $last_save ) && isset( $last_save['changed_count'] ) ) ? (int) $last_save['changed_count'] : 0;
-            $push_disabled = $connected ? '' : 'disabled';
-            $check_disabled = ( $connected && is_array( $job ) ) ? '' : 'disabled';
-
-            ob_start();
-            ?>
-            <div id="oy-gmb-more-push-panel"
-                 data-post-id="<?php echo esc_attr( (string) $post_id ); ?>"
-                 style="border:1px solid #dadce0; border-radius:4px; background:#fff; margin-bottom:14px; overflow:hidden;">
-                <div class="oy-gmb-more-panel-header">
-                    <span class="oy-gmb-more-panel-title">📤 <?php esc_html_e( 'Publicar atributos de la sección Más en Google Business Profile', 'lealez' ); ?></span>
-                    <div class="oy-gmb-more-panel-actions">
-                        <button type="button" class="button button-primary oy-gmb-more-btn-push" data-base-disabled="<?php echo esc_attr( $connected ? '0' : '1' ); ?>" <?php echo $push_disabled; ?>>
-                            <span class="dashicons dashicons-upload" style="margin-top:3px;"></span>
-                            <?php esc_html_e( 'Enviar a GMB', 'lealez' ); ?>
-                        </button>
-                        <button type="button" class="button button-secondary oy-gmb-more-btn-check-status" data-base-disabled="<?php echo esc_attr( ( $connected && is_array( $job ) ) ? '0' : '1' ); ?>" <?php echo $check_disabled; ?>>
-                            <span class="dashicons dashicons-search" style="margin-top:3px;"></span>
-                            <?php esc_html_e( 'Verificar estado', 'lealez' ); ?>
-                        </button>
-                    </div>
-                </div>
-                <div class="oy-gmb-more-panel-body">
-                    <?php if ( ! $connected ) : ?>
-                        <div class="oy-gmb-more-panel-alert warning">
-                            <?php esc_html_e( 'Esta ubicación aún no tiene empresa/ubicación GMB vinculada.', 'lealez' ); ?>
-                        </div>
-                    <?php endif; ?>
-
-                    <?php if ( $pending ) : ?>
-                        <div class="oy-gmb-more-panel-alert info">
-                            <?php
-                            printf(
-                                esc_html__( 'Hay cambios locales pendientes por publicar en GMB%s.', 'lealez' ),
-                                $changed_cnt > 0 ? ' (' . esc_html( (string) $changed_cnt ) . ')' : ''
-                            );
-                            ?>
-                        </div>
-                    <?php endif; ?>
-
-                    <?php if ( $last_label ) : ?>
-                        <div class="oy-gmb-more-panel-meta">
-                            <strong><?php esc_html_e( 'Último guardado local:', 'lealez' ); ?></strong>
-                            <?php echo esc_html( $last_label ); ?>
-                            <?php if ( $last_user ) : ?> — <?php echo esc_html( $last_user ); ?><?php endif; ?>
-                        </div>
-                    <?php endif; ?>
-
-                    <?php if ( is_array( $job ) ) : ?>
-                        <?php
-                        $status = (string) ( $job['status'] ?? 'queued' );
-                        $status_map = array(
-                            'queued'          => array( 'label' => __( 'En cola', 'lealez' ), 'class' => 'info' ),
-                            'applied'         => array( 'label' => __( 'Aplicado', 'lealez' ), 'class' => 'success' ),
-                            'partial'         => array( 'label' => __( 'Aplicado parcialmente / verificar', 'lealez' ), 'class' => 'warning' ),
-                            'rejected'        => array( 'label' => __( 'Rechazado / No aplicado', 'lealez' ), 'class' => 'error' ),
-                            'google_override' => array( 'label' => __( 'Google devolvió un resultado diferente', 'lealez' ), 'class' => 'warning' ),
-                            'error'           => array( 'label' => __( 'Error', 'lealez' ), 'class' => 'error' ),
-                        );
-                        $style = isset( $status_map[ $status ] ) ? $status_map[ $status ] : $status_map['queued'];
-                        ?>
-                        <div class="oy-gmb-more-panel-alert <?php echo esc_attr( $style['class'] ); ?>">
-                            <strong><?php esc_html_e( 'Estado del último envío:', 'lealez' ); ?></strong>
-                            <?php echo esc_html( $style['label'] ); ?>
-                        </div>
-
-                        <?php if ( ! empty( $job['pushed_at'] ) ) : ?>
-                            <div class="oy-gmb-more-panel-meta">
-                                <strong><?php esc_html_e( 'Último envío:', 'lealez' ); ?></strong>
-                                <?php echo esc_html( (string) $job['pushed_at'] ); ?>
-                                <?php if ( ! empty( $job['pushed_by'] ) ) : ?> — <?php echo esc_html( (string) $job['pushed_by'] ); ?><?php endif; ?>
-                            </div>
-                        <?php endif; ?>
-
-                        <?php if ( ! empty( $job['attribute_mask'] ) ) : ?>
-                            <div class="oy-gmb-more-panel-meta">
-                                <strong><?php esc_html_e( 'attributeMask:', 'lealez' ); ?></strong>
-                                <code><?php echo esc_html( (string) $job['attribute_mask'] ); ?></code>
-                            </div>
-                        <?php endif; ?>
-
-                        <?php if ( ! empty( $job['history'] ) && is_array( $job['history'] ) ) : ?>
-                            <div class="oy-gmb-more-history-wrap">
-                                <strong><?php esc_html_e( 'Historial del metabox', 'lealez' ); ?></strong>
-                                <div class="oy-gmb-more-history-scroll">
-                                    <table class="oy-gmb-more-history-table">
-                                        <thead>
-                                            <tr>
-                                                <th><?php esc_html_e( 'Fecha', 'lealez' ); ?></th>
-                                                <th><?php esc_html_e( 'Actor', 'lealez' ); ?></th>
-                                                <th><?php esc_html_e( 'Detalle', 'lealez' ); ?></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <?php foreach ( array_reverse( $job['history'] ) as $entry ) : ?>
-                                                <tr>
-                                                    <td><?php echo esc_html( (string) ( $entry['at'] ?? '' ) ); ?></td>
-                                                    <td><?php echo esc_html( (string) ( $entry['by'] ?? 'system' ) ); ?></td>
-                                                    <td><?php echo esc_html( (string) ( $entry['detail'] ?? ( $entry['event'] ?? '' ) ) ); ?></td>
-                                                </tr>
-                                            <?php endforeach; ?>
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-                    <?php endif; ?>
-                </div>
-            </div>
-            <?php
-            return (string) ob_get_clean();
-        }
-
-        /**
-         * Renderiza el log visual local del navegador.
-         *
-         * @param int $post_id
-         * @return string
-         */
-        private function render_more_log_panel( $post_id ) {
-            $post_id = absint( $post_id );
-
-            ob_start();
-            ?>
-            <div id="oy-gmb-more-log-panel" data-post-id="<?php echo esc_attr( (string) $post_id ); ?>">
-                <div id="oy-gmb-more-log-header">
-                    <span>🔍 <?php esc_html_e( 'Log de Sincronización — Más / Atributos', 'lealez' ); ?></span>
-                    <span id="oy-gmb-more-log-toggle-icon">▶</span>
-                </div>
-                <div id="oy-gmb-more-log-body" style="display:none;">
-                    <div id="oy-gmb-more-log-entries"></div>
-                    <div id="oy-gmb-more-log-footer">
-                        <button type="button" id="oy-gmb-more-log-clear" class="button button-small">
-                            🗑 <?php esc_html_e( 'Limpiar historial', 'lealez' ); ?>
-                        </button>
-                        <span><?php esc_html_e( 'Historial guardado en el navegador (localStorage). Máx 20 entradas.', 'lealez' ); ?></span>
-                    </div>
-                </div>
-            </div>
-            <?php
-            return (string) ob_get_clean();
-        }
-
-        /**
-         * AJAX: Guardado independiente de cambios locales.
-         */
-        public function ajax_save_metabox() {
-            check_ajax_referer( self::NONCE_AJAX_ACTION, 'nonce' );
-
-            $post_id = absint( $_POST['post_id'] ?? 0 );
-            if ( ! $post_id ) {
-                wp_send_json_error( array( 'message' => __( 'post_id inválido.', 'lealez' ) ) );
-            }
-
-            if ( ! current_user_can( 'edit_post', $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'No tienes permisos para editar esta ubicación.', 'lealez' ) ) );
-            }
-
-            $post = get_post( $post_id );
-            if ( ! $post || 'oy_location' !== $post->post_type ) {
-                wp_send_json_error( array( 'message' => __( 'Post no válido o no es una oy_location.', 'lealez' ) ) );
-            }
-
-            $submitted = $this->build_more_attributes_payload_from_request();
-            $before    = $this->get_more_base_snapshot( $post_id );
-            $save_meta = $this->persist_more_attributes_payload( $post_id, $submitted, 'manual_metabox_save' );
-            $after     = $this->get_more_local_snapshot( $post_id );
-
-            wp_send_json_success( array(
-                'message'    => empty( $save_meta['changed_count'] )
-                    ? __( 'Metabox guardado. No quedaron cambios pendientes frente a GMB.', 'lealez' )
-                    : sprintf( __( 'Cambios locales guardados: %d atributo(s) pendiente(s) por publicar.', 'lealez' ), (int) $save_meta['changed_count'] ),
-                'save_meta'  => $save_meta,
-                'panel_html' => $this->render_more_push_panel( $post_id ),
-                'log_context' => array(
-                    'before' => $before,
-                    'after'  => $after,
-                    'raw'    => array(
-                        'action'      => 'manual_gmb_more_metabox_save',
-                        'save_meta'   => $save_meta,
-                        'submitted'   => $submitted,
-                    ),
-                ),
-            ) );
-        }
-
-
-        /**
-         * Compara valores normalizados para detectar cambios reales.
-         *
-         * @param mixed $a
-         * @param mixed $b
-         * @return bool
-         */
-        private function attribute_values_equal( $a, $b ) {
-            return $this->normalize_attribute_value_for_compare( $a ) === $this->normalize_attribute_value_for_compare( $b );
-        }
-
-        /**
-         * Normaliza valores de atributos para comparación.
-         *
-         * @param mixed $value
-         * @return mixed
-         */
-        private function normalize_attribute_value_for_compare( $value ) {
-            if ( null === $value ) {
-                return '';
-            }
-
-            if ( is_bool( $value ) ) {
-                return $value ? 'true' : 'false';
-            }
-
-            if ( is_array( $value ) ) {
-                $clean = array();
-                foreach ( $value as $item ) {
-                    if ( is_bool( $item ) ) {
-                        $item = $item ? 'true' : 'false';
-                    } elseif ( is_array( $item ) ) {
-                        $item = wp_json_encode( $item, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
-                    }
-                    $item = sanitize_text_field( (string) $item );
-                    if ( '' !== $item ) {
-                        $clean[] = $item;
-                    }
-                }
-                $clean = array_values( array_unique( $clean ) );
-                sort( $clean, SORT_NATURAL );
-                return empty( $clean ) ? '' : $clean;
-            }
-
-            $value = sanitize_text_field( (string) $value );
-            if ( '1' === $value ) {
-                return 'true';
-            }
-            if ( '0' === $value ) {
-                return 'false';
-            }
-            return $value;
-        }
-
-        /**
-         * Agrega una entrada al historial persistente del metabox Más.
-         *
-         * @param int   $post_id
-         * @param array $entry
-         * @return void
-         */
-        private function append_more_job_history( $post_id, array $entry ) {
-            $post_id = absint( $post_id );
-            if ( ! $post_id ) {
-                return;
-            }
-
-            $job = get_post_meta( $post_id, 'gmb_more_push_job', true );
-            if ( ! is_array( $job ) ) {
-                $job = array(
-                    'status'  => 'queued',
-                    'history' => array(),
-                );
-            }
-            if ( ! isset( $job['history'] ) || ! is_array( $job['history'] ) ) {
-                $job['history'] = array();
-            }
-
-            $job['history'][] = $entry;
-            if ( count( $job['history'] ) > 50 ) {
-                $job['history'] = array_slice( $job['history'], -50 );
-            }
-
-            update_post_meta( $post_id, 'gmb_more_push_job', $job );
-        }
-
-        /**
-         * Snapshot de valores sincronizados desde GMB, sin overrides.
-         *
-         * @param int $post_id
-         * @return array
-         */
-        private function get_more_base_snapshot( $post_id ) {
-            $raw = get_post_meta( $post_id, 'gmb_attributes_raw', true );
-            if ( is_string( $raw ) && '' !== trim( $raw ) ) {
-                $decoded = json_decode( $raw, true );
-                if ( is_array( $decoded ) ) {
-                    $raw = $decoded;
-                }
-            }
-            if ( ! is_array( $raw ) ) {
-                $raw = array();
-            }
-
-            return $this->get_more_snapshot_from_map( $post_id, $this->build_current_values_map( $raw ) );
-        }
-
-        /**
-         * Snapshot local efectivo: GMB RAW + overrides pendientes.
-         *
-         * @param int $post_id
-         * @return array
-         */
-        private function get_more_local_snapshot( $post_id ) {
-            $raw = get_post_meta( $post_id, 'gmb_attributes_raw', true );
-            if ( is_string( $raw ) && '' !== trim( $raw ) ) {
-                $decoded = json_decode( $raw, true );
-                if ( is_array( $decoded ) ) {
-                    $raw = $decoded;
-                }
-            }
-            if ( ! is_array( $raw ) ) {
-                $raw = array();
-            }
-
-            $map = $this->build_current_values_map( $raw );
-            $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
-            $overrides      = array();
-            if ( is_string( $overrides_json ) && '' !== trim( $overrides_json ) ) {
-                $decoded = json_decode( $overrides_json, true );
-                if ( is_array( $decoded ) ) {
-                    $overrides = $decoded;
-                }
-            }
-            foreach ( $overrides as $attr_id => $value ) {
-                $map[ sanitize_key( $attr_id ) ] = $value;
-            }
-
-            return $this->get_more_snapshot_from_map( $post_id, $map );
-        }
-
-        /**
-         * Snapshot a partir del array de atributos retornado por GMB.
-         *
-         * @param int   $post_id
-         * @param array $attributes
-         * @return array
-         */
-        private function get_more_snapshot_from_attributes( $post_id, array $attributes ) {
-            return $this->get_more_snapshot_from_map( $post_id, $this->build_current_values_map( $attributes ) );
-        }
-
-        /**
-         * Construye snapshot legible para logs.
-         *
-         * @param int   $post_id
-         * @param array $map
-         * @return array
-         */
-        private function get_more_snapshot_from_map( $post_id, array $map ) {
-            $labels   = $this->get_more_attribute_label_map( $post_id );
-            $snapshot = array();
-
-            foreach ( $map as $attr_id => $value ) {
-                $attr_id = sanitize_key( $attr_id );
-                if ( '' === $attr_id ) {
-                    continue;
-                }
-
-                $snapshot[ $attr_id ] = array(
-                    'label'   => isset( $labels[ $attr_id ] ) ? $labels[ $attr_id ] : $this->humanize_attr_id( $attr_id ),
-                    'value'   => $this->normalize_attribute_value_for_compare( $value ),
-                    'display' => $this->format_attribute_value_for_log( $value ),
-                );
-            }
-
-            ksort( $snapshot );
-            return $snapshot;
-        }
-
-        /**
-         * Obtiene mapa [attr_id => displayName] desde metadata cacheada.
-         *
-         * @param int $post_id
-         * @return array
-         */
-        private function get_more_attribute_label_map( $post_id ) {
-            $metadata = get_post_meta( $post_id, '_gmb_attrs_metadata', true );
-            if ( is_string( $metadata ) && '' !== trim( $metadata ) ) {
-                $decoded = json_decode( $metadata, true );
-                if ( is_array( $decoded ) ) {
-                    $metadata = $decoded;
-                }
-            }
-            if ( ! is_array( $metadata ) ) {
-                $metadata = array();
-            }
-
-            $labels = array();
-            foreach ( $metadata as $attr_meta ) {
-                if ( ! is_array( $attr_meta ) ) {
-                    continue;
-                }
-                $attr_id = $this->extract_attr_id_from_meta( $attr_meta );
-                if ( '' === $attr_id ) {
-                    continue;
-                }
-                $labels[ $attr_id ] = ! empty( $attr_meta['displayName'] ) ? (string) $attr_meta['displayName'] : $this->humanize_attr_id( $attr_id );
-            }
-
-            return $labels;
-        }
-
-        /**
-         * Formatea un valor para mostrar en el log.
-         *
-         * @param mixed $value
-         * @return string
-         */
-        private function format_attribute_value_for_log( $value ) {
-            if ( null === $value || '' === $value ) {
-                return __( 'No especificado', 'lealez' );
-            }
-            if ( true === $value || 'true' === $value || '1' === $value || 1 === $value ) {
-                return __( 'Sí', 'lealez' );
-            }
-            if ( false === $value || 'false' === $value || '0' === $value || 0 === $value ) {
-                return __( 'No', 'lealez' );
-            }
-            if ( is_array( $value ) ) {
-                $clean = array();
-                foreach ( $value as $item ) {
-                    if ( is_scalar( $item ) ) {
-                        $clean[] = (string) $item;
-                    }
-                }
-                return empty( $clean ) ? __( 'No especificado', 'lealez' ) : implode( ', ', $clean );
-            }
-
-            return (string) $value;
-        }
-
-        /**
-         * Determina si el estado remoto coincide con lo enviado.
-         *
-         * @param array $submitted_map
-         * @param array $current_map
-         * @param array $before_map
-         * @return string
-         */
-        private function determine_more_push_outcome( array $submitted_map, array $current_map, array $before_map = array() ) {
-            $checked = 0;
-            $matched = 0;
-            $still_before = 0;
-
-            foreach ( $submitted_map as $attr_id => $value ) {
-                $attr_id = sanitize_key( $attr_id );
-                if ( '' === $attr_id ) {
-                    continue;
-                }
-                $checked++;
-
-                $submitted_norm = $this->normalize_attribute_value_for_compare( $value );
-                $current_value  = array_key_exists( $attr_id, $current_map ) ? $current_map[ $attr_id ] : null;
-                $current_norm   = $this->normalize_attribute_value_for_compare( $current_value );
-                $before_value   = array_key_exists( $attr_id, $before_map ) ? $before_map[ $attr_id ] : null;
-                $before_norm    = $this->normalize_attribute_value_for_compare( $before_value );
-
-                if ( $current_norm === $submitted_norm ) {
-                    $matched++;
-                }
-                if ( $current_norm === $before_norm ) {
-                    $still_before++;
-                }
-            }
-
-            if ( 0 === $checked ) {
-                return 'error';
-            }
-            if ( $matched === $checked ) {
-                return 'applied';
-            }
-            if ( $matched > 0 ) {
-                return 'partial';
-            }
-            if ( $still_before === $checked ) {
-                return 'rejected';
-            }
-            return 'google_override';
-        }
-
-        /**
-         * Normaliza un ID de atributo desde nombres cortos o resource names.
-         *
-         * @param string $raw
-         * @return string
-         */
-        private function normalize_gmb_more_attribute_id( $raw ) {
-            $raw = trim( (string) $raw );
-            if ( '' === $raw ) {
-                return '';
-            }
-            if ( false !== strpos( $raw, '/attributes/' ) ) {
-                $parts = explode( '/attributes/', $raw, 2 );
-                $raw   = $parts[1] ?? '';
-            } elseif ( 0 === strpos( $raw, 'attributes/' ) ) {
-                $raw = substr( $raw, strlen( 'attributes/' ) );
-            } elseif ( false !== strpos( $raw, 'attributes/' ) ) {
-                $parts = explode( 'attributes/', $raw, 2 );
-                $raw   = $parts[1] ?? '';
-            }
-            return sanitize_key( trim( $raw, '/' ) );
         }
 
         // =========================================================================
@@ -1682,13 +972,15 @@ public function ajax_render_attributes() {
         public function ajax_push_to_gmb() {
             check_ajax_referer( self::NONCE_AJAX_ACTION, 'nonce' );
 
+            if ( ! current_user_can( 'edit_posts' ) ) {
+                wp_send_json_error( array( 'message' => __( 'Permisos insuficientes.', 'lealez' ) ) );
+                return;
+            }
+
             $post_id = absint( $_POST['post_id'] ?? 0 );
             if ( ! $post_id ) {
                 wp_send_json_error( array( 'message' => __( 'post_id inválido.', 'lealez' ) ) );
-            }
-
-            if ( ! current_user_can( 'edit_post', $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'No tienes permisos para editar esta ubicación.', 'lealez' ) ) );
+                return;
             }
 
             $parent_business_id = (int) get_post_meta( $post_id, 'parent_business_id', true );
@@ -1696,330 +988,186 @@ public function ajax_render_attributes() {
 
             if ( ! $parent_business_id || ! $gmb_location_name ) {
                 wp_send_json_error( array(
-                    'message'    => __( 'Esta location no tiene una conexión GMB configurada.', 'lealez' ),
-                    'panel_html' => $this->render_more_push_panel( $post_id ),
+                    'message' => __( 'Esta location no tiene una conexión GMB configurada.', 'lealez' ),
                 ) );
+                return;
             }
 
+            // Leer overrides guardados
             $overrides_json = get_post_meta( $post_id, '_gmb_more_attributes_overrides', true );
             $overrides      = array();
-            if ( is_string( $overrides_json ) && '' !== trim( $overrides_json ) ) {
+            if ( ! empty( $overrides_json ) ) {
                 $decoded = json_decode( $overrides_json, true );
                 if ( is_array( $decoded ) ) {
                     $overrides = $decoded;
                 }
-            } elseif ( is_array( $overrides_json ) ) {
-                $overrides = $overrides_json;
             }
+
+            // Evitar enviar a Google atributos de grupos retirados de este metabox.
+            $overrides = $this->filter_excluded_more_attributes_from_payload( $post_id, $overrides );
 
             if ( empty( $overrides ) ) {
+                delete_post_meta( $post_id, '_gmb_more_attributes_overrides' );
+
                 wp_send_json_error( array(
-                    'message'    => __( 'No hay cambios locales pendientes para enviar. Primero entra en modo edición y guarda el metabox.', 'lealez' ),
-                    'panel_html' => $this->render_more_push_panel( $post_id ),
-                    'log_context' => array(
-                        'before' => $this->get_more_base_snapshot( $post_id ),
-                        'after'  => $this->get_more_local_snapshot( $post_id ),
-                        'raw'    => array( 'action' => 'push_gmb_more_without_pending_changes' ),
-                    ),
+                    'message' => __( 'No hay cambios pendientes para enviar.', 'lealez' ),
                 ) );
+                return;
             }
 
+            // Verificar que el método de API existe
             if ( ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'update_location_attributes' ) ) {
                 wp_send_json_error( array(
-                    'message' => __( 'El método de actualización de atributos no está disponible en Lealez_GMB_API.', 'lealez' ),
+                    'message' => __( 'El método de actualización de atributos aún no está implementado en la API. Por favor actualiza el plugin.', 'lealez' ),
                 ) );
+                return;
             }
 
-            $snapshot_before_attrs = array();
-            if ( method_exists( 'Lealez_GMB_API', 'get_location_attributes' ) ) {
-                $snapshot_result = Lealez_GMB_API::get_location_attributes( $parent_business_id, $gmb_location_name, false );
-                if ( is_wp_error( $snapshot_result ) ) {
-                    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                        Lealez_GMB_Logger::log(
-                            $parent_business_id,
-                            'warning',
-                            'Could not fetch GMB More attributes before push; using local raw snapshot.',
-                            array(
-                                'post_id'  => $post_id,
-                                'location' => $gmb_location_name,
-                                'error'    => $snapshot_result->get_error_message(),
-                            )
-                        );
-                    }
-                    $snapshot_before_attrs = get_post_meta( $post_id, 'gmb_attributes_raw', true );
-                    if ( is_string( $snapshot_before_attrs ) && '' !== trim( $snapshot_before_attrs ) ) {
-                        $tmp = json_decode( $snapshot_before_attrs, true );
-                        if ( is_array( $tmp ) ) {
-                            $snapshot_before_attrs = $tmp;
-                        }
-                    }
-                    if ( ! is_array( $snapshot_before_attrs ) ) {
-                        $snapshot_before_attrs = array();
-                    }
-                } elseif ( is_array( $snapshot_result ) ) {
-                    $snapshot_before_attrs = $snapshot_result;
-                }
-            }
-
+            // Convertir overrides al formato de GMB API
             $attributes_payload = $this->build_gmb_attributes_payload( $overrides );
-            $attribute_mask     = array();
-            foreach ( $overrides as $attr_id => $value ) {
-                $attr_id = sanitize_key( $attr_id );
-                if ( '' !== $attr_id ) {
-                    $attribute_mask[] = 'attributes/' . $attr_id;
-                }
-            }
-            $attribute_mask = array_values( array_unique( $attribute_mask ) );
 
             $result = Lealez_GMB_API::update_location_attributes(
                 $parent_business_id,
                 $gmb_location_name,
-                $attributes_payload,
-                $attribute_mask
+                $attributes_payload
             );
 
             if ( is_wp_error( $result ) ) {
-                $err_data = $result->get_error_data();
-                $this->append_more_job_history( $post_id, array(
-                    'event'  => 'push_error',
-                    'at'     => gmdate( 'Y-m-d\TH:i:s\Z', time() ),
-                    'at_ts'  => time(),
-                    'by'     => ( wp_get_current_user() instanceof WP_User ) ? wp_get_current_user()->user_login : 'system',
-                    'detail' => 'Error al enviar atributos Más a GMB: ' . $result->get_error_message(),
-                ) );
-
-                $job = get_post_meta( $post_id, 'gmb_more_push_job', true );
-                if ( ! is_array( $job ) ) {
-                    $job = array( 'history' => array() );
-                }
-                $job['status']        = 'error';
-                $job['last_error']    = $result->get_error_message();
-                $job['error_data']    = is_array( $err_data ) ? $err_data : array();
-                $job['attribute_mask'] = implode( ',', $attribute_mask );
-                update_post_meta( $post_id, 'gmb_more_push_job', $job );
-
                 wp_send_json_error( array(
-                    'message'    => $result->get_error_message(),
-                    'panel_html' => $this->render_more_push_panel( $post_id ),
-                    'log_context' => array(
-                        'before' => $this->get_more_snapshot_from_attributes( $post_id, is_array( $snapshot_before_attrs ) ? $snapshot_before_attrs : array() ),
-                        'after'  => $this->get_more_local_snapshot( $post_id ),
-                        'raw'    => array(
-                            'action'            => 'push_gmb_more_error',
-                            'error_message'     => $result->get_error_message(),
-                            'error_data'        => is_array( $err_data ) ? $err_data : array(),
-                            'submitted_payload' => $attributes_payload,
-                            'attribute_mask'    => $attribute_mask,
-                        ),
-                    ),
+                    'message' => $result->get_error_message(),
                 ) );
+                return;
             }
 
-            $fresh_attrs = array();
-            $fresh_error = '';
-            if ( method_exists( 'Lealez_GMB_API', 'get_location_attributes' ) ) {
-                $fresh_result = Lealez_GMB_API::get_location_attributes( $parent_business_id, $gmb_location_name, false );
-                if ( is_wp_error( $fresh_result ) ) {
-                    $fresh_error = $fresh_result->get_error_message();
-                    $fresh_attrs = $this->merge_overrides_into_raw( $post_id, $overrides );
-                } elseif ( is_array( $fresh_result ) ) {
-                    $fresh_attrs = $fresh_result;
-                }
-            }
-
-            if ( empty( $fresh_attrs ) ) {
-                $fresh_attrs = $this->merge_overrides_into_raw( $post_id, $overrides );
-            }
-
-            update_post_meta( $post_id, 'gmb_attributes_raw', $fresh_attrs );
-            update_post_meta( $post_id, 'gmb_attributes_last_sync', current_time( 'mysql' ) );
+            // Limpiar overrides tras envío exitoso
             delete_post_meta( $post_id, '_gmb_more_attributes_overrides' );
-            delete_post_meta( $post_id, 'oy_gmb_more_local_pending_publish' );
 
-            $before_map    = $this->build_current_values_map( is_array( $snapshot_before_attrs ) ? $snapshot_before_attrs : array() );
-            $current_map   = $this->build_current_values_map( is_array( $fresh_attrs ) ? $fresh_attrs : array() );
-            $status        = $this->determine_more_push_outcome( $overrides, $current_map, $before_map );
-            $current_user  = wp_get_current_user();
-            $user_login    = ( $current_user instanceof WP_User && $current_user->user_login ) ? $current_user->user_login : 'system';
-            $now_ts        = time();
-            $now_iso       = gmdate( 'Y-m-d\TH:i:s\Z', $now_ts );
-            $attribute_mask_str = implode( ',', $attribute_mask );
-
-            $job = get_post_meta( $post_id, 'gmb_more_push_job', true );
-            if ( ! is_array( $job ) ) {
-                $job = array();
-            }
-            $history = isset( $job['history'] ) && is_array( $job['history'] ) ? $job['history'] : array();
-            $history[] = array(
-                'event'  => 'push_submitted',
-                'at'     => $now_iso,
-                'at_ts'  => $now_ts,
-                'by'     => $user_login,
-                'detail' => sprintf( 'Se enviaron %d atributo(s) de la sección Más a Google Business Profile. Resultado de verificación: %s.', count( $overrides ), $status ),
-            );
-            if ( $fresh_error ) {
-                $history[] = array(
-                    'event'  => 'post_push_refresh_warning',
-                    'at'     => $now_iso,
-                    'at_ts'  => $now_ts,
-                    'by'     => 'system',
-                    'detail' => 'Google aceptó el PATCH, pero la lectura posterior falló. Se actualizó el caché local fusionando los cambios. Error: ' . $fresh_error,
-                );
-            }
-            if ( count( $history ) > 50 ) {
-                $history = array_slice( $history, -50 );
-            }
-
-            $job = array(
-                'status'          => $status,
-                'pushed_at'       => $now_iso,
-                'pushed_at_ts'    => $now_ts,
-                'pushed_by'       => $user_login,
-                'attribute_mask'  => $attribute_mask_str,
-                'submitted'       => $overrides,
-                'snapshot_before' => $this->get_more_snapshot_from_attributes( $post_id, is_array( $snapshot_before_attrs ) ? $snapshot_before_attrs : array() ),
-                'snapshot_after'  => $this->get_more_snapshot_from_attributes( $post_id, is_array( $fresh_attrs ) ? $fresh_attrs : array() ),
-                'patch_response'  => is_array( $result ) ? $result : array(),
-                'history'         => $history,
-            );
-            update_post_meta( $post_id, 'gmb_more_push_job', $job );
-
-            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
-                Lealez_GMB_Logger::log(
-                    $parent_business_id,
-                    'success',
-                    'GMB More attributes pushed from Lealez.',
-                    array(
-                        'post_id'        => $post_id,
-                        'location'       => $gmb_location_name,
-                        'attribute_mask' => $attribute_mask_str,
-                        'status'         => $status,
-                        'count'          => count( $overrides ),
-                    )
-                );
-            }
+            // Actualizar gmb_attributes_raw con los nuevos valores
+            $merged = $this->merge_overrides_into_raw( $post_id, $overrides );
+            update_post_meta( $post_id, 'gmb_attributes_raw', $merged );
 
             wp_send_json_success( array(
-                'message'     => __( 'Atributos enviados a Google Business Profile. Lealez actualizó el estado local y el caché sincronizado.', 'lealez' ),
-                'status'      => $status,
-                'panel_html'  => $this->render_more_push_panel( $post_id ),
-                'log_context' => array(
-                    'before' => $job['snapshot_before'],
-                    'after'  => $job['snapshot_after'],
-                    'raw'    => array(
-                        'action'          => 'push_gmb_more_to_gmb',
-                        'attribute_mask'  => $attribute_mask_str,
-                        'patch_response'  => is_array( $result ) ? $result : array(),
-                        'submitted'       => $overrides,
-                        'status'          => $status,
-                        'post_push_refresh_warning' => $fresh_error,
-                    ),
-                ),
-            ) );
-        }
-
-        /**
-         * AJAX: Verifica el último envío leyendo nuevamente los atributos desde GMB.
-         */
-        public function ajax_check_push_status() {
-            check_ajax_referer( self::NONCE_AJAX_ACTION, 'nonce' );
-
-            $post_id = absint( $_POST['post_id'] ?? 0 );
-            if ( ! $post_id ) {
-                wp_send_json_error( array( 'message' => __( 'post_id inválido.', 'lealez' ) ) );
-            }
-
-            if ( ! current_user_can( 'edit_post', $post_id ) ) {
-                wp_send_json_error( array( 'message' => __( 'No tienes permisos para editar esta ubicación.', 'lealez' ) ) );
-            }
-
-            $job = get_post_meta( $post_id, 'gmb_more_push_job', true );
-            if ( empty( $job ) || ! is_array( $job ) ) {
-                wp_send_json_error( array( 'message' => __( 'No hay un envío registrado para verificar.', 'lealez' ) ) );
-            }
-
-            $business_id   = (int) get_post_meta( $post_id, 'parent_business_id', true );
-            $location_name = (string) get_post_meta( $post_id, 'gmb_location_name', true );
-
-            if ( ! $business_id || ! $location_name ) {
-                wp_send_json_error( array( 'message' => __( 'No hay empresa/ubicación GMB vinculada.', 'lealez' ) ) );
-            }
-
-            if ( ! class_exists( 'Lealez_GMB_API' ) || ! method_exists( 'Lealez_GMB_API', 'get_location_attributes' ) ) {
-                wp_send_json_error( array( 'message' => __( 'No está disponible la lectura de atributos GMB.', 'lealez' ) ) );
-            }
-
-            $fresh_attrs = Lealez_GMB_API::get_location_attributes( $business_id, $location_name, false );
-            if ( is_wp_error( $fresh_attrs ) ) {
-                wp_send_json_error( array(
-                    'message'    => __( 'Error al consultar GMB: ', 'lealez' ) . $fresh_attrs->get_error_message(),
-                    'panel_html' => $this->render_more_push_panel( $post_id ),
-                    'log_context' => array(
-                        'before' => isset( $job['snapshot_before'] ) && is_array( $job['snapshot_before'] ) ? $job['snapshot_before'] : array(),
-                        'after'  => $this->get_more_local_snapshot( $post_id ),
-                        'raw'    => array(
-                            'action'        => 'check_gmb_more_status_error',
-                            'error_message' => $fresh_attrs->get_error_message(),
-                            'error_data'    => $fresh_attrs->get_error_data(),
-                        ),
-                    ),
-                ) );
-            }
-
-            update_post_meta( $post_id, 'gmb_attributes_raw', $fresh_attrs );
-            update_post_meta( $post_id, 'gmb_attributes_last_sync', current_time( 'mysql' ) );
-
-            $submitted  = isset( $job['submitted'] ) && is_array( $job['submitted'] ) ? $job['submitted'] : array();
-            $before_map = array();
-            if ( isset( $job['snapshot_before'] ) && is_array( $job['snapshot_before'] ) ) {
-                foreach ( $job['snapshot_before'] as $attr_id => $item ) {
-                    $before_map[ sanitize_key( $attr_id ) ] = isset( $item['value'] ) ? $item['value'] : null;
-                }
-            }
-            $current_map = $this->build_current_values_map( is_array( $fresh_attrs ) ? $fresh_attrs : array() );
-            $status      = $this->determine_more_push_outcome( $submitted, $current_map, $before_map );
-            $now_ts      = time();
-            $now_iso     = gmdate( 'Y-m-d\TH:i:s\Z', $now_ts );
-            $user        = wp_get_current_user();
-            $by          = ( $user instanceof WP_User && ! empty( $user->user_login ) ) ? $user->user_login : 'system';
-
-            $job['status']         = $status;
-            $job['last_checked_at'] = $now_iso;
-            $job['snapshot_after'] = $this->get_more_snapshot_from_attributes( $post_id, is_array( $fresh_attrs ) ? $fresh_attrs : array() );
-            if ( ! isset( $job['history'] ) || ! is_array( $job['history'] ) ) {
-                $job['history'] = array();
-            }
-            $job['history'][] = array(
-                'event'  => 'manual_check',
-                'at'     => $now_iso,
-                'at_ts'  => $now_ts,
-                'by'     => $by,
-                'detail' => 'Se verificó el estado de atributos Más contra Google. Resultado: ' . $status . '.',
-            );
-            if ( count( $job['history'] ) > 50 ) {
-                $job['history'] = array_slice( $job['history'], -50 );
-            }
-            update_post_meta( $post_id, 'gmb_more_push_job', $job );
-
-            wp_send_json_success( array(
-                'message'     => __( 'Estado verificado contra Google Business Profile.', 'lealez' ),
-                'status'      => $status,
-                'panel_html'  => $this->render_more_push_panel( $post_id ),
-                'log_context' => array(
-                    'before' => isset( $job['snapshot_before'] ) && is_array( $job['snapshot_before'] ) ? $job['snapshot_before'] : array(),
-                    'after'  => $job['snapshot_after'],
-                    'raw'    => array(
-                        'action' => 'check_gmb_more_status',
-                        'status' => $status,
-                        'job'    => $job,
-                    ),
-                ),
+                'message' => __( 'Atributos actualizados correctamente en Google Business Profile.', 'lealez' ),
             ) );
         }
 
         // =========================================================================
         // HELPERS: METADATOS Y CACHÉ
         // =========================================================================
+
+        /**
+         * Indica si un grupo de atributos debe quedar oculto en este metabox.
+         *
+         * Se usa para retirar "Atributos de la página de un lugar" sin tocar la
+         * sincronización RAW ni otros módulos que puedan usar esos datos.
+         *
+         * @param string $group_name Nombre visual del grupo en Google.
+         * @return bool
+         */
+        private function should_exclude_attribute_group_from_more_metabox( $group_name ) {
+            $normalized = $this->normalize_more_attribute_group_name( $group_name );
+
+            $excluded_groups = array(
+                'atributos de la pagina de un lugar',
+                'place page attributes',
+            );
+
+            return in_array( $normalized, $excluded_groups, true );
+        }
+
+        /**
+         * Normaliza nombres de grupo para comparaciones estables en español/inglés.
+         *
+         * @param string $group_name Nombre del grupo.
+         * @return string
+         */
+        private function normalize_more_attribute_group_name( $group_name ) {
+            $group_name = wp_strip_all_tags( (string) $group_name );
+            $group_name = trim( $group_name );
+
+            if ( function_exists( 'remove_accents' ) ) {
+                $group_name = remove_accents( $group_name );
+            }
+
+            $group_name = strtolower( $group_name );
+            $group_name = preg_replace( '/\s+/', ' ', $group_name );
+
+            return trim( (string) $group_name );
+        }
+
+        /**
+         * Retira del payload local los atributos pertenecientes a grupos ocultos.
+         *
+         * Esto evita que un override antiguo de "Atributos de la página de un lugar"
+         * pueda quedar pendiente y luego enviarse a Google, aunque el campo ya no se
+         * muestre en el metabox.
+         *
+         * @param int   $post_id ID del post oy_location.
+         * @param array $payload Mapa [attr_id => value].
+         * @return array
+         */
+        private function filter_excluded_more_attributes_from_payload( $post_id, array $payload ) {
+            if ( empty( $payload ) ) {
+                return $payload;
+            }
+
+            $excluded_ids = $this->get_excluded_more_attribute_ids_from_cached_metadata( $post_id );
+            if ( empty( $excluded_ids ) ) {
+                return $payload;
+            }
+
+            foreach ( $excluded_ids as $attr_id ) {
+                unset( $payload[ $attr_id ] );
+            }
+
+            return $payload;
+        }
+
+        /**
+         * Obtiene desde el caché local los IDs de atributos que pertenecen a grupos ocultos.
+         *
+         * No consulta Google para evitar llamadas externas durante guardados locales.
+         *
+         * @param int $post_id ID del post oy_location.
+         * @return array
+         */
+        private function get_excluded_more_attribute_ids_from_cached_metadata( $post_id ) {
+            $cached_raw = get_post_meta( $post_id, '_gmb_attrs_metadata', true );
+            $metadata   = array();
+
+            if ( is_array( $cached_raw ) ) {
+                $metadata = $cached_raw;
+            } elseif ( is_string( $cached_raw ) && '' !== trim( $cached_raw ) ) {
+                $decoded = json_decode( $cached_raw, true );
+                if ( is_array( $decoded ) ) {
+                    $metadata = $decoded;
+                }
+            }
+
+            if ( empty( $metadata ) ) {
+                return array();
+            }
+
+            $excluded_ids = array();
+
+            foreach ( $metadata as $attr_meta ) {
+                if ( ! is_array( $attr_meta ) ) {
+                    continue;
+                }
+
+                $group_name = ! empty( $attr_meta['groupDisplayName'] ) ? (string) $attr_meta['groupDisplayName'] : '';
+                if ( ! $this->should_exclude_attribute_group_from_more_metabox( $group_name ) ) {
+                    continue;
+                }
+
+                $attr_id = $this->extract_attr_id_from_meta( $attr_meta );
+                if ( '' !== $attr_id ) {
+                    $excluded_ids[] = $attr_id;
+                }
+            }
+
+            return array_values( array_unique( $excluded_ids ) );
+        }
 
         /**
          * Obtiene los metadatos de atributos desde caché o fetcha desde la API.
@@ -2398,70 +1546,24 @@ private function extract_attr_id_from_meta( $attr_meta ) {
          */
         private function merge_overrides_into_raw( $post_id, $overrides ) {
             $raw = get_post_meta( $post_id, 'gmb_attributes_raw', true );
-            if ( is_string( $raw ) && '' !== trim( $raw ) ) {
-                $decoded = json_decode( $raw, true );
-                if ( is_array( $decoded ) ) {
-                    $raw = $decoded;
-                }
-            }
             if ( ! is_array( $raw ) ) {
                 $raw = array();
             }
 
             $payload_attrs = $this->build_gmb_attributes_payload( $overrides );
 
-            // Construir índice por ID normalizado, no por name completo, porque GMB puede
-            // devolver locations/{id}/attributes/foo y el PATCH usa attributes/foo.
+            // Construir índice por nombre
             $raw_index = array();
             foreach ( $raw as $i => $attr ) {
-                if ( ! is_array( $attr ) ) {
-                    continue;
-                }
-
-                $attr_id = '';
-                if ( ! empty( $attr['attributeId'] ) ) {
-                    $attr_id = $this->normalize_gmb_more_attribute_id( (string) $attr['attributeId'] );
-                } elseif ( ! empty( $attr['name'] ) ) {
-                    $attr_id = $this->normalize_gmb_more_attribute_id( (string) $attr['name'] );
-                }
-
-                if ( '' !== $attr_id ) {
-                    $raw_index[ $attr_id ] = $i;
+                if ( ! empty( $attr['name'] ) ) {
+                    $raw_index[ $attr['name'] ] = $i;
                 }
             }
 
             foreach ( $payload_attrs as $new_attr ) {
-                if ( ! is_array( $new_attr ) || empty( $new_attr['name'] ) ) {
-                    continue;
-                }
-
-                $attr_id = $this->normalize_gmb_more_attribute_id( (string) $new_attr['name'] );
-                if ( '' === $attr_id ) {
-                    continue;
-                }
-
-                $has_values = false;
-                if ( isset( $new_attr['values'] ) && is_array( $new_attr['values'] ) && ! empty( $new_attr['values'] ) ) {
-                    $has_values = true;
-                }
-                if ( isset( $new_attr['uriValues'] ) && is_array( $new_attr['uriValues'] ) && ! empty( $new_attr['uriValues'] ) ) {
-                    $has_values = true;
-                }
-                if ( isset( $new_attr['repeatedEnumValue']['setValues'] ) && is_array( $new_attr['repeatedEnumValue']['setValues'] ) && ! empty( $new_attr['repeatedEnumValue']['setValues'] ) ) {
-                    $has_values = true;
-                }
-
-                if ( ! $has_values ) {
-                    if ( isset( $raw_index[ $attr_id ] ) ) {
-                        unset( $raw[ $raw_index[ $attr_id ] ] );
-                    }
-                    continue;
-                }
-
-                $new_attr['name'] = 'attributes/' . $attr_id;
-
-                if ( isset( $raw_index[ $attr_id ] ) ) {
-                    $raw[ $raw_index[ $attr_id ] ] = $new_attr;
+                $name = $new_attr['name'];
+                if ( isset( $raw_index[ $name ] ) ) {
+                    $raw[ $raw_index[ $name ] ] = $new_attr;
                 } else {
                     $raw[] = $new_attr;
                 }
@@ -2609,60 +1711,9 @@ private function extract_attr_id_from_meta( $attr_meta ) {
             }
             .oy-gmb-checkbox-option:hover { background: #f0f6ff; }
 
-            /* Estado de edición */
-            .oy-gmb-more-editor-state {
-                margin: 0 0 10px;
-                font-size: 12px;
-                color: #646970;
-            }
-            .oy-gmb-more-wrapper.is-editing .oy-gmb-more-content {
-                outline: 2px solid rgba(34,113,177,.18);
-                outline-offset: 2px;
-            }
-            .oy-gmb-more-wrapper:not(.is-editing) .oy-gmb-more-field-control {
-                opacity: .72;
-            }
-
-            /* Panel de publicación */
-            .oy-gmb-more-panel-header {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                flex-wrap: wrap;
-                gap: 10px;
-                padding: 10px 14px;
-                background: #f6f7f7;
-                border-bottom: 1px solid #dadce0;
-            }
-            .oy-gmb-more-panel-title { font-weight: 600; color: #1d2327; }
-            .oy-gmb-more-panel-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-            .oy-gmb-more-panel-body { padding: 12px 14px; }
-            .oy-gmb-more-panel-alert { margin-bottom: 10px; padding: 10px 12px; border-left: 4px solid #2271b1; background: #eef6ff; }
-            .oy-gmb-more-panel-alert.success { border-left-color: #00a32a; background: #edfaef; }
-            .oy-gmb-more-panel-alert.warning { border-left-color: #dba617; background: #fff8e5; }
-            .oy-gmb-more-panel-alert.error { border-left-color: #d63638; background: #fff1f0; }
-            .oy-gmb-more-panel-meta { margin-bottom: 8px; color: #50575e; font-size: 12px; }
-            .oy-gmb-more-history-wrap { margin-top: 12px; }
-            .oy-gmb-more-history-scroll { max-height: 220px; overflow: auto; border: 1px solid #dcdcde; background: #fff; margin-top: 8px; }
-            .oy-gmb-more-history-table { width: 100%; border-collapse: collapse; }
-            .oy-gmb-more-history-table th { text-align: left; padding: 8px; border-bottom: 1px solid #dcdcde; background: #f6f7f7; }
-            .oy-gmb-more-history-table td { padding: 8px; border-bottom: 1px solid #f0f0f1; vertical-align: top; }
-
-            /* Log visual */
-            #oy-gmb-more-log-panel { margin-bottom: 16px; border: 1px solid #dadce0; border-radius: 4px; overflow: hidden; background: #fff; }
-            #oy-gmb-more-log-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; background: #f6f7f7; cursor: pointer; border-bottom: 1px solid transparent; user-select: none; font-size: 13px; font-weight: 600; color: #1d2327; }
-            #oy-gmb-more-log-toggle-icon { font-size: 13px; color: #888; transition: transform .2s; }
-            #oy-gmb-more-log-entries { padding: 10px 14px; }
-            #oy-gmb-more-log-footer { padding: 8px 14px; border-top: 1px solid #f0f0f0; background: #fafafa; display: flex; gap: 10px; align-items: center; }
-            #oy-gmb-more-log-clear { font-size: 11px; color: #dc3232; border-color: #dc3232; }
-            #oy-gmb-more-log-footer span { font-size: 11px; color: #aaa; font-style: italic; }
-
             /* Botones en toolbar */
             .oy-gmb-more-btn-refresh .dashicons,
-            .oy-gmb-more-btn-push .dashicons,
-            .oy-gmb-more-btn-edit .dashicons,
-            .oy-gmb-more-btn-save .dashicons,
-            .oy-gmb-more-btn-cancel .dashicons {
+            .oy-gmb-more-btn-push .dashicons {
                 vertical-align: middle;
             }
 
