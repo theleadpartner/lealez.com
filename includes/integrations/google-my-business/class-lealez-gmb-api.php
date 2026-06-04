@@ -2716,18 +2716,43 @@ public static function get_attribute_metadata( $business_id, $location_name, $ca
             }
 
             // Google rechaza algunos atributos URL cuando se envía `values: []`.
-            // Para atributos con uriValues, el body debe llevar solamente uriValues
-            // y no un arreglo vacío de values. Para limpiar un atributo se incluye
-            // su ID en attributeMask y se omite el atributo del body.
+            // Para limpiar un atributo, el ID debe viajar en attributeMask y el
+            // atributo debe omitirse del body. Esto también permite que el metabox
+            // de "Más" publique "No especificado" sin enviar un Attribute vacío.
             if ( isset( $attribute['values'] ) && is_array( $attribute['values'] ) && empty( $attribute['values'] ) ) {
                 unset( $attribute['values'] );
             }
             if ( isset( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) && empty( $attribute['uriValues'] ) ) {
                 unset( $attribute['uriValues'] );
             }
+            if (
+                isset( $attribute['repeatedEnumValue']['setValues'] ) &&
+                is_array( $attribute['repeatedEnumValue']['setValues'] ) &&
+                empty( $attribute['repeatedEnumValue']['setValues'] )
+            ) {
+                unset( $attribute['repeatedEnumValue'] );
+            }
 
-            $body_attributes[] = $attribute;
-            $derived_mask[]    = 'attributes/' . sanitize_key( $attr_id );
+            $has_attribute_value = false;
+            if ( isset( $attribute['values'] ) && is_array( $attribute['values'] ) && ! empty( $attribute['values'] ) ) {
+                $has_attribute_value = true;
+            }
+            if ( isset( $attribute['uriValues'] ) && is_array( $attribute['uriValues'] ) && ! empty( $attribute['uriValues'] ) ) {
+                $has_attribute_value = true;
+            }
+            if (
+                isset( $attribute['repeatedEnumValue']['setValues'] ) &&
+                is_array( $attribute['repeatedEnumValue']['setValues'] ) &&
+                ! empty( $attribute['repeatedEnumValue']['setValues'] )
+            ) {
+                $has_attribute_value = true;
+            }
+
+            if ( $has_attribute_value ) {
+                $body_attributes[] = $attribute;
+            }
+
+            $derived_mask[] = 'attributes/' . sanitize_key( $attr_id );
         }
 
         $mask_items = array();
