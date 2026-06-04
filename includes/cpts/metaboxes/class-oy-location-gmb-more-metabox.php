@@ -413,6 +413,14 @@ private function render_attribute_groups( $metadata, $current_values, $post_id )
             continue;
         }
 
+        // ── Pre-filtro: excluir el campo no funcional "Chat principal" ─────
+        // Este atributo aparece dentro del grupo "Atributos de la página de un lugar"
+        // y no está aportando una función operativa en Lealez. Se oculta solo de
+        // este metabox para no afectar la sincronización RAW existente con Google.
+        if ( $this->should_exclude_more_attribute_from_metabox( $attr_id, $attr_meta ) ) {
+            continue;
+        }
+
         $group_name = ! empty( $attr_meta['groupDisplayName'] )
             ? (string) $attr_meta['groupDisplayName']
             : __( 'Otros atributos', 'lealez' );
@@ -519,6 +527,16 @@ private function render_single_attribute( $attr_id, $attr_meta, $current_values,
      * URLs de reservas/pedidos). No los mostramos aquí para evitar duplicados.
      */
     if ( 'URL' === $value_type ) {
+        return;
+    }
+
+    /**
+     * ✅ FILTRO Chat principal:
+     * Si este método es llamado directamente, volvemos a validar que el atributo
+     * no pertenezca al campo no funcional "Chat principal" del grupo
+     * "Atributos de la página de un lugar".
+     */
+    if ( $this->should_exclude_more_attribute_from_metabox( $attr_id, $attr_meta ) ) {
         return;
     }
 
@@ -899,7 +917,14 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
                 }
             }
 
-            return $sanitized;
+            $request_post_id = 0;
+            if ( isset( $_POST['post_id'] ) ) {
+                $request_post_id = absint( $_POST['post_id'] );
+            } elseif ( isset( $_POST['post_ID'] ) ) {
+                $request_post_id = absint( $_POST['post_ID'] );
+            }
+
+            return $this->filter_excluded_more_attributes_from_payload( $sanitized, $request_post_id );
         }
 
         /**
@@ -918,6 +943,10 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
             if ( ! $post_id ) {
                 return array();
             }
+
+            // Mantener fuera del flujo local cualquier atributo oculto de este metabox
+            // aunque llegue desde un DOM antiguo, caché de navegador o payload manual.
+            $submitted = $this->filter_excluded_more_attributes_from_payload( $submitted, $post_id );
 
             $raw_attributes = get_post_meta( $post_id, 'gmb_attributes_raw', true );
             if ( is_string( $raw_attributes ) && '' !== trim( $raw_attributes ) ) {
@@ -1339,6 +1368,7 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
                     $overrides = $decoded;
                 }
             }
+            $overrides = $this->filter_excluded_more_attributes_from_payload( $overrides, $post_id );
             foreach ( $overrides as $attr_id => $value ) {
                 $map[ sanitize_key( $attr_id ) ] = $value;
             }
@@ -1371,6 +1401,10 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
             foreach ( $map as $attr_id => $value ) {
                 $attr_id = sanitize_key( $attr_id );
                 if ( '' === $attr_id ) {
+                    continue;
+                }
+
+                if ( $this->is_excluded_more_attribute_id( $attr_id, $post_id ) ) {
                     continue;
                 }
 
@@ -1410,6 +1444,9 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
                 }
                 $attr_id = $this->extract_attr_id_from_meta( $attr_meta );
                 if ( '' === $attr_id ) {
+                    continue;
+                }
+                if ( $this->should_exclude_more_attribute_from_metabox( $attr_id, $attr_meta ) ) {
                     continue;
                 }
                 $labels[ $attr_id ] = ! empty( $attr_meta['displayName'] ) ? (string) $attr_meta['displayName'] : $this->humanize_attr_id( $attr_id );
@@ -1465,6 +1502,9 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
                 if ( '' === $attr_id ) {
                     continue;
                 }
+                if ( $this->is_excluded_more_attribute_id( $attr_id ) ) {
+                    continue;
+                }
                 $checked++;
 
                 $submitted_norm = $this->normalize_attribute_value_for_compare( $value );
@@ -1517,6 +1557,187 @@ private function render_repeated_enum_field( $field_name, $field_id, $current_ra
                 $raw   = $parts[1] ?? '';
             }
             return sanitize_key( trim( $raw, '/' ) );
+        }
+
+        /**
+         * Normaliza textos de metadata para comparaciones estables.
+         *
+         * @param string $text Texto original.
+         * @return string
+         */
+        private function normalize_more_attribute_text( $text ) {
+            $text = wp_strip_all_tags( (string) $text );
+            $text = trim( $text );
+
+            if ( function_exists( 'remove_accents' ) ) {
+                $text = remove_accents( $text );
+            }
+
+            $text = strtolower( $text );
+            $text = preg_replace( '/[^a-z0-9]+/', ' ', $text );
+            $text = preg_replace( '/\s+/', ' ', $text );
+
+            return trim( (string) $text );
+        }
+
+        /**
+         * Indica si el grupo corresponde a "Atributos de la página de un lugar".
+         *
+         * @param string $group_name Nombre del grupo entregado por Google.
+         * @return bool
+         */
+        private function is_place_page_attribute_group( $group_name ) {
+            $normalized = $this->normalize_more_attribute_text( $group_name );
+
+            $blocked_groups = array(
+                'atributos de la pagina de un lugar',
+                'atributos pagina de un lugar',
+                'place page attributes',
+            );
+
+            return in_array( $normalized, $blocked_groups, true );
+        }
+
+        /**
+         * Determina si un atributo debe quedar fuera de este metabox.
+         *
+         * Por solicitud, se retira únicamente el campo "Chat principal" que Google
+         * agrupa en "Atributos de la página de un lugar". La sincronización RAW con
+         * Google se mantiene intacta; solo se oculta y se excluye del guardado/envío
+         * de este metabox para que no genere cambios locales inútiles.
+         *
+         * @param string $attr_id   ID normalizado del atributo.
+         * @param array  $attr_meta Metadata del atributo.
+         * @return bool
+         */
+        private function should_exclude_more_attribute_from_metabox( $attr_id, $attr_meta = array() ) {
+            $attr_id = sanitize_key( (string) $attr_id );
+            if ( '' === $attr_id || ! is_array( $attr_meta ) ) {
+                return false;
+            }
+
+            $group_name   = isset( $attr_meta['groupDisplayName'] ) ? (string) $attr_meta['groupDisplayName'] : '';
+            $display_name = isset( $attr_meta['displayName'] ) ? (string) $attr_meta['displayName'] : '';
+
+            if ( ! $this->is_place_page_attribute_group( $group_name ) ) {
+                return false;
+            }
+
+            $display_normalized = $this->normalize_more_attribute_text( $display_name );
+            $chat_labels        = array(
+                'chat principal',
+                'primary chat',
+            );
+
+            if ( in_array( $display_normalized, $chat_labels, true ) ) {
+                return true;
+            }
+
+            // Respaldo por ID dentro del mismo grupo, por si Google cambia el idioma
+            // del displayName pero conserva un identificador relacionado con chat.
+            return false !== strpos( $attr_id, 'chat' );
+        }
+
+        /**
+         * Obtiene los IDs de atributos ocultos de este metabox usando metadata cacheada.
+         *
+         * @param int        $post_id  ID del post.
+         * @param array|null $metadata Metadata opcional ya cargada.
+         * @return array
+         */
+        private function get_excluded_more_attribute_ids( $post_id = 0, $metadata = null ) {
+            $post_id = absint( $post_id );
+
+            if ( null === $metadata && $post_id ) {
+                $metadata = get_post_meta( $post_id, '_gmb_attrs_metadata', true );
+                if ( is_string( $metadata ) && '' !== trim( $metadata ) ) {
+                    $decoded = json_decode( $metadata, true );
+                    if ( is_array( $decoded ) ) {
+                        $metadata = $decoded;
+                    }
+                }
+            }
+
+            if ( ! is_array( $metadata ) ) {
+                $metadata = array();
+            }
+
+            $excluded = array();
+            foreach ( $metadata as $attr_meta ) {
+                if ( ! is_array( $attr_meta ) ) {
+                    continue;
+                }
+
+                $attr_id = $this->extract_attr_id_from_meta( $attr_meta );
+                if ( '' === $attr_id ) {
+                    continue;
+                }
+
+                if ( $this->should_exclude_more_attribute_from_metabox( $attr_id, $attr_meta ) ) {
+                    $excluded[] = sanitize_key( $attr_id );
+                }
+            }
+
+            $excluded = array_values( array_unique( array_filter( $excluded ) ) );
+
+            return $excluded;
+        }
+
+        /**
+         * Verifica si un attr_id pertenece a los atributos ocultos de este metabox.
+         *
+         * @param string $attr_id ID del atributo.
+         * @param int    $post_id ID del post, si está disponible.
+         * @return bool
+         */
+        private function is_excluded_more_attribute_id( $attr_id, $post_id = 0 ) {
+            $attr_id = sanitize_key( (string) $attr_id );
+            if ( '' === $attr_id ) {
+                return false;
+            }
+
+            $excluded_ids = $this->get_excluded_more_attribute_ids( $post_id );
+            if ( in_array( $attr_id, $excluded_ids, true ) ) {
+                return true;
+            }
+
+            // Fallback controlado: solo para IDs claramente asociados al chat principal
+            // de place page cuando no se pudo leer metadata cacheada.
+            $fallback_ids = array(
+                'primary_chat',
+                'chat_primary',
+                'place_page_primary_chat',
+                'primary_business_chat',
+            );
+
+            return in_array( $attr_id, $fallback_ids, true );
+        }
+
+        /**
+         * Quita del payload local los atributos ocultos de este metabox.
+         *
+         * @param array      $payload  Payload [attr_id => value].
+         * @param int        $post_id  ID del post.
+         * @param array|null $metadata Metadata opcional.
+         * @return array
+         */
+        private function filter_excluded_more_attributes_from_payload( array $payload, $post_id = 0, $metadata = null ) {
+            if ( empty( $payload ) ) {
+                return array();
+            }
+
+            $excluded_ids = $this->get_excluded_more_attribute_ids( $post_id, $metadata );
+            if ( empty( $excluded_ids ) ) {
+                return $payload;
+            }
+
+            foreach ( $excluded_ids as $excluded_id ) {
+                if ( array_key_exists( $excluded_id, $payload ) ) {
+                    unset( $payload[ $excluded_id ] );
+                }
+            }
+
+            return $payload;
         }
 
         // =========================================================================
@@ -1625,6 +1846,7 @@ public function ajax_render_attributes() {
             $overrides = $decoded;
         }
     }
+    $overrides = $this->filter_excluded_more_attributes_from_payload( $overrides, $post_id );
     foreach ( $overrides as $attr_id => $val ) {
         $current_values[ sanitize_text_field( $attr_id ) ] = $val;
     }
@@ -1710,6 +1932,26 @@ public function ajax_render_attributes() {
                 }
             } elseif ( is_array( $overrides_json ) ) {
                 $overrides = $overrides_json;
+            }
+
+            $original_overrides_count = count( $overrides );
+            $overrides                = $this->filter_excluded_more_attributes_from_payload( $overrides, $post_id );
+
+            if ( count( $overrides ) !== $original_overrides_count ) {
+                if ( ! empty( $overrides ) ) {
+                    update_post_meta( $post_id, '_gmb_more_attributes_overrides', wp_json_encode( $overrides, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) );
+                } else {
+                    delete_post_meta( $post_id, '_gmb_more_attributes_overrides' );
+                    delete_post_meta( $post_id, 'oy_gmb_more_local_pending_publish' );
+                }
+
+                $this->append_more_job_history( $post_id, array(
+                    'event'  => 'hidden_attribute_removed_from_pending_payload',
+                    'at'     => gmdate( 'Y-m-d\TH:i:s\Z', time() ),
+                    'at_ts'  => time(),
+                    'by'     => ( wp_get_current_user() instanceof WP_User ) ? wp_get_current_user()->user_login : 'system',
+                    'detail' => 'Se retiró del payload pendiente el campo oculto Chat principal de Atributos de la página de un lugar.',
+                ) );
             }
 
             if ( empty( $overrides ) ) {
@@ -2343,6 +2585,11 @@ private function extract_attr_id_from_meta( $attr_meta ) {
             $attributes = array();
 
             foreach ( $overrides as $attr_id => $value ) {
+                $attr_id = sanitize_key( (string) $attr_id );
+                if ( '' === $attr_id || $this->is_excluded_more_attribute_id( $attr_id ) ) {
+                    continue;
+                }
+
                 $attr_name = 'attributes/' . $attr_id;
 
                 if ( '' === $value || null === $value ) {
