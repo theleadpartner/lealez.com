@@ -3269,6 +3269,247 @@ public static function get_location_food_menus( $business_id, $account_id, $loca
 return is_array( $result ) ? $result : array();
 }
 
+/**
+ * Actualiza el menú estructurado de una ubicación en Google Business Profile.
+ *
+ * Endpoint oficial GBP API v4:
+ * PATCH /accounts/{accountId}/locations/{locationId}/foodMenus?updateMask=menus
+ *
+ * @param int    $business_id        WP Post ID del oy_business.
+ * @param string $account_id         Account ID numérico, accounts/{id}, o resource name completo.
+ * @param string $location_id        Location ID numérico, locations/{id}, o resource name completo.
+ * @param array  $food_menus_payload Payload FoodMenus completo: name + menus.
+ * @param string $update_mask        Máscara de actualización. Por defecto: menus.
+ * @return array|WP_Error
+ */
+public static function update_location_food_menus( $business_id, $account_id, $location_id, array $food_menus_payload, $update_mask = 'menus' ) {
+    $business_id = absint( $business_id );
+
+    if ( ! $business_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id for food menus update.', 'lealez' ) );
+    }
+
+    $account_id_normalized = self::extract_account_id_from_name( (string) $account_id );
+    if ( '' === $account_id_normalized ) {
+        $account_id_normalized = trim( (string) $account_id, '/' );
+    }
+
+    $location_id_normalized = self::extract_location_id_from_any( (string) $location_id );
+    if ( '' === $location_id_normalized ) {
+        $location_id_normalized = trim( (string) $location_id, '/' );
+    }
+
+    if ( '' === $account_id_normalized || '' === $location_id_normalized ) {
+        return new WP_Error(
+            'missing_params',
+            __( 'Missing/invalid accountId or locationId for food menus update.', 'lealez' ),
+            array(
+                'account_id_raw'         => $account_id,
+                'account_id_normalized'  => $account_id_normalized,
+                'location_id_raw'        => $location_id,
+                'location_id_normalized' => $location_id_normalized,
+            )
+        );
+    }
+
+    $resource_name = 'accounts/' . $account_id_normalized . '/locations/' . $location_id_normalized . '/foodMenus';
+    $endpoint      = '/' . $resource_name;
+
+    $body         = $food_menus_payload;
+    $body['name'] = $resource_name;
+
+    $update_mask = trim( (string) $update_mask );
+    if ( '' === $update_mask ) {
+        $update_mask = 'menus';
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Updating foodMenus (GMB API v4 PATCH).',
+            array(
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+                'endpoint'    => self::$mybusiness_v4_base . $endpoint,
+                'updateMask'  => $update_mask,
+                'menus_count' => ! empty( $body['menus'] ) && is_array( $body['menus'] ) ? count( $body['menus'] ) : 0,
+            )
+        );
+    }
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$mybusiness_v4_base,
+        'PATCH',
+        $body,
+        false,
+        array( 'updateMask' => $update_mask )
+    );
+
+    if ( is_wp_error( $result ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'error',
+                'update_location_food_menus failed: ' . $result->get_error_message(),
+                array(
+                    'account_id'  => $account_id_normalized,
+                    'location_id' => $location_id_normalized,
+                    'error_code'  => $result->get_error_code(),
+                    'error_data'  => $result->get_error_data(),
+                )
+            );
+        }
+        return $result;
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            'foodMenus update request accepted by Google.',
+            array(
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+                'updateMask'  => $update_mask,
+            )
+        );
+    }
+
+    return array(
+        'response'      => is_array( $result ) ? $result : array(),
+        'submitted'     => $body,
+        'updateMask'    => $update_mask,
+        'resourceName'  => $resource_name,
+        'account_id'    => $account_id_normalized,
+        'location_id'   => $location_id_normalized,
+    );
+}
+
+/**
+ * Crea un MediaItem en una ubicación de Google Business Profile.
+ *
+ * Se usa para asociar fotos locales del menú con mediaKeys de Google antes de enviar foodMenus.
+ *
+ * @param int    $business_id WP Post ID del oy_business.
+ * @param string $account_id  Account ID numérico o resource name.
+ * @param string $location_id Location ID numérico o resource name.
+ * @param array  $media_item  Payload MediaItem.
+ * @return array|WP_Error
+ */
+public static function create_location_media_item( $business_id, $account_id, $location_id, array $media_item ) {
+    $business_id = absint( $business_id );
+
+    if ( ! $business_id ) {
+        return new WP_Error( 'missing_params', __( 'Missing business_id for media create.', 'lealez' ) );
+    }
+
+    $account_id_normalized = self::extract_account_id_from_name( (string) $account_id );
+    if ( '' === $account_id_normalized ) {
+        $account_id_normalized = trim( (string) $account_id, '/' );
+    }
+
+    $location_id_normalized = self::extract_location_id_from_any( (string) $location_id );
+    if ( '' === $location_id_normalized ) {
+        $location_id_normalized = trim( (string) $location_id, '/' );
+    }
+
+    if ( '' === $account_id_normalized || '' === $location_id_normalized ) {
+        return new WP_Error(
+            'missing_params',
+            __( 'Missing/invalid accountId or locationId for media create.', 'lealez' ),
+            array(
+                'account_id_raw'         => $account_id,
+                'account_id_normalized'  => $account_id_normalized,
+                'location_id_raw'        => $location_id,
+                'location_id_normalized' => $location_id_normalized,
+            )
+        );
+    }
+
+    $source_url = isset( $media_item['sourceUrl'] ) ? esc_url_raw( (string) $media_item['sourceUrl'] ) : '';
+    if ( '' === $source_url ) {
+        return new WP_Error( 'missing_source_url', __( 'Missing sourceUrl for media create.', 'lealez' ) );
+    }
+
+    $body = $media_item;
+    $body['sourceUrl']   = $source_url;
+    $body['mediaFormat'] = ! empty( $body['mediaFormat'] ) ? strtoupper( (string) $body['mediaFormat'] ) : 'PHOTO';
+
+    if ( empty( $body['locationAssociation'] ) || ! is_array( $body['locationAssociation'] ) ) {
+        $body['locationAssociation'] = array( 'category' => 'FOOD_AND_DRINK' );
+    }
+
+    if ( empty( $body['locationAssociation']['category'] ) ) {
+        $body['locationAssociation']['category'] = 'FOOD_AND_DRINK';
+    }
+
+    $body['locationAssociation']['category'] = strtoupper( (string) $body['locationAssociation']['category'] );
+
+    $endpoint = '/accounts/' . rawurlencode( $account_id_normalized )
+        . '/locations/' . rawurlencode( $location_id_normalized )
+        . '/media';
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'info',
+            'Creating GMB media item for menu flow.',
+            array(
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+                'category'    => $body['locationAssociation']['category'],
+                'sourceUrl'   => $source_url,
+            )
+        );
+    }
+
+    $result = self::make_request(
+        $business_id,
+        $endpoint,
+        self::$mybusiness_v4_base,
+        'POST',
+        $body,
+        false,
+        array()
+    );
+
+    if ( is_wp_error( $result ) ) {
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log(
+                $business_id,
+                'warning',
+                'create_location_media_item failed: ' . $result->get_error_message(),
+                array(
+                    'account_id'  => $account_id_normalized,
+                    'location_id' => $location_id_normalized,
+                    'error_code'  => $result->get_error_code(),
+                    'error_data'  => $result->get_error_data(),
+                )
+            );
+        }
+        return $result;
+    }
+
+    if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+        Lealez_GMB_Logger::log(
+            $business_id,
+            'success',
+            'GMB media item created for menu flow.',
+            array(
+                'account_id'  => $account_id_normalized,
+                'location_id' => $location_id_normalized,
+                'mediaKey'    => is_array( $result ) ? (string) ( $result['mediaKey'] ?? '' ) : '',
+                'name'        => is_array( $result ) ? (string) ( $result['name'] ?? '' ) : '',
+            )
+        );
+    }
+
+    return is_array( $result ) ? $result : array();
+}
+
     /**
  * Obtiene los serviceItems de una ubicación desde Business Information API v1.
  *
