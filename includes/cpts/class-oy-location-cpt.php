@@ -6321,7 +6321,17 @@ public function ajax_get_gmb_location_details() {
             }
         }
 
-        // ── 6. Respuesta JSON ─────────────────────────────────────────────────
+        // ── 6. Registrar que el estado local quedó alineado con la última lectura de Google ──
+        $this->mark_menu_synced_from_gmb(
+            $post_id,
+            $sections_imported,
+            $items_imported,
+            $photos_imported,
+            $catalog_type,
+            $debug_summary
+        );
+
+        // ── 7. Respuesta JSON ─────────────────────────────────────────────────
         if ( '' !== $menu_error && 0 === $sections_imported ) {
             // No hay catálogo estructurado en GMB (puede ser válido para fotos igual)
             wp_send_json_success( array(
@@ -6359,6 +6369,81 @@ public function ajax_get_gmb_location_details() {
             ),
         ) );
     }
+    /**
+     * Registra en el historial del módulo Menú que se acaba de sincronizar desde GMB.
+     *
+     * Esto evita dejar marcado como pendiente un menú que fue sobrescrito/actualizado
+     * por el botón "Sincronizar desde Google" y conserva un log auditable del proceso.
+     *
+     * @param int    $post_id
+     * @param int    $sections_imported
+     * @param int    $items_imported
+     * @param int    $photos_imported
+     * @param string $catalog_type
+     * @param array  $debug_summary
+     * @return void
+     */
+    private function mark_menu_synced_from_gmb( $post_id, $sections_imported, $items_imported, $photos_imported, $catalog_type, array $debug_summary = array() ) {
+        $post_id = absint( $post_id );
+        if ( ! $post_id ) {
+            return;
+        }
+
+        $has_remote_menu_data = ( (int) $sections_imported > 0 || (int) $items_imported > 0 || (int) $photos_imported > 0 || in_array( sanitize_key( (string) $catalog_type ), array( 'food_menu', 'services', 'products' ), true ) );
+
+        if ( $has_remote_menu_data ) {
+            delete_post_meta( $post_id, 'oy_menu_local_pending_publish' );
+        }
+
+        $now = time();
+        update_post_meta( $post_id, 'oy_menu_last_gmb_sync_save', array(
+            'at'                => current_time( 'mysql' ),
+            'at_ts'             => $now,
+            'at_label'          => date_i18n( 'd/m/Y H:i:s', $now ),
+            'source'            => 'sync_from_gmb',
+            'sections_imported' => (int) $sections_imported,
+            'items_imported'    => (int) $items_imported,
+            'photos_imported'   => (int) $photos_imported,
+            'catalog_type'      => sanitize_key( (string) $catalog_type ),
+        ) );
+
+        $job = get_post_meta( $post_id, 'gmb_menu_push_job', true );
+        if ( ! is_array( $job ) ) {
+            $job = array();
+        }
+
+        $history = is_array( $job['history'] ?? null ) ? $job['history'] : array();
+        $history[] = array(
+            'event'             => 'sync_from_gmb',
+            'message'           => $has_remote_menu_data
+                ? __( 'Menú sincronizado desde Google Business Profile. Los datos locales quedan alineados con la última lectura de Google.', 'lealez' )
+                : __( 'Se consultó Google Business Profile, pero Google no devolvió catálogo ni fotos de menú. No se limpian cambios locales pendientes.', 'lealez' ),
+            'status'            => $has_remote_menu_data ? 'synced_from_gmb' : 'sync_from_gmb_no_catalog',
+            'summary'           => array(
+                'sections_imported' => (int) $sections_imported,
+                'items_imported'    => (int) $items_imported,
+                'photos_imported'   => (int) $photos_imported,
+                'catalog_type'      => sanitize_key( (string) $catalog_type ),
+            ),
+            'debug_summary'      => $debug_summary,
+            'at'                 => current_time( 'mysql' ),
+            'at_ts'              => $now,
+            'at_label'           => date_i18n( 'd/m/Y H:i:s', $now ),
+            'user_id'            => get_current_user_id(),
+        );
+
+        $job['status']           = $has_remote_menu_data ? 'synced_from_gmb' : 'sync_from_gmb_no_catalog';
+        $job['message']          = $has_remote_menu_data
+            ? __( 'Última acción: sincronización desde GMB.', 'lealez' )
+            : __( 'Última acción: consulta GMB sin catálogo remoto; cambios locales pendientes conservados.', 'lealez' );
+        $job['updated_at']       = current_time( 'mysql' );
+        $job['updated_at_ts']    = $now;
+        $job['updated_at_label'] = date_i18n( 'd/m/Y H:i:s', $now );
+        $job['history']          = array_slice( $history, -50 );
+
+        update_post_meta( $post_id, 'gmb_menu_push_job', $job );
+    }
+
     public function set_custom_columns( $columns ) {
         $new_columns = array();
 
