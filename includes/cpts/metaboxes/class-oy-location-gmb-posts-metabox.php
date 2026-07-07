@@ -203,7 +203,7 @@ class OY_Location_GMB_Posts_Metabox {
                         <?php esc_html_e( 'Flujo recomendado: crea o edita en Lealez, guarda como borrador local y luego publica o actualiza en Google. Así evitas perder contenido si Google rechaza la solicitud o hay un error de conexión.', 'lealez' ); ?>
                     </div>
 
-                    <form id="oy-gmb-post-form" autocomplete="off">
+                    <div id="oy-gmb-post-form" class="oy-gmb-post-editor" autocomplete="off">
                         <input type="hidden" name="editor_mode" id="oy-gmb-editor-mode" value="create">
                         <input type="hidden" name="draft_id" id="oy-gmb-draft-id" value="">
                         <input type="hidden" name="post_name" id="oy-gmb-post-name" value="">
@@ -281,7 +281,7 @@ class OY_Location_GMB_Posts_Metabox {
                                 <h4><?php esc_html_e( 'Botón CTA / enlace de acción', 'lealez' ); ?></h4>
                                 <div class="oy-gmb-panel-body">
                                     <div class="oy-gmb-notice info oy-gmb-compact-notice">
-                                        <?php esc_html_e( 'El CTA es el botón que Google puede mostrar debajo de la publicación. Puedes definir la acción y, cuando aplique, personalizar la URL destino del botón.', 'lealez' ); ?>
+                                        <?php esc_html_e( 'El CTA es el botón público que Google puede mostrar debajo de la publicación. Lealez no toma esta URL de otro metabox: si eliges Más información, Reservar, Pedir, Comprar o Registrarse, debes escribir aquí la URL destino que Google enviará dentro de callToAction.url.', 'lealez' ); ?>
                                     </div>
                                     <div class="oy-gmb-two-cols">
                                         <div class="oy-gmb-form-row">
@@ -299,10 +299,10 @@ class OY_Location_GMB_Posts_Metabox {
                                         <div class="oy-gmb-form-row" id="oy-gmb-cta-url-row">
                                             <label for="oy-gmb-cta-url"><?php esc_html_e( 'URL destino del botón CTA', 'lealez' ); ?></label>
                                             <input type="url" id="oy-gmb-cta-url" name="cta_url" placeholder="https://tusitio.com/pagina-destino" aria-describedby="oy-gmb-cta-url-hint">
-                                            <div class="oy-gmb-hint" id="oy-gmb-cta-url-hint"><?php esc_html_e( 'Elige una acción para activar este campo.', 'lealez' ); ?></div>
+                                            <div class="oy-gmb-hint" id="oy-gmb-cta-url-hint"><?php esc_html_e( 'Escribe la URL pública que quieres usar como destino del botón. Solo se enviará cuando selecciones una acción compatible.', 'lealez' ); ?></div>
                                         </div>
                                     </div>
-                                    <div class="oy-gmb-hint"><?php esc_html_e( '“Llamar ahora” usa el teléfono del perfil y no necesita URL. En publicaciones de oferta, Google usa la URL para canjear de la sección Oferta.', 'lealez' ); ?></div>
+                                    <div class="oy-gmb-hint"><?php esc_html_e( 'Según la API de Google, la URL del CTA se envía en callToAction.url. Para “Llamar ahora”, la URL debe quedar vacía porque Google usa el teléfono del perfil. En publicaciones de oferta, Google ignora el CTA tradicional y usa la URL para canjear de la sección Oferta.', 'lealez' ); ?></div>
                                 </div>
                             </div>
 
@@ -393,7 +393,7 @@ class OY_Location_GMB_Posts_Metabox {
                             <span class="spinner" id="oy-gmb-form-spinner"></span>
                         </div>
                         <div class="oy-gmb-result" id="oy-gmb-form-result"></div>
-                    </form>
+                    </div>
                 </div>
 
                 <div class="oy-gmb-posts-pane" id="oy-gmb-posts-tab-drafts">
@@ -599,14 +599,41 @@ class OY_Location_GMB_Posts_Metabox {
             }
 
             function formDataObject(){
-                var arr=$('#oy-gmb-post-form').serializeArray(); var data={};
-                $.each(arr,function(_,item){
-                    if(item.name === 'recurrence_weekly_days[]'){
-                        if(!data.recurrence_weekly_days){ data.recurrence_weekly_days=[]; }
-                        data.recurrence_weekly_days.push(item.value);
-                    } else { data[item.name]=item.value; }
+                var data={};
+                var weeklyDays=[];
+
+                $('#oy-gmb-post-form').find('input, select, textarea').each(function(){
+                    var el=this;
+                    var $el=$(this);
+                    var name=$el.attr('name');
+                    var type=(el.type || '').toLowerCase();
+
+                    if(!name || type === 'button' || type === 'submit' || type === 'reset' || type === 'file'){
+                        return;
+                    }
+
+                    if(name === 'recurrence_weekly_days[]'){
+                        if(el.checked){ weeklyDays.push($el.val()); }
+                        return;
+                    }
+
+                    if(type === 'checkbox'){
+                        data[name]=!!el.checked;
+                        return;
+                    }
+
+                    if(type === 'radio'){
+                        if(el.checked){ data[name]=$el.val(); }
+                        return;
+                    }
+
+                    data[name]=$el.val();
                 });
-                if(!data.recurrence_weekly_days){ data.recurrence_weekly_days=[]; }
+
+                data.recurrence_weekly_days=weeklyDays;
+                data.summary=$.trim(data.summary || '');
+                data.cta_url=$.trim(data.cta_url || '');
+                data.image_url=$.trim(data.image_url || '');
                 return data;
             }
 
@@ -640,7 +667,22 @@ class OY_Location_GMB_Posts_Metabox {
             }
 
             function resetEditor(doPreview){
-                $('#oy-gmb-post-form')[0].reset(); $('#oy-gmb-editor-mode').val('create'); $('#oy-gmb-draft-id').val(''); $('#oy-gmb-post-name').val(''); clearResult(); refreshConditionalFields(); updateActionButtons(); if(doPreview !== false){ updatePreview(); }
+                var $box=$('#oy-gmb-post-form');
+                $box.find('input[type="text"],input[type="url"],input[type="date"],input[type="time"],input[type="datetime-local"],input[type="number"],textarea').val('');
+                $box.find('input[type="checkbox"],input[type="radio"]').prop('checked', false);
+                $box.find('select').each(function(){ this.selectedIndex=0; });
+                $('#oy-gmb-editor-mode').val('create');
+                $('#oy-gmb-draft-id').val('');
+                $('#oy-gmb-post-name').val('');
+                $('#oy-gmb-topic-type').val('STANDARD');
+                $('#oy-gmb-language-code').val('es');
+                $('#oy-gmb-cta-type').val('ACTION_TYPE_UNSPECIFIED');
+                $('#oy-gmb-alert-type').val('COVID_19');
+                $('#oy-gmb-recurrence-type').val('none');
+                clearResult();
+                refreshConditionalFields();
+                updateActionButtons();
+                if(doPreview !== false){ updatePreview(); }
             }
             function toDatetimeLocal(iso){ var d=new Date(iso); if(isNaN(d.getTime())){return '';} var z=function(n){return ('0'+n).slice(-2);}; return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes()); }
             function dateObjToInput(o){ return o ? [o.year,('0'+o.month).slice(-2),('0'+o.day).slice(-2)].join('-') : ''; }
@@ -650,19 +692,23 @@ class OY_Location_GMB_Posts_Metabox {
             function refreshConditionalFields(){
                 var type=$('#oy-gmb-topic-type').val(); var cta=$('#oy-gmb-cta-type').val(); var rec=$('#oy-gmb-recurrence-type').val();
                 var ctaNeedsUrl = (type !== 'OFFER' && cta !== 'CALL' && cta !== 'ACTION_TYPE_UNSPECIFIED');
+                var ctaUrlBlocked = (type === 'OFFER' || cta === 'CALL');
+
                 $('.oy-gmb-event-offer-fields').toggleClass('oy-gmb-section-hidden', !(type === 'EVENT' || type === 'OFFER'));
                 $('.oy-gmb-offer-fields').toggleClass('oy-gmb-section-hidden', type !== 'OFFER');
                 $('.oy-gmb-alert-fields').toggleClass('oy-gmb-section-hidden', type !== 'ALERT');
-                $('#oy-gmb-cta-url-row').toggleClass('oy-gmb-cta-disabled', !ctaNeedsUrl);
-                $('#oy-gmb-cta-url').prop('disabled', !ctaNeedsUrl).prop('required', ctaNeedsUrl);
+
+                $('#oy-gmb-cta-url-row').toggleClass('oy-gmb-cta-disabled', ctaUrlBlocked);
+                $('#oy-gmb-cta-url').prop('disabled', ctaUrlBlocked).prop('required', ctaNeedsUrl);
+
                 if(type === 'OFFER'){
-                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'En ofertas, Google no usa el CTA tradicional. Usa la URL para canjear dentro de la sección Evento / Oferta.', 'lealez' ) ); ?>');
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'Campo deshabilitado para Oferta: Google ignora callToAction en topicType OFFER. Usa “URL para canjear” en la sección Evento / Oferta.', 'lealez' ) ); ?>');
                 } else if(cta === 'CALL'){
-                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'No requiere URL: Google usará el teléfono del perfil de la ubicación.', 'lealez' ) ); ?>');
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'Campo deshabilitado para Llamar ahora: la documentación de Google indica que callToAction.url debe quedar vacío para CALL.', 'lealez' ) ); ?>');
                 } else if(cta === 'ACTION_TYPE_UNSPECIFIED'){
-                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'No se enviará botón CTA. Elige una acción para activar una URL destino.', 'lealez' ) ); ?>');
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'No se enviará botón CTA mientras la acción sea “Sin botón”. Puedes escribir una URL, pero debes elegir una acción para que Google la use.', 'lealez' ) ); ?>');
                 } else {
-                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'URL obligatoria: será el destino del botón CTA seleccionado.', 'lealez' ) ); ?>');
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'URL obligatoria: esta será exactamente la URL enviada a Google en callToAction.url para el botón seleccionado. No se toma de otro metabox.', 'lealez' ) ); ?>');
                 }
                 $('.oy-gmb-recurrence-weekly').toggleClass('oy-gmb-section-hidden', rec !== 'weekly');
                 $('.oy-gmb-recurrence-monthly').toggleClass('oy-gmb-section-hidden', rec !== 'monthly');
@@ -683,9 +729,26 @@ class OY_Location_GMB_Posts_Metabox {
             $(document).on('click','#oy-gmb-select-image', openMediaLibrary);
             $(document).on('click','#oy-gmb-clear-image', function(e){ e.preventDefault(); $('#oy-gmb-image-url').val('').trigger('input').trigger('change'); });
 
+            function validateEditorData(data){
+                if(!data.summary){
+                    showResult('error','<?php echo esc_js( __( 'El campo “Texto visible en Google” es obligatorio. Escribe el texto principal antes de guardar o publicar.', 'lealez' ) ); ?>');
+                    $('#oy-gmb-summary').trigger('focus');
+                    return false;
+                }
+                if(data.topic_type !== 'OFFER' && data.cta_type !== 'CALL' && data.cta_type !== 'ACTION_TYPE_UNSPECIFIED' && !data.cta_url){
+                    showResult('error','<?php echo esc_js( __( 'La URL destino del botón CTA es obligatoria para la acción seleccionada. Escríbela en el campo “URL destino del botón CTA”.', 'lealez' ) ); ?>');
+                    $('#oy-gmb-cta-url').trigger('focus');
+                    return false;
+                }
+                return true;
+            }
+
             function saveDraft(){
-                clearResult(); setBusy(true);
-                api('oy_gmb_posts_save_draft', formDataObject()).done(function(resp){
+                clearResult();
+                var payload=formDataObject();
+                if(!validateEditorData(payload)){ return; }
+                setBusy(true);
+                api('oy_gmb_posts_save_draft', payload).done(function(resp){
                     if(resp && resp.success){ drafts=resp.data.drafts || []; renderDrafts(); $('#oy-gmb-draft-id').val(resp.data.draft.draft_id || ''); showResult('success', resp.data.message || '<?php echo esc_js( __( 'Borrador guardado.', 'lealez' ) ); ?>'); }
                     else { showResult('error', (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo guardar el borrador.', 'lealez' ) ); ?>'); }
                 }).fail(function(){ showResult('error','<?php echo esc_js( __( 'Error de conexión al guardar borrador.', 'lealez' ) ); ?>'); }).always(function(){ setBusy(false); });
@@ -693,9 +756,12 @@ class OY_Location_GMB_Posts_Metabox {
             $('#oy-gmb-save-draft').on('click', saveDraft);
 
             function submitToGoogle(isUpdate){
-                clearResult(); setBusy(true);
+                clearResult();
+                var payload=formDataObject();
+                if(!validateEditorData(payload)){ return; }
+                setBusy(true);
                 var action=isUpdate ? 'oy_gmb_posts_update' : 'oy_gmb_posts_create';
-                api(action, formDataObject()).done(function(resp){
+                api(action, payload).done(function(resp){
                     if(resp && resp.success){ showResult('success', resp.data.message || '<?php echo esc_js( __( 'Operación completada.', 'lealez' ) ); ?>'); fetchPosts(true); if(!isUpdate){ resetEditor(false); } }
                     else { showResult('error', (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'Google rechazó la solicitud.', 'lealez' ) ); ?>'); }
                 }).fail(function(){ showResult('error','<?php echo esc_js( __( 'Error de conexión con el servidor.', 'lealez' ) ); ?>'); }).always(function(){ setBusy(false); });
