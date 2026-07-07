@@ -91,9 +91,10 @@ class OY_Location_GMB_Posts_Metabox {
 
         wp_enqueue_script( 'jquery' );
         wp_enqueue_style( 'dashicons' );
+        wp_enqueue_media();
 
         $css = '
-        #oy_location_gmb_posts .inside{padding:0;margin:0}.oy-gmb-posts-wrap{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff}.oy-gmb-posts-topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:16px 18px;border-bottom:1px solid #e5e7eb;background:linear-gradient(135deg,#f8fafc 0%,#fff 100%)}.oy-gmb-posts-title{display:flex;gap:10px;align-items:flex-start}.oy-gmb-posts-title-icon{width:36px;height:36px;border-radius:10px;background:#e8f0fe;color:#1a73e8;display:flex;align-items:center;justify-content:center;font-size:20px}.oy-gmb-posts-title h3{margin:0 0 4px;font-size:15px;line-height:1.3}.oy-gmb-posts-title p{margin:0;color:#5f6368;font-size:12px}.oy-gmb-posts-status{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.oy-gmb-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:600;background:#f1f5f9;color:#334155}.oy-gmb-pill.good{background:#e6f4ea;color:#137333}.oy-gmb-pill.warn{background:#fff7e6;color:#b06000}.oy-gmb-pill.bad{background:#fce8e6;color:#b3261e}.oy-gmb-posts-tabs{display:flex;border-bottom:1px solid #dcdcde;background:#f6f7f7;overflow:auto}.oy-gmb-posts-tab{border:0;background:transparent;padding:12px 16px;cursor:pointer;font-weight:600;color:#50575e;border-bottom:3px solid transparent;white-space:nowrap}.oy-gmb-posts-tab:hover{color:#1d2327;background:#fff}.oy-gmb-posts-tab.active{background:#fff;color:#1a73e8;border-bottom-color:#1a73e8}.oy-gmb-posts-pane{display:none;padding:16px 18px}.oy-gmb-posts-pane.active{display:block}.oy-gmb-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.oy-gmb-toolbar select,.oy-gmb-toolbar input[type=search]{height:32px;min-width:150px}.oy-gmb-count{display:none;border-radius:999px;background:#eef3fd;color:#1a73e8;font-weight:700;font-size:11px;padding:5px 10px}.oy-gmb-notice{border-left:4px solid #1a73e8;background:#eef3fd;padding:10px 12px;margin:0 0 14px;color:#1d2327}.oy-gmb-notice.warning{border-left-color:#f0b429;background:#fffbee}.oy-gmb-notice.error{border-left-color:#d63638;background:#fdf2f2}.oy-gmb-notice.success{border-left-color:#1e8e3e;background:#e6f4ea}.oy-gmb-loading,.oy-gmb-empty{text-align:center;padding:28px;border:1px dashed #dcdcde;background:#fafafa;color:#646970}.oy-gmb-loading .spinner{float:none;margin:0 8px 0 0;visibility:visible}.oy-gmb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}.oy-gmb-card{border:1px solid #dcdcde;border-radius:12px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column}.oy-gmb-card-media{height:130px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#94a3b8;font-size:34px}.oy-gmb-card-media img{width:100%;height:100%;object-fit:cover}.oy-gmb-card-body{padding:12px;display:flex;flex-direction:column;gap:9px;flex:1}.oy-gmb-card-badges{display:flex;gap:6px;flex-wrap:wrap}.oy-gmb-badge{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:800;line-height:1.4;text-transform:uppercase;background:#f1f5f9;color:#475569}.oy-gmb-badge.state-live{background:#e6f4ea;color:#137333}.oy-gmb-badge.state-processing,.oy-gmb-badge.state-scheduled{background:#fff7e6;color:#b06000}.oy-gmb-badge.state-rejected,.oy-gmb-badge.state-deleted{background:#fce8e6;color:#b3261e}.oy-gmb-card-summary{font-size:13px;line-height:1.45;color:#1d2327;white-space:pre-line;max-height:86px;overflow:hidden}.oy-gmb-card-meta{display:flex;flex-direction:column;gap:4px;color:#646970;font-size:11px}.oy-gmb-card-extra{background:#f8fafc;border-radius:8px;padding:8px;font-size:11px;color:#334155}.oy-gmb-card-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:8px;border-top:1px solid #f1f5f9}.oy-gmb-card-actions .button-link-delete{color:#d63638}.oy-gmb-form-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:18px;align-items:start}.oy-gmb-panel{border:1px solid #dcdcde;border-radius:12px;background:#fff;overflow:hidden}.oy-gmb-panel h4{margin:0;padding:12px 14px;border-bottom:1px solid #e5e7eb;background:#f8fafc;font-size:13px}.oy-gmb-panel-body{padding:14px}.oy-gmb-form-row{margin-bottom:13px}.oy-gmb-form-row label{display:block;font-weight:700;font-size:12px;margin-bottom:5px;color:#1d2327}.oy-gmb-form-row label .required{color:#d63638}.oy-gmb-form-row input[type=text],.oy-gmb-form-row input[type=url],.oy-gmb-form-row input[type=date],.oy-gmb-form-row input[type=time],.oy-gmb-form-row input[type=datetime-local],.oy-gmb-form-row input[type=number],.oy-gmb-form-row select,.oy-gmb-form-row textarea{width:100%;max-width:100%;border:1px solid #c3c4c7;border-radius:8px}.oy-gmb-form-row textarea{min-height:130px;resize:vertical}.oy-gmb-two-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}.oy-gmb-three-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.oy-gmb-hint{font-size:11px;color:#646970;margin-top:4px}.oy-gmb-char-counter{text-align:right;font-size:11px;color:#646970}.oy-gmb-char-counter.over{color:#d63638;font-weight:800}.oy-gmb-preview-box{border:1px solid #e5e7eb;background:#f8fafc;border-radius:10px;padding:12px;min-height:190px}.oy-gmb-preview-media{height:120px;background:#e5e7eb;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;color:#64748b;overflow:hidden}.oy-gmb-preview-media img{width:100%;height:100%;object-fit:cover}.oy-gmb-preview-summary{white-space:pre-line;font-size:12px;line-height:1.45;color:#1d2327}.oy-gmb-actions-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}.oy-gmb-actions-row .spinner{float:none;margin:0;visibility:hidden}.oy-gmb-actions-row .spinner.is-active{visibility:visible}.oy-gmb-result{display:none;margin-top:12px;border-radius:8px;padding:10px}.oy-gmb-result.success{display:block;background:#e6f4ea;color:#137333}.oy-gmb-result.error{display:block;background:#fce8e6;color:#b3261e}.oy-gmb-result.info{display:block;background:#eef3fd;color:#1a73e8}.oy-gmb-drafts-table{width:100%;border-collapse:collapse}.oy-gmb-drafts-table th,.oy-gmb-drafts-table td{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:top}.oy-gmb-drafts-table th{font-size:11px;text-transform:uppercase;color:#646970;background:#f8fafc}.oy-gmb-drafts-table .actions{white-space:nowrap}.oy-gmb-muted{color:#646970}.oy-gmb-section-hidden{display:none!important}@media(max-width:900px){.oy-gmb-posts-topbar,.oy-gmb-form-grid{display:block}.oy-gmb-posts-status{justify-content:flex-start;margin-top:10px}.oy-gmb-two-cols,.oy-gmb-three-cols{grid-template-columns:1fr}.oy-gmb-grid{grid-template-columns:1fr}}
+        #oy_location_gmb_posts .inside{padding:0;margin:0}.oy-gmb-posts-wrap{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff}.oy-gmb-posts-topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:16px 18px;border-bottom:1px solid #e5e7eb;background:linear-gradient(135deg,#f8fafc 0%,#fff 100%)}.oy-gmb-posts-title{display:flex;gap:10px;align-items:flex-start}.oy-gmb-posts-title-icon{width:36px;height:36px;border-radius:10px;background:#e8f0fe;color:#1a73e8;display:flex;align-items:center;justify-content:center;font-size:20px}.oy-gmb-posts-title h3{margin:0 0 4px;font-size:15px;line-height:1.3}.oy-gmb-posts-title p{margin:0;color:#5f6368;font-size:12px}.oy-gmb-posts-status{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.oy-gmb-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:600;background:#f1f5f9;color:#334155}.oy-gmb-pill.good{background:#e6f4ea;color:#137333}.oy-gmb-pill.warn{background:#fff7e6;color:#b06000}.oy-gmb-pill.bad{background:#fce8e6;color:#b3261e}.oy-gmb-posts-tabs{display:flex;border-bottom:1px solid #dcdcde;background:#f6f7f7;overflow:auto}.oy-gmb-posts-tab{border:0;background:transparent;padding:12px 16px;cursor:pointer;font-weight:600;color:#50575e;border-bottom:3px solid transparent;white-space:nowrap}.oy-gmb-posts-tab:hover{color:#1d2327;background:#fff}.oy-gmb-posts-tab.active{background:#fff;color:#1a73e8;border-bottom-color:#1a73e8}.oy-gmb-posts-pane{display:none;padding:16px 18px}.oy-gmb-posts-pane.active{display:block}.oy-gmb-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.oy-gmb-toolbar select,.oy-gmb-toolbar input[type=search]{height:32px;min-width:150px}.oy-gmb-count{display:none;border-radius:999px;background:#eef3fd;color:#1a73e8;font-weight:700;font-size:11px;padding:5px 10px}.oy-gmb-notice{border-left:4px solid #1a73e8;background:#eef3fd;padding:10px 12px;margin:0 0 14px;color:#1d2327}.oy-gmb-notice.warning{border-left-color:#f0b429;background:#fffbee}.oy-gmb-notice.error{border-left-color:#d63638;background:#fdf2f2}.oy-gmb-notice.success{border-left-color:#1e8e3e;background:#e6f4ea}.oy-gmb-loading,.oy-gmb-empty{text-align:center;padding:28px;border:1px dashed #dcdcde;background:#fafafa;color:#646970}.oy-gmb-loading .spinner{float:none;margin:0 8px 0 0;visibility:visible}.oy-gmb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}.oy-gmb-card{border:1px solid #dcdcde;border-radius:12px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column}.oy-gmb-card-media{height:130px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#94a3b8;font-size:34px}.oy-gmb-card-media img{width:100%;height:100%;object-fit:cover}.oy-gmb-card-body{padding:12px;display:flex;flex-direction:column;gap:9px;flex:1}.oy-gmb-card-badges{display:flex;gap:6px;flex-wrap:wrap}.oy-gmb-badge{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:800;line-height:1.4;text-transform:uppercase;background:#f1f5f9;color:#475569}.oy-gmb-badge.state-live{background:#e6f4ea;color:#137333}.oy-gmb-badge.state-processing,.oy-gmb-badge.state-scheduled{background:#fff7e6;color:#b06000}.oy-gmb-badge.state-rejected,.oy-gmb-badge.state-deleted{background:#fce8e6;color:#b3261e}.oy-gmb-card-summary{font-size:13px;line-height:1.45;color:#1d2327;white-space:pre-line;max-height:86px;overflow:hidden}.oy-gmb-card-meta{display:flex;flex-direction:column;gap:4px;color:#646970;font-size:11px}.oy-gmb-card-extra{background:#f8fafc;border-radius:8px;padding:8px;font-size:11px;color:#334155}.oy-gmb-card-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:8px;border-top:1px solid #f1f5f9}.oy-gmb-card-actions .button-link-delete{color:#d63638}.oy-gmb-form-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:18px;align-items:start}.oy-gmb-panel{border:1px solid #dcdcde;border-radius:12px;background:#fff;overflow:hidden}.oy-gmb-panel h4{margin:0;padding:12px 14px;border-bottom:1px solid #e5e7eb;background:#f8fafc;font-size:13px}.oy-gmb-panel-body{padding:14px}.oy-gmb-form-row{margin-bottom:13px}.oy-gmb-form-row label{display:block;font-weight:700;font-size:12px;margin-bottom:5px;color:#1d2327}.oy-gmb-form-row label .required{color:#d63638}.oy-gmb-form-row input[type=text],.oy-gmb-form-row input[type=url],.oy-gmb-form-row input[type=date],.oy-gmb-form-row input[type=time],.oy-gmb-form-row input[type=datetime-local],.oy-gmb-form-row input[type=number],.oy-gmb-form-row select,.oy-gmb-form-row textarea{width:100%;max-width:100%;border:1px solid #c3c4c7;border-radius:8px}.oy-gmb-form-row textarea{min-height:130px;resize:vertical}.oy-gmb-two-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}.oy-gmb-three-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.oy-gmb-hint{font-size:11px;color:#646970;margin-top:4px}.oy-gmb-char-counter{text-align:right;font-size:11px;color:#646970}.oy-gmb-char-counter.over{color:#d63638;font-weight:800}.oy-gmb-preview-box{border:1px solid #e5e7eb;background:#f8fafc;border-radius:10px;padding:12px;min-height:190px}.oy-gmb-preview-media{height:120px;background:#e5e7eb;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;color:#64748b;overflow:hidden}.oy-gmb-preview-media img{width:100%;height:100%;object-fit:cover}.oy-gmb-preview-summary{white-space:pre-line;font-size:12px;line-height:1.45;color:#1d2327}.oy-gmb-actions-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}.oy-gmb-actions-row .spinner{float:none;margin:0;visibility:hidden}.oy-gmb-actions-row .spinner.is-active{visibility:visible}.oy-gmb-result{display:none;margin-top:12px;border-radius:8px;padding:10px}.oy-gmb-result.success{display:block;background:#e6f4ea;color:#137333}.oy-gmb-result.error{display:block;background:#fce8e6;color:#b3261e}.oy-gmb-result.info{display:block;background:#eef3fd;color:#1a73e8}.oy-gmb-drafts-table{width:100%;border-collapse:collapse}.oy-gmb-drafts-table th,.oy-gmb-drafts-table td{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:top}.oy-gmb-drafts-table th{font-size:11px;text-transform:uppercase;color:#646970;background:#f8fafc}.oy-gmb-drafts-table .actions{white-space:nowrap}.oy-gmb-muted{color:#646970}.oy-gmb-section-hidden{display:none!important}.oy-gmb-media-picker{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.oy-gmb-media-picker input[type=url]{flex:1 1 360px}.oy-gmb-media-picker .button{white-space:nowrap}.oy-gmb-compact-notice{font-size:12px;padding:8px 10px;margin-bottom:12px}.oy-gmb-field-state{font-size:11px;color:#646970;margin-top:4px}.oy-gmb-field-state strong{color:#1d2327}.oy-gmb-cta-disabled input{background:#f6f7f7;color:#8c8f94}@media(max-width:900px){.oy-gmb-posts-topbar,.oy-gmb-form-grid{display:block}.oy-gmb-posts-status{justify-content:flex-start;margin-top:10px}.oy-gmb-two-cols,.oy-gmb-three-cols{grid-template-columns:1fr}.oy-gmb-grid{grid-template-columns:1fr}.oy-gmb-media-picker{display:block}.oy-gmb-media-picker .button{margin-top:8px}}
         ';
 
         wp_register_style( 'oy-gmb-posts-metabox-inline', false, array( 'dashicons' ), '1.0.0' );
@@ -173,7 +174,7 @@ class OY_Location_GMB_Posts_Metabox {
                         </select>
                         <input type="search" id="oy-gmb-filter-search" placeholder="<?php esc_attr_e( 'Buscar por texto…', 'lealez' ); ?>">
                         <button type="button" class="button" id="oy-gmb-btn-refresh">🔄 <?php esc_html_e( 'Sincronizar desde GMB', 'lealez' ); ?></button>
-                        <button type="button" class="button button-primary oy-gmb-go-editor">➕ <?php esc_html_e( 'Nueva publicación', 'lealez' ); ?></button>
+                        <button type="button" class="button button-primary oy-gmb-go-editor" id="oy-gmb-new-post" aria-controls="oy-gmb-posts-tab-editor">➕ <?php esc_html_e( 'Nueva publicación', 'lealez' ); ?></button>
                         <span class="oy-gmb-count" id="oy-gmb-count"></span>
                     </div>
 
@@ -244,15 +245,20 @@ class OY_Location_GMB_Posts_Metabox {
                                     </div>
 
                                     <div class="oy-gmb-form-row">
-                                        <label for="oy-gmb-summary"><?php esc_html_e( 'Texto de la publicación', 'lealez' ); ?> <span class="required">*</span></label>
-                                        <textarea id="oy-gmb-summary" name="summary" maxlength="1500" placeholder="<?php esc_attr_e( 'Escribe el mensaje que se verá en Google…', 'lealez' ); ?>"></textarea>
+                                        <label for="oy-gmb-summary"><?php esc_html_e( 'Texto visible en Google', 'lealez' ); ?> <span class="required">*</span></label>
+                                        <textarea id="oy-gmb-summary" name="summary" maxlength="1500" aria-describedby="oy-gmb-summary-help" placeholder="<?php esc_attr_e( 'Escribe aquí el mensaje/descripción que se verá públicamente en la publicación de Google…', 'lealez' ); ?>"></textarea>
                                         <div class="oy-gmb-char-counter"><span id="oy-gmb-summary-count">0</span>/1500</div>
+                                        <div class="oy-gmb-hint" id="oy-gmb-summary-help"><?php esc_html_e( 'Campo obligatorio: es el texto principal de la publicación. Google lo recibe como “summary”.', 'lealez' ); ?></div>
                                     </div>
 
                                     <div class="oy-gmb-form-row">
-                                        <label for="oy-gmb-image-url"><?php esc_html_e( 'Imagen pública', 'lealez' ); ?></label>
-                                        <input type="url" id="oy-gmb-image-url" name="image_url" placeholder="https://...">
-                                        <div class="oy-gmb-hint"><?php esc_html_e( 'Google Local Posts solo acepta una URL pública como fuente de imagen. Usa una imagen accesible sin login.', 'lealez' ); ?></div>
+                                        <label for="oy-gmb-image-url"><?php esc_html_e( 'Imagen de la publicación', 'lealez' ); ?></label>
+                                        <div class="oy-gmb-media-picker">
+                                            <input type="url" id="oy-gmb-image-url" name="image_url" placeholder="https://...">
+                                            <button type="button" class="button" id="oy-gmb-select-image">🖼️ <?php esc_html_e( 'Elegir de biblioteca', 'lealez' ); ?></button>
+                                            <button type="button" class="button" id="oy-gmb-clear-image">✕ <?php esc_html_e( 'Quitar', 'lealez' ); ?></button>
+                                        </div>
+                                        <div class="oy-gmb-hint"><?php esc_html_e( 'Puedes pegar una URL pública o elegir una imagen de la Biblioteca de Medios. Lealez copiará automáticamente la URL pública para enviarla a Google.', 'lealez' ); ?></div>
                                     </div>
                                 </div>
                             </div>
@@ -272,11 +278,14 @@ class OY_Location_GMB_Posts_Metabox {
 
                         <div class="oy-gmb-form-grid" style="margin-top:18px;">
                             <div class="oy-gmb-panel">
-                                <h4><?php esc_html_e( 'Botón CTA', 'lealez' ); ?></h4>
+                                <h4><?php esc_html_e( 'Botón CTA / enlace de acción', 'lealez' ); ?></h4>
                                 <div class="oy-gmb-panel-body">
+                                    <div class="oy-gmb-notice info oy-gmb-compact-notice">
+                                        <?php esc_html_e( 'El CTA es el botón que Google puede mostrar debajo de la publicación. Puedes definir la acción y, cuando aplique, personalizar la URL destino del botón.', 'lealez' ); ?>
+                                    </div>
                                     <div class="oy-gmb-two-cols">
                                         <div class="oy-gmb-form-row">
-                                            <label for="oy-gmb-cta-type"><?php esc_html_e( 'Acción', 'lealez' ); ?></label>
+                                            <label for="oy-gmb-cta-type"><?php esc_html_e( 'Acción del botón', 'lealez' ); ?></label>
                                             <select id="oy-gmb-cta-type" name="cta_type">
                                                 <option value="ACTION_TYPE_UNSPECIFIED"><?php esc_html_e( 'Sin botón', 'lealez' ); ?></option>
                                                 <option value="LEARN_MORE"><?php esc_html_e( 'Más información', 'lealez' ); ?></option>
@@ -288,11 +297,12 @@ class OY_Location_GMB_Posts_Metabox {
                                             </select>
                                         </div>
                                         <div class="oy-gmb-form-row" id="oy-gmb-cta-url-row">
-                                            <label for="oy-gmb-cta-url"><?php esc_html_e( 'URL del CTA', 'lealez' ); ?></label>
-                                            <input type="url" id="oy-gmb-cta-url" name="cta_url" placeholder="https://...">
+                                            <label for="oy-gmb-cta-url"><?php esc_html_e( 'URL destino del botón CTA', 'lealez' ); ?></label>
+                                            <input type="url" id="oy-gmb-cta-url" name="cta_url" placeholder="https://tusitio.com/pagina-destino" aria-describedby="oy-gmb-cta-url-hint">
+                                            <div class="oy-gmb-hint" id="oy-gmb-cta-url-hint"><?php esc_html_e( 'Elige una acción para activar este campo.', 'lealez' ); ?></div>
                                         </div>
                                     </div>
-                                    <div class="oy-gmb-hint"><?php esc_html_e( 'Para “Llamar ahora”, Google usa el teléfono del perfil y no requiere URL. En ofertas, Google ignora el CTA tradicional y usa los campos de oferta.', 'lealez' ); ?></div>
+                                    <div class="oy-gmb-hint"><?php esc_html_e( '“Llamar ahora” usa el teléfono del perfil y no necesita URL. En publicaciones de oferta, Google usa la URL para canjear de la sección Oferta.', 'lealez' ); ?></div>
                                 </div>
                             </div>
 
@@ -400,7 +410,7 @@ class OY_Location_GMB_Posts_Metabox {
                     </div>
                     <div class="oy-gmb-grid">
                         <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>📋 <?php esc_html_e( 'Listar / Obtener', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'La pestaña Publicaciones GMB trae el listado y permite solicitar la ficha completa de cada publicación.', 'lealez' ); ?></p></div></div>
-                        <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>✍️ <?php esc_html_e( 'Crear / Editar', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'El editor soporta publicación estándar, evento, oferta, alerta, CTA, imagen pública, programación y recurrencia compatible con Local Posts.', 'lealez' ); ?></p></div></div>
+                        <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>✍️ <?php esc_html_e( 'Crear / Editar', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'El editor soporta publicación estándar, evento, oferta, alerta, CTA con URL personalizada, selección de imagen desde la Biblioteca de Medios, programación y recurrencia compatible con Local Posts.', 'lealez' ); ?></p></div></div>
                         <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>📊 <?php esc_html_e( 'Insights', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'Cuando Google devuelva métricas para el post, Lealez las muestra en una ventana de detalle.', 'lealez' ); ?></p></div></div>
                     </div>
                 </div>
@@ -479,6 +489,7 @@ class OY_Location_GMB_Posts_Metabox {
             var TYPE_LABELS = { STANDARD:'<?php echo esc_js( __( 'Actualizar', 'lealez' ) ); ?>', EVENT:'<?php echo esc_js( __( 'Evento', 'lealez' ) ); ?>', OFFER:'<?php echo esc_js( __( 'Oferta', 'lealez' ) ); ?>', ALERT:'<?php echo esc_js( __( 'Alerta', 'lealez' ) ); ?>', PRODUCT:'<?php echo esc_js( __( 'Producto / legado', 'lealez' ) ); ?>' };
             var STATE_LABELS = { LIVE:'<?php echo esc_js( __( 'Publicada', 'lealez' ) ); ?>', PROCESSING:'<?php echo esc_js( __( 'Procesando', 'lealez' ) ); ?>', SCHEDULED:'<?php echo esc_js( __( 'Programada', 'lealez' ) ); ?>', RECURRING:'<?php echo esc_js( __( 'Recurrente', 'lealez' ) ); ?>', REJECTED:'<?php echo esc_js( __( 'Rechazada', 'lealez' ) ); ?>', DELETED:'<?php echo esc_js( __( 'Eliminada', 'lealez' ) ); ?>', UNKNOWN:'<?php echo esc_js( __( 'Desconocido', 'lealez' ) ); ?>' };
             var CTA_LABELS = { LEARN_MORE:'<?php echo esc_js( __( 'Más información', 'lealez' ) ); ?>', BOOK:'<?php echo esc_js( __( 'Reservar', 'lealez' ) ); ?>', ORDER:'<?php echo esc_js( __( 'Pedir', 'lealez' ) ); ?>', SHOP:'<?php echo esc_js( __( 'Comprar', 'lealez' ) ); ?>', SIGN_UP:'<?php echo esc_js( __( 'Registrarse', 'lealez' ) ); ?>', CALL:'<?php echo esc_js( __( 'Llamar ahora', 'lealez' ) ); ?>' };
+            var mediaFrame = null;
 
             function escHtml(str){ return $('<div>').text(str || '').html(); }
             function nl2br(str){ return escHtml(str || '').replace(/\n/g,'<br>'); }
@@ -491,9 +502,45 @@ class OY_Location_GMB_Posts_Metabox {
             function setBusy(isBusy){ $('#oy-gmb-form-spinner').toggleClass('is-active', !!isBusy); $('#oy-gmb-post-form button').prop('disabled', !!isBusy); }
             function api(action, data){ data = data || {}; data.action = action; data.nonce = NONCE; data.location_id = LOCATION_ID; data.business_id = BUSINESS_ID; data.gmb_loc_name = GMB_LOC; return $.post(AJAXURL, data); }
 
+            function openMediaLibrary(e){
+                if(e){ e.preventDefault(); }
+                clearResult();
+                if(typeof wp === 'undefined' || !wp.media){
+                    showResult('error','<?php echo esc_js( __( 'La Biblioteca de Medios de WordPress no está disponible en esta pantalla.', 'lealez' ) ); ?>');
+                    return;
+                }
+                if(mediaFrame){ mediaFrame.open(); return; }
+                mediaFrame = wp.media({
+                    title: '<?php echo esc_js( __( 'Seleccionar imagen para Google My Business', 'lealez' ) ); ?>',
+                    button: { text: '<?php echo esc_js( __( 'Usar esta imagen', 'lealez' ) ); ?>' },
+                    library: { type: 'image' },
+                    multiple: false
+                });
+                mediaFrame.on('select', function(){
+                    var attachment = mediaFrame.state().get('selection').first();
+                    if(!attachment){ return; }
+                    var data = attachment.toJSON ? attachment.toJSON() : {};
+                    if(data && data.url){
+                        $('#oy-gmb-image-url').val(data.url).trigger('input').trigger('change');
+                        showResult('info','<?php echo esc_js( __( 'Imagen seleccionada desde la Biblioteca de Medios. Se usará su URL pública al enviar a Google.', 'lealez' ) ); ?>');
+                    }
+                });
+                mediaFrame.open();
+            }
+
             function switchTab(tab){ $('.oy-gmb-posts-tab').removeClass('active'); $('.oy-gmb-posts-tab[data-tab="'+tab+'"]').addClass('active'); $('.oy-gmb-posts-pane').removeClass('active'); $('#oy-gmb-posts-tab-'+tab).addClass('active'); }
-            $(document).on('click','.oy-gmb-posts-tab',function(){ switchTab($(this).data('tab')); });
-            $(document).on('click','.oy-gmb-go-editor',function(){ resetEditor(); switchTab('editor'); });
+            $(document).on('click','.oy-gmb-posts-tab',function(e){ e.preventDefault(); switchTab($(this).data('tab')); });
+            function startNewPost(){
+                resetEditor(true);
+                $('#oy-gmb-topic-type').val('STANDARD');
+                $('#oy-gmb-language-code').val('es');
+                refreshConditionalFields();
+                updatePreview();
+                switchTab('editor');
+                showResult('info','<?php echo esc_js( __( 'Nueva publicación lista para editar. Completa el texto visible en Google y publica o guarda el borrador local.', 'lealez' ) ); ?>');
+                setTimeout(function(){ $('#oy-gmb-summary').trigger('focus'); }, 80);
+            }
+            $(document).on('click','#oy-gmb-new-post,.oy-gmb-go-editor',function(e){ e.preventDefault(); startNewPost(); });
 
             function fetchPosts(forceRefresh){
                 $('#oy-gmb-posts-list-container').html('<div class="oy-gmb-loading"><span class="spinner is-active"></span><?php echo esc_js( __( 'Cargando publicaciones…', 'lealez' ) ); ?></div>');
@@ -602,10 +649,21 @@ class OY_Location_GMB_Posts_Metabox {
 
             function refreshConditionalFields(){
                 var type=$('#oy-gmb-topic-type').val(); var cta=$('#oy-gmb-cta-type').val(); var rec=$('#oy-gmb-recurrence-type').val();
+                var ctaNeedsUrl = (type !== 'OFFER' && cta !== 'CALL' && cta !== 'ACTION_TYPE_UNSPECIFIED');
                 $('.oy-gmb-event-offer-fields').toggleClass('oy-gmb-section-hidden', !(type === 'EVENT' || type === 'OFFER'));
                 $('.oy-gmb-offer-fields').toggleClass('oy-gmb-section-hidden', type !== 'OFFER');
                 $('.oy-gmb-alert-fields').toggleClass('oy-gmb-section-hidden', type !== 'ALERT');
-                $('#oy-gmb-cta-url-row').toggleClass('oy-gmb-section-hidden', cta === 'CALL' || cta === 'ACTION_TYPE_UNSPECIFIED');
+                $('#oy-gmb-cta-url-row').toggleClass('oy-gmb-cta-disabled', !ctaNeedsUrl);
+                $('#oy-gmb-cta-url').prop('disabled', !ctaNeedsUrl).prop('required', ctaNeedsUrl);
+                if(type === 'OFFER'){
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'En ofertas, Google no usa el CTA tradicional. Usa la URL para canjear dentro de la sección Evento / Oferta.', 'lealez' ) ); ?>');
+                } else if(cta === 'CALL'){
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'No requiere URL: Google usará el teléfono del perfil de la ubicación.', 'lealez' ) ); ?>');
+                } else if(cta === 'ACTION_TYPE_UNSPECIFIED'){
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'No se enviará botón CTA. Elige una acción para activar una URL destino.', 'lealez' ) ); ?>');
+                } else {
+                    $('#oy-gmb-cta-url-hint').text('<?php echo esc_js( __( 'URL obligatoria: será el destino del botón CTA seleccionado.', 'lealez' ) ); ?>');
+                }
                 $('.oy-gmb-recurrence-weekly').toggleClass('oy-gmb-section-hidden', rec !== 'weekly');
                 $('.oy-gmb-recurrence-monthly').toggleClass('oy-gmb-section-hidden', rec !== 'monthly');
             }
@@ -621,7 +679,9 @@ class OY_Location_GMB_Posts_Metabox {
                 $('#oy-gmb-preview-extra').toggle(!!extra).html(extra);
             }
             $(document).on('change input','#oy-gmb-post-form input,#oy-gmb-post-form select,#oy-gmb-post-form textarea',function(){ refreshConditionalFields(); updatePreview(); });
-            $('#oy-gmb-reset-form').on('click',function(){ resetEditor(); });
+            $('#oy-gmb-reset-form').on('click',function(e){ e.preventDefault(); resetEditor(); });
+            $(document).on('click','#oy-gmb-select-image', openMediaLibrary);
+            $(document).on('click','#oy-gmb-clear-image', function(e){ e.preventDefault(); $('#oy-gmb-image-url').val('').trigger('input').trigger('change'); });
 
             function saveDraft(){
                 clearResult(); setBusy(true);
@@ -1006,7 +1066,7 @@ class OY_Location_GMB_Posts_Metabox {
     private function sanitize_draft_from_request() {
         $summary = sanitize_textarea_field( wp_unslash( $_POST['summary'] ?? '' ) );
         if ( empty( $summary ) ) {
-            return new WP_Error( 'missing_summary', __( 'La descripción es obligatoria para guardar el borrador.', 'lealez' ) );
+            return new WP_Error( 'missing_summary', __( 'El campo “Texto visible en Google” es obligatorio para guardar el borrador o publicar en Google.', 'lealez' ) );
         }
 
         return array(
@@ -1047,7 +1107,7 @@ class OY_Location_GMB_Posts_Metabox {
         }
 
         if ( mb_strlen( $draft['summary'] ) > 1500 ) {
-            return new WP_Error( 'summary_too_long', __( 'La descripción supera el límite de 1,500 caracteres.', 'lealez' ) );
+            return new WP_Error( 'summary_too_long', __( 'El campo “Texto visible en Google” supera el límite de 1,500 caracteres.', 'lealez' ) );
         }
 
         $payload = array(
@@ -1079,7 +1139,10 @@ class OY_Location_GMB_Posts_Metabox {
 
         if ( 'OFFER' !== $draft['topic_type'] && 'ACTION_TYPE_UNSPECIFIED' !== $draft['cta_type'] ) {
             $payload['callToAction'] = array( 'actionType' => $draft['cta_type'] );
-            if ( 'CALL' !== $draft['cta_type'] && ! empty( $draft['cta_url'] ) ) {
+            if ( 'CALL' !== $draft['cta_type'] ) {
+                if ( empty( $draft['cta_url'] ) ) {
+                    return new WP_Error( 'missing_cta_url', __( 'La URL destino del botón CTA es obligatoria para la acción seleccionada.', 'lealez' ) );
+                }
                 $payload['callToAction']['url'] = $draft['cta_url'];
             }
             $update_mask[] = 'callToAction';
