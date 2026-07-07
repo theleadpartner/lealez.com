@@ -2,8 +2,8 @@
 /**
  * GMB Posts Metabox for oy_location CPT
  *
- * Muestra las publicaciones (localPosts) de Google My Business vinculadas a la ubicación,
- * con filtros, vista de detalle y formulario para crear nuevas publicaciones en el futuro.
+ * Gestiona publicaciones (localPosts) de Google Business Profile desde Lealez:
+ * listado, detalle, borradores locales, publicación, edición, eliminación e insights.
  *
  * Archivo: includes/cpts/metaboxes/class-oy-location-gmb-posts-metabox.php
  *
@@ -12,47 +12,56 @@
  * @since 1.0.0
  */
 
-// Exit if accessed directly
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
 /**
  * Class OY_Location_GMB_Posts_Metabox
- *
- * Gestiona el metabox de Publicaciones (Posts) de Google My Business
- * en el CPT oy_location.
  */
 class OY_Location_GMB_Posts_Metabox {
 
     /**
-     * Nombre del nonce para AJAX
+     * Nonce para AJAX.
      */
     const NONCE_KEY = 'oy_gmb_posts_nonce';
 
     /**
-     * Constructor – registra hooks
+     * Meta key de caché local de publicaciones GMB.
      */
-    public function __construct() {
-        add_action( 'add_meta_boxes',       array( $this, 'register_meta_box' ) );
-        add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
-
-        // AJAX: traer publicaciones desde GMB
-        add_action( 'wp_ajax_oy_gmb_posts_fetch',  array( $this, 'ajax_fetch_posts' ) );
-
-        // AJAX: crear publicación en GMB
-        add_action( 'wp_ajax_oy_gmb_posts_create', array( $this, 'ajax_create_post' ) );
-
-        // AJAX: eliminar publicación en GMB
-        add_action( 'wp_ajax_oy_gmb_posts_delete', array( $this, 'ajax_delete_post' ) );
-    }
-
-    // =========================================================================
-    // REGISTRO DEL METABOX
-    // =========================================================================
+    const META_CACHE = '_gmb_posts_cache';
 
     /**
-     * Registra el metabox en el CPT oy_location
+     * Meta key de última sincronización de publicaciones GMB.
+     */
+    const META_LAST_SYNC = '_gmb_posts_last_sync';
+
+    /**
+     * Meta key de borradores locales.
+     */
+    const META_DRAFTS = '_gmb_posts_local_drafts';
+
+    /**
+     * Constructor.
+     */
+    public function __construct() {
+        add_action( 'add_meta_boxes', array( $this, 'register_meta_box' ) );
+        add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
+
+        add_action( 'wp_ajax_oy_gmb_posts_fetch', array( $this, 'ajax_fetch_posts' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_get', array( $this, 'ajax_get_post' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_create', array( $this, 'ajax_create_post' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_update', array( $this, 'ajax_update_post' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_delete', array( $this, 'ajax_delete_post' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_insights', array( $this, 'ajax_post_insights' ) );
+
+        add_action( 'wp_ajax_oy_gmb_posts_save_draft', array( $this, 'ajax_save_draft' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_delete_draft', array( $this, 'ajax_delete_draft' ) );
+        add_action( 'wp_ajax_oy_gmb_posts_list_drafts', array( $this, 'ajax_list_drafts' ) );
+    }
+
+    /**
+     * Registra el metabox.
      */
     public function register_meta_box() {
         add_meta_box(
@@ -65,1207 +74,678 @@ class OY_Location_GMB_Posts_Metabox {
         );
     }
 
-    // =========================================================================
-    // ASSETS
-    // =========================================================================
-
     /**
-     * Encola CSS y JS solo en la pantalla de edición de oy_location
+     * Encola estilos inline solo en edición de oy_location.
      *
-     * @param string $hook Hook de la página actual de admin
+     * @param string $hook Hook de admin.
      */
     public function enqueue_assets( $hook ) {
         if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) {
             return;
         }
 
-        $screen = get_current_screen();
+        $screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
         if ( ! $screen || 'oy_location' !== $screen->post_type ) {
             return;
         }
 
-        // ── Inline CSS ─────────────────────────────────────────────────────
+        wp_enqueue_script( 'jquery' );
+        wp_enqueue_style( 'dashicons' );
+
         $css = '
-        /* ============================================================
-           GMB Posts Metabox — Lealez
-        ============================================================ */
-        #oy_location_gmb_posts .inside { padding: 0; }
-
-        .oy-posts-metabox-wrap {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
-
-        /* Tabs */
-        .oy-posts-tabs {
-            display: flex;
-            gap: 0;
-            border-bottom: 2px solid #e0e0e0;
-            background: #f8f9fa;
-            padding: 0 16px;
-        }
-        .oy-posts-tab-btn {
-            padding: 12px 20px;
-            cursor: pointer;
-            border: none;
-            background: transparent;
-            font-size: 13px;
-            font-weight: 600;
-            color: #666;
-            border-bottom: 3px solid transparent;
-            margin-bottom: -2px;
-            transition: all .2s;
-        }
-        .oy-posts-tab-btn.active {
-            color: #1a73e8;
-            border-bottom-color: #1a73e8;
-        }
-        .oy-posts-tab-btn:hover:not(.active) { color: #333; }
-        .oy-posts-tab-pane { display: none; padding: 16px; }
-        .oy-posts-tab-pane.active { display: block; }
-
-        /* Toolbar */
-        .oy-posts-toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-        .oy-posts-toolbar select,
-        .oy-posts-toolbar .button { height: 32px; line-height: 30px; }
-        .oy-posts-count-badge {
-            margin-left: auto;
-            background: #e8f0fe;
-            color: #1a73e8;
-            font-size: 12px;
-            font-weight: 600;
-            padding: 3px 10px;
-            border-radius: 20px;
-        }
-
-        /* Status / type notice when no GMB connection */
-        .oy-posts-notice {
-            padding: 12px 16px;
-            border-left: 4px solid #ccc;
-            background: #f9f9f9;
-            font-size: 13px;
-            color: #555;
-            border-radius: 0 4px 4px 0;
-        }
-        .oy-posts-notice.warning { border-left-color: #f0b429; background: #fffbee; }
-        .oy-posts-notice.error   { border-left-color: #d63638; background: #fdf2f2; }
-        .oy-posts-notice.info    { border-left-color: #1a73e8; background: #eef3fd; }
-
-        /* Loading */
-        .oy-posts-loading {
-            text-align: center;
-            padding: 40px 20px;
-            color: #888;
-            font-size: 13px;
-        }
-        .oy-posts-loading .spinner { float: none; margin: 0 auto 10px; display: block; visibility: visible; }
-
-        /* Grid */
-        .oy-posts-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 16px;
-        }
-
-        /* Card */
-        .oy-post-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #fff;
-            transition: box-shadow .2s;
-            display: flex;
-            flex-direction: column;
-        }
-        .oy-post-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.12); }
-
-        .oy-post-card-image {
-            width: 100%;
-            height: 160px;
-            object-fit: cover;
-            display: block;
-            background: #f0f0f0;
-        }
-        .oy-post-card-image-placeholder {
-            width: 100%;
-            height: 120px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 100%);
-            color: #aaa;
-            font-size: 32px;
-        }
-
-        .oy-post-card-body {
-            padding: 12px;
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-
-        .oy-post-card-badges {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .oy-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: .3px;
-        }
-        .oy-badge-type-STANDARD { background: #e8f0fe; color: #1a73e8; }
-        .oy-badge-type-OFFER    { background: #e6f4ea; color: #1e8e3e; }
-        .oy-badge-type-EVENT    { background: #fce8b2; color: #f9ab00; }
-        .oy-badge-type-PRODUCT  { background: #f3e8fd; color: #7b1fa2; }
-        .oy-badge-type-ALERT    { background: #fce8e6; color: #d93025; }
-        .oy-badge-state-LIVE       { background: #e6f4ea; color: #1e8e3e; }
-        .oy-badge-state-PROCESSING { background: #fff3e0; color: #e65100; }
-        .oy-badge-state-REJECTED   { background: #fce8e6; color: #d93025; }
-        .oy-badge-state-DELETED    { background: #f1f3f4; color: #80868b; }
-        .oy-badge-state-UNKNOWN    { background: #f1f3f4; color: #80868b; }
-
-        .oy-post-card-summary {
-            font-size: 13px;
-            line-height: 1.5;
-            color: #333;
-            overflow: hidden;
-            display: -webkit-box;
-            -webkit-line-clamp: 3;
-            -webkit-box-orient: vertical;
-        }
-
-        .oy-post-card-meta {
-            font-size: 11px;
-            color: #888;
-            margin-top: auto;
-            padding-top: 8px;
-            border-top: 1px solid #f0f0f0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 4px;
-        }
-        .oy-post-card-cta {
-            font-size: 11px;
-            color: #1a73e8;
-            font-weight: 600;
-        }
-
-        .oy-post-card-actions {
-            padding: 8px 12px;
-            border-top: 1px solid #f0f0f0;
-            display: flex;
-            gap: 6px;
-            justify-content: flex-end;
-        }
-        .oy-post-card-actions .button-link-delete { color: #d63638; }
-        .oy-post-card-actions .button-link-delete:hover { color: #b12121; }
-
-        /* Event / Offer detail row */
-        .oy-post-card-extra {
-            font-size: 11px;
-            color: #555;
-            background: #f8f9fa;
-            padding: 6px 8px;
-            border-radius: 4px;
-            margin-top: 4px;
-        }
-        .oy-post-card-extra strong { color: #333; }
-
-        /* Empty state */
-        .oy-posts-empty {
-            text-align: center;
-            padding: 40px 20px;
-            color: #888;
-        }
-        .oy-posts-empty .dashicons { font-size: 40px; width: 40px; height: 40px; color: #ccc; margin: 0 auto 10px; display: block; }
-
-        /* ── Formulario nueva publicación ───────────────────────────── */
-        .oy-new-post-form { max-width: 700px; }
-
-        .oy-new-post-form .oy-form-row {
-            margin-bottom: 16px;
-        }
-        .oy-new-post-form label {
-            display: block;
-            font-weight: 600;
-            font-size: 13px;
-            color: #333;
-            margin-bottom: 5px;
-        }
-        .oy-new-post-form label span.required { color: #d63638; }
-        .oy-new-post-form input[type="text"],
-        .oy-new-post-form input[type="url"],
-        .oy-new-post-form input[type="date"],
-        .oy-new-post-form select,
-        .oy-new-post-form textarea {
-            width: 100%;
-            max-width: 100%;
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            padding: 8px 10px;
-            font-size: 13px;
-            color: #333;
-        }
-        .oy-new-post-form textarea { resize: vertical; min-height: 100px; }
-        .oy-new-post-form .oy-char-counter {
-            text-align: right;
-            font-size: 11px;
-            color: #888;
-            margin-top: 3px;
-        }
-        .oy-new-post-form .oy-char-counter.over { color: #d63638; font-weight: 700; }
-
-        .oy-new-post-form .oy-form-cols {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-
-        .oy-topic-type-selector {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .oy-topic-type-option {
-            flex: 1;
-            min-width: 100px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 12px;
-            text-align: center;
-            cursor: pointer;
-            transition: all .2s;
-            background: #fff;
-        }
-        .oy-topic-type-option:hover { border-color: #1a73e8; background: #f0f5ff; }
-        .oy-topic-type-option.selected { border-color: #1a73e8; background: #e8f0fe; }
-        .oy-topic-type-option .oy-topic-icon { font-size: 24px; display: block; margin-bottom: 4px; }
-        .oy-topic-type-option .oy-topic-label { font-size: 12px; font-weight: 600; color: #333; }
-
-        .oy-conditional-fields { display: none; }
-        .oy-conditional-fields.visible { display: block; }
-
-        .oy-new-post-notice {
-            padding: 10px 14px;
-            border-radius: 4px;
-            font-size: 13px;
-            margin-top: 12px;
-            display: none;
-        }
-        .oy-new-post-notice.success { background: #e6f4ea; color: #1e8e3e; border: 1px solid #ceead6; display: block; }
-        .oy-new-post-notice.error   { background: #fce8e6; color: #d93025; border: 1px solid #f5c6c6; display: block; }
-        .oy-new-post-notice.info    { background: #eef3fd; color: #1a73e8; border: 1px solid #c5d8fa; display: block; }
-
-        .oy-form-actions { display: flex; gap: 10px; align-items: center; }
+        #oy_location_gmb_posts .inside{padding:0;margin:0}.oy-gmb-posts-wrap{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff}.oy-gmb-posts-topbar{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:16px 18px;border-bottom:1px solid #e5e7eb;background:linear-gradient(135deg,#f8fafc 0%,#fff 100%)}.oy-gmb-posts-title{display:flex;gap:10px;align-items:flex-start}.oy-gmb-posts-title-icon{width:36px;height:36px;border-radius:10px;background:#e8f0fe;color:#1a73e8;display:flex;align-items:center;justify-content:center;font-size:20px}.oy-gmb-posts-title h3{margin:0 0 4px;font-size:15px;line-height:1.3}.oy-gmb-posts-title p{margin:0;color:#5f6368;font-size:12px}.oy-gmb-posts-status{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.oy-gmb-pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:600;background:#f1f5f9;color:#334155}.oy-gmb-pill.good{background:#e6f4ea;color:#137333}.oy-gmb-pill.warn{background:#fff7e6;color:#b06000}.oy-gmb-pill.bad{background:#fce8e6;color:#b3261e}.oy-gmb-posts-tabs{display:flex;border-bottom:1px solid #dcdcde;background:#f6f7f7;overflow:auto}.oy-gmb-posts-tab{border:0;background:transparent;padding:12px 16px;cursor:pointer;font-weight:600;color:#50575e;border-bottom:3px solid transparent;white-space:nowrap}.oy-gmb-posts-tab:hover{color:#1d2327;background:#fff}.oy-gmb-posts-tab.active{background:#fff;color:#1a73e8;border-bottom-color:#1a73e8}.oy-gmb-posts-pane{display:none;padding:16px 18px}.oy-gmb-posts-pane.active{display:block}.oy-gmb-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.oy-gmb-toolbar select,.oy-gmb-toolbar input[type=search]{height:32px;min-width:150px}.oy-gmb-count{display:none;border-radius:999px;background:#eef3fd;color:#1a73e8;font-weight:700;font-size:11px;padding:5px 10px}.oy-gmb-notice{border-left:4px solid #1a73e8;background:#eef3fd;padding:10px 12px;margin:0 0 14px;color:#1d2327}.oy-gmb-notice.warning{border-left-color:#f0b429;background:#fffbee}.oy-gmb-notice.error{border-left-color:#d63638;background:#fdf2f2}.oy-gmb-notice.success{border-left-color:#1e8e3e;background:#e6f4ea}.oy-gmb-loading,.oy-gmb-empty{text-align:center;padding:28px;border:1px dashed #dcdcde;background:#fafafa;color:#646970}.oy-gmb-loading .spinner{float:none;margin:0 8px 0 0;visibility:visible}.oy-gmb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}.oy-gmb-card{border:1px solid #dcdcde;border-radius:12px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column}.oy-gmb-card-media{height:130px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#94a3b8;font-size:34px}.oy-gmb-card-media img{width:100%;height:100%;object-fit:cover}.oy-gmb-card-body{padding:12px;display:flex;flex-direction:column;gap:9px;flex:1}.oy-gmb-card-badges{display:flex;gap:6px;flex-wrap:wrap}.oy-gmb-badge{display:inline-flex;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:800;line-height:1.4;text-transform:uppercase;background:#f1f5f9;color:#475569}.oy-gmb-badge.state-live{background:#e6f4ea;color:#137333}.oy-gmb-badge.state-processing,.oy-gmb-badge.state-scheduled{background:#fff7e6;color:#b06000}.oy-gmb-badge.state-rejected,.oy-gmb-badge.state-deleted{background:#fce8e6;color:#b3261e}.oy-gmb-card-summary{font-size:13px;line-height:1.45;color:#1d2327;white-space:pre-line;max-height:86px;overflow:hidden}.oy-gmb-card-meta{display:flex;flex-direction:column;gap:4px;color:#646970;font-size:11px}.oy-gmb-card-extra{background:#f8fafc;border-radius:8px;padding:8px;font-size:11px;color:#334155}.oy-gmb-card-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:8px;border-top:1px solid #f1f5f9}.oy-gmb-card-actions .button-link-delete{color:#d63638}.oy-gmb-form-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:18px;align-items:start}.oy-gmb-panel{border:1px solid #dcdcde;border-radius:12px;background:#fff;overflow:hidden}.oy-gmb-panel h4{margin:0;padding:12px 14px;border-bottom:1px solid #e5e7eb;background:#f8fafc;font-size:13px}.oy-gmb-panel-body{padding:14px}.oy-gmb-form-row{margin-bottom:13px}.oy-gmb-form-row label{display:block;font-weight:700;font-size:12px;margin-bottom:5px;color:#1d2327}.oy-gmb-form-row label .required{color:#d63638}.oy-gmb-form-row input[type=text],.oy-gmb-form-row input[type=url],.oy-gmb-form-row input[type=date],.oy-gmb-form-row input[type=time],.oy-gmb-form-row input[type=datetime-local],.oy-gmb-form-row input[type=number],.oy-gmb-form-row select,.oy-gmb-form-row textarea{width:100%;max-width:100%;border:1px solid #c3c4c7;border-radius:8px}.oy-gmb-form-row textarea{min-height:130px;resize:vertical}.oy-gmb-two-cols{display:grid;grid-template-columns:1fr 1fr;gap:10px}.oy-gmb-three-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.oy-gmb-hint{font-size:11px;color:#646970;margin-top:4px}.oy-gmb-char-counter{text-align:right;font-size:11px;color:#646970}.oy-gmb-char-counter.over{color:#d63638;font-weight:800}.oy-gmb-preview-box{border:1px solid #e5e7eb;background:#f8fafc;border-radius:10px;padding:12px;min-height:190px}.oy-gmb-preview-media{height:120px;background:#e5e7eb;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;justify-content:center;color:#64748b;overflow:hidden}.oy-gmb-preview-media img{width:100%;height:100%;object-fit:cover}.oy-gmb-preview-summary{white-space:pre-line;font-size:12px;line-height:1.45;color:#1d2327}.oy-gmb-actions-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}.oy-gmb-actions-row .spinner{float:none;margin:0;visibility:hidden}.oy-gmb-actions-row .spinner.is-active{visibility:visible}.oy-gmb-result{display:none;margin-top:12px;border-radius:8px;padding:10px}.oy-gmb-result.success{display:block;background:#e6f4ea;color:#137333}.oy-gmb-result.error{display:block;background:#fce8e6;color:#b3261e}.oy-gmb-result.info{display:block;background:#eef3fd;color:#1a73e8}.oy-gmb-drafts-table{width:100%;border-collapse:collapse}.oy-gmb-drafts-table th,.oy-gmb-drafts-table td{border-bottom:1px solid #e5e7eb;padding:10px;text-align:left;vertical-align:top}.oy-gmb-drafts-table th{font-size:11px;text-transform:uppercase;color:#646970;background:#f8fafc}.oy-gmb-drafts-table .actions{white-space:nowrap}.oy-gmb-muted{color:#646970}.oy-gmb-section-hidden{display:none!important}@media(max-width:900px){.oy-gmb-posts-topbar,.oy-gmb-form-grid{display:block}.oy-gmb-posts-status{justify-content:flex-start;margin-top:10px}.oy-gmb-two-cols,.oy-gmb-three-cols{grid-template-columns:1fr}.oy-gmb-grid{grid-template-columns:1fr}}
         ';
 
-        wp_add_inline_style( 'wp-admin', $css );
+        wp_register_style( 'oy-gmb-posts-metabox-inline', false, array( 'dashicons' ), '1.0.0' );
+        wp_enqueue_style( 'oy-gmb-posts-metabox-inline' );
+        wp_add_inline_style( 'oy-gmb-posts-metabox-inline', $css );
     }
 
-    // =========================================================================
-    // RENDER METABOX
-    // =========================================================================
-
     /**
-     * Renderiza el contenido del metabox
+     * Renderiza el metabox.
      *
-     * @param WP_Post $post Post actual
+     * @param WP_Post $post Post actual.
      */
     public function render_meta_box( $post ) {
-        $location_id    = $post->ID;
-        $gmb_loc_name   = (string) get_post_meta( $location_id, 'gmb_location_name', true );
-        $business_id    = (int)    get_post_meta( $location_id, 'parent_business_id', true );
-        $gmb_connected  = $business_id ? (bool) get_post_meta( $business_id, '_gmb_connected', true ) : false;
-        $nonce          = wp_create_nonce( self::NONCE_KEY );
+        $location_id   = $post->ID;
+        $gmb_loc_name  = (string) get_post_meta( $location_id, 'gmb_location_name', true );
+        $business_id   = (int) get_post_meta( $location_id, 'parent_business_id', true );
+        $gmb_connected = $business_id ? (bool) get_post_meta( $business_id, '_gmb_connected', true ) : false;
+        $nonce         = wp_create_nonce( self::NONCE_KEY );
 
-        // Caché persistente de publicaciones
-        $preloaded_posts   = get_post_meta( $location_id, '_gmb_posts_cache', true );
-        $posts_last_sync   = (int) get_post_meta( $location_id, '_gmb_posts_last_sync', true );
+        $preloaded_posts = get_post_meta( $location_id, self::META_CACHE, true );
         if ( ! is_array( $preloaded_posts ) ) {
             $preloaded_posts = array();
         }
-        $has_posts_cache = ! empty( $preloaded_posts );
 
+        $drafts = $this->get_local_drafts( $location_id );
+        $last_sync = (int) get_post_meta( $location_id, self::META_LAST_SYNC, true );
         ?>
-        <div class="oy-posts-metabox-wrap"
+        <div class="oy-gmb-posts-wrap" id="oy-gmb-posts-wrap"
              data-location-id="<?php echo esc_attr( $location_id ); ?>"
              data-business-id="<?php echo esc_attr( $business_id ); ?>"
-             data-gmb-location-name="<?php echo esc_attr( $gmb_loc_name ); ?>"
-             data-nonce="<?php echo esc_attr( $nonce ); ?>">
+             data-gmb-location-name="<?php echo esc_attr( $gmb_loc_name ); ?>">
 
             <?php if ( ! $business_id || ! $gmb_connected || empty( $gmb_loc_name ) ) : ?>
                 <?php $this->render_no_connection_notice( $business_id, $gmb_connected, $gmb_loc_name ); ?>
             <?php else : ?>
 
-            <!-- TABS -->
-            <div class="oy-posts-tabs">
-                <button type="button" class="oy-posts-tab-btn active" data-tab="list">
-                    <?php esc_html_e( '📋 Publicaciones', 'lealez' ); ?>
-                </button>
-                <button type="button" class="oy-posts-tab-btn" data-tab="create">
-                    <?php esc_html_e( '✏️ Nueva Publicación', 'lealez' ); ?>
-                </button>
-            </div>
-
-            <!-- TAB: Lista de publicaciones -->
-            <div class="oy-posts-tab-pane active" id="oy-posts-tab-list">
-
-                <!-- Toolbar -->
-                <div class="oy-posts-toolbar">
-                    <label for="oy-posts-filter-type" class="screen-reader-text"><?php esc_html_e( 'Filtrar por tipo', 'lealez' ); ?></label>
-                    <select id="oy-posts-filter-type">
-                        <option value=""><?php esc_html_e( 'Todos los tipos', 'lealez' ); ?></option>
-                        <option value="STANDARD"><?php esc_html_e( 'Actualizar', 'lealez' ); ?></option>
-                        <option value="OFFER"><?php esc_html_e( 'Oferta', 'lealez' ); ?></option>
-                        <option value="EVENT"><?php esc_html_e( 'Evento', 'lealez' ); ?></option>
-                        <option value="PRODUCT"><?php esc_html_e( 'Producto', 'lealez' ); ?></option>
-                        <option value="ALERT"><?php esc_html_e( 'Alerta', 'lealez' ); ?></option>
-                    </select>
-
-                    <label for="oy-posts-filter-state" class="screen-reader-text"><?php esc_html_e( 'Filtrar por estado', 'lealez' ); ?></label>
-                    <select id="oy-posts-filter-state">
-                        <option value=""><?php esc_html_e( 'Todos los estados', 'lealez' ); ?></option>
-                        <option value="LIVE"><?php esc_html_e( 'Publicada', 'lealez' ); ?></option>
-                        <option value="PROCESSING"><?php esc_html_e( 'Procesando', 'lealez' ); ?></option>
-                        <option value="REJECTED"><?php esc_html_e( 'Rechazada', 'lealez' ); ?></option>
-                    </select>
-
-                    <button type="button" class="button" id="oy-posts-btn-refresh" title="<?php esc_attr_e( 'Recargar desde GMB', 'lealez' ); ?>">
-                        🔄 <?php esc_html_e( 'Actualizar', 'lealez' ); ?>
-                    </button>
-
-                    <span class="oy-posts-count-badge" id="oy-posts-count" style="display:none;"></span>
+                <div class="oy-gmb-posts-topbar">
+                    <div class="oy-gmb-posts-title">
+                        <div class="oy-gmb-posts-title-icon">📢</div>
+                        <div>
+                            <h3><?php esc_html_e( 'Centro de publicaciones GMB', 'lealez' ); ?></h3>
+                            <p><?php esc_html_e( 'Crea borradores locales, publica en Google, edita publicaciones existentes, consulta el estado e insights sin salir de Lealez.', 'lealez' ); ?></p>
+                        </div>
+                    </div>
+                    <div class="oy-gmb-posts-status">
+                        <span class="oy-gmb-pill good">✅ <?php esc_html_e( 'Empresa conectada', 'lealez' ); ?></span>
+                        <span class="oy-gmb-pill"><?php printf( esc_html__( '%d en caché', 'lealez' ), count( $preloaded_posts ) ); ?></span>
+                        <span class="oy-gmb-pill warn"><?php printf( esc_html__( '%d borradores', 'lealez' ), count( $drafts ) ); ?></span>
+                    </div>
                 </div>
 
-                <!-- Contenedor de publicaciones -->\
-                <div id="oy-posts-list-container">
-                    <?php if ( $has_posts_cache ) : ?>
-                    <div class="oy-posts-loading" style="display:none;">
-                        <span class="spinner is-active"></span>
-                        <?php esc_html_e( 'Cargando publicaciones desde Google My Business…', 'lealez' ); ?>
+                <div class="oy-gmb-posts-tabs" role="tablist">
+                    <button type="button" class="oy-gmb-posts-tab active" data-tab="list">📋 <?php esc_html_e( 'Publicaciones GMB', 'lealez' ); ?></button>
+                    <button type="button" class="oy-gmb-posts-tab" data-tab="editor">✍️ <?php esc_html_e( 'Crear / Editar', 'lealez' ); ?></button>
+                    <button type="button" class="oy-gmb-posts-tab" data-tab="drafts">💾 <?php esc_html_e( 'Borradores locales', 'lealez' ); ?> <span id="oy-gmb-drafts-tab-count"></span></button>
+                    <button type="button" class="oy-gmb-posts-tab" data-tab="help">🧭 <?php esc_html_e( 'Guía rápida', 'lealez' ); ?></button>
+                </div>
+
+                <div class="oy-gmb-posts-pane active" id="oy-gmb-posts-tab-list">
+                    <div class="oy-gmb-toolbar">
+                        <select id="oy-gmb-filter-type">
+                            <option value=""><?php esc_html_e( 'Todos los tipos', 'lealez' ); ?></option>
+                            <option value="STANDARD"><?php esc_html_e( 'Actualizar', 'lealez' ); ?></option>
+                            <option value="EVENT"><?php esc_html_e( 'Evento', 'lealez' ); ?></option>
+                            <option value="OFFER"><?php esc_html_e( 'Oferta', 'lealez' ); ?></option>
+                            <option value="ALERT"><?php esc_html_e( 'Alerta', 'lealez' ); ?></option>
+                            <option value="PRODUCT"><?php esc_html_e( 'Producto / legado', 'lealez' ); ?></option>
+                        </select>
+                        <select id="oy-gmb-filter-state">
+                            <option value=""><?php esc_html_e( 'Todos los estados', 'lealez' ); ?></option>
+                            <option value="LIVE"><?php esc_html_e( 'Publicada', 'lealez' ); ?></option>
+                            <option value="PROCESSING"><?php esc_html_e( 'Procesando', 'lealez' ); ?></option>
+                            <option value="SCHEDULED"><?php esc_html_e( 'Programada', 'lealez' ); ?></option>
+                            <option value="RECURRING"><?php esc_html_e( 'Recurrente', 'lealez' ); ?></option>
+                            <option value="REJECTED"><?php esc_html_e( 'Rechazada', 'lealez' ); ?></option>
+                            <option value="DELETED"><?php esc_html_e( 'Eliminada', 'lealez' ); ?></option>
+                        </select>
+                        <input type="search" id="oy-gmb-filter-search" placeholder="<?php esc_attr_e( 'Buscar por texto…', 'lealez' ); ?>">
+                        <button type="button" class="button" id="oy-gmb-btn-refresh">🔄 <?php esc_html_e( 'Sincronizar desde GMB', 'lealez' ); ?></button>
+                        <button type="button" class="button button-primary oy-gmb-go-editor">➕ <?php esc_html_e( 'Nueva publicación', 'lealez' ); ?></button>
+                        <span class="oy-gmb-count" id="oy-gmb-count"></span>
                     </div>
-                    <?php else : ?>
-                    <div class="oy-posts-loading">
-                        <span class="spinner is-active"></span>
-                        <?php esc_html_e( 'Cargando publicaciones desde Google My Business…', 'lealez' ); ?>
+
+                    <div id="oy-gmb-posts-list-container">
+                        <?php if ( ! empty( $preloaded_posts ) ) : ?>
+                            <div class="oy-gmb-loading" style="display:none;"><span class="spinner is-active"></span><?php esc_html_e( 'Cargando publicaciones…', 'lealez' ); ?></div>
+                        <?php else : ?>
+                            <div class="oy-gmb-loading"><span class="spinner is-active"></span><?php esc_html_e( 'Cargando publicaciones desde Google…', 'lealez' ); ?></div>
+                        <?php endif; ?>
                     </div>
+
+                    <?php if ( $last_sync ) : ?>
+                        <p class="oy-gmb-muted" style="margin-top:10px;">
+                            <?php
+                            printf(
+                                esc_html__( 'Última sincronización: %s', 'lealez' ),
+                                esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_sync ) )
+                            );
+                            ?>
+                        </p>
                     <?php endif; ?>
                 </div>
-                <?php if ( $posts_last_sync ) : ?>
-                <p style="font-size:11px;color:#888;margin:4px 0 0;padding:0 0 8px;">
-                    <?php printf(
-                        esc_html__( 'Última sincronización: %s', 'lealez' ),
-                        esc_html( wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $posts_last_sync ) )
-                    ); ?>
-                </p>
-                <?php endif; ?>
-            </div><!-- /tab list -->
 
-            <!-- TAB: Nueva publicación -->
-            <div class="oy-posts-tab-pane" id="oy-posts-tab-create">
+                <div class="oy-gmb-posts-pane" id="oy-gmb-posts-tab-editor">
+                    <div class="oy-gmb-notice info">
+                        <?php esc_html_e( 'Flujo recomendado: crea o edita en Lealez, guarda como borrador local y luego publica o actualiza en Google. Así evitas perder contenido si Google rechaza la solicitud o hay un error de conexión.', 'lealez' ); ?>
+                    </div>
 
-                <div class="oy-posts-notice info" style="margin-bottom:16px;">
-                    <?php esc_html_e( 'Completa el formulario para crear una nueva publicación directamente en tu perfil de Google My Business.', 'lealez' ); ?>
+                    <form id="oy-gmb-post-form" autocomplete="off">
+                        <input type="hidden" name="editor_mode" id="oy-gmb-editor-mode" value="create">
+                        <input type="hidden" name="draft_id" id="oy-gmb-draft-id" value="">
+                        <input type="hidden" name="post_name" id="oy-gmb-post-name" value="">
+
+                        <div class="oy-gmb-form-grid">
+                            <div class="oy-gmb-panel">
+                                <h4><?php esc_html_e( 'Contenido principal', 'lealez' ); ?></h4>
+                                <div class="oy-gmb-panel-body">
+                                    <div class="oy-gmb-three-cols">
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-topic-type"><?php esc_html_e( 'Tipo', 'lealez' ); ?> <span class="required">*</span></label>
+                                            <select id="oy-gmb-topic-type" name="topic_type">
+                                                <option value="STANDARD"><?php esc_html_e( 'Actualizar / Novedad', 'lealez' ); ?></option>
+                                                <option value="EVENT"><?php esc_html_e( 'Evento', 'lealez' ); ?></option>
+                                                <option value="OFFER"><?php esc_html_e( 'Oferta', 'lealez' ); ?></option>
+                                                <option value="ALERT"><?php esc_html_e( 'Alerta', 'lealez' ); ?></option>
+                                            </select>
+                                        </div>
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-language-code"><?php esc_html_e( 'Idioma', 'lealez' ); ?></label>
+                                            <select id="oy-gmb-language-code" name="language_code">
+                                                <option value="es">Español</option>
+                                                <option value="en">English</option>
+                                                <option value="pt-BR">Português</option>
+                                            </select>
+                                        </div>
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-scheduled-time"><?php esc_html_e( 'Programar publicación', 'lealez' ); ?></label>
+                                            <input type="datetime-local" id="oy-gmb-scheduled-time" name="scheduled_time">
+                                        </div>
+                                    </div>
+
+                                    <div class="oy-gmb-form-row oy-gmb-alert-fields oy-gmb-section-hidden">
+                                        <label for="oy-gmb-alert-type"><?php esc_html_e( 'Tipo de alerta', 'lealez' ); ?></label>
+                                        <select id="oy-gmb-alert-type" name="alert_type">
+                                            <option value="COVID_19"><?php esc_html_e( 'COVID-19', 'lealez' ); ?></option>
+                                        </select>
+                                        <div class="oy-gmb-hint"><?php esc_html_e( 'Google puede restringir la creación de alertas según disponibilidad de la API y políticas vigentes.', 'lealez' ); ?></div>
+                                    </div>
+
+                                    <div class="oy-gmb-form-row">
+                                        <label for="oy-gmb-summary"><?php esc_html_e( 'Texto de la publicación', 'lealez' ); ?> <span class="required">*</span></label>
+                                        <textarea id="oy-gmb-summary" name="summary" maxlength="1500" placeholder="<?php esc_attr_e( 'Escribe el mensaje que se verá en Google…', 'lealez' ); ?>"></textarea>
+                                        <div class="oy-gmb-char-counter"><span id="oy-gmb-summary-count">0</span>/1500</div>
+                                    </div>
+
+                                    <div class="oy-gmb-form-row">
+                                        <label for="oy-gmb-image-url"><?php esc_html_e( 'Imagen pública', 'lealez' ); ?></label>
+                                        <input type="url" id="oy-gmb-image-url" name="image_url" placeholder="https://...">
+                                        <div class="oy-gmb-hint"><?php esc_html_e( 'Google Local Posts solo acepta una URL pública como fuente de imagen. Usa una imagen accesible sin login.', 'lealez' ); ?></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="oy-gmb-panel">
+                                <h4><?php esc_html_e( 'Vista previa local', 'lealez' ); ?></h4>
+                                <div class="oy-gmb-panel-body">
+                                    <div class="oy-gmb-preview-box">
+                                        <div class="oy-gmb-preview-media" id="oy-gmb-preview-media">📷</div>
+                                        <div class="oy-gmb-card-badges" id="oy-gmb-preview-badges"></div>
+                                        <div class="oy-gmb-preview-summary" id="oy-gmb-preview-summary"><?php esc_html_e( 'La vista previa aparecerá mientras escribes.', 'lealez' ); ?></div>
+                                        <div class="oy-gmb-card-extra" id="oy-gmb-preview-extra" style="display:none;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="oy-gmb-form-grid" style="margin-top:18px;">
+                            <div class="oy-gmb-panel">
+                                <h4><?php esc_html_e( 'Botón CTA', 'lealez' ); ?></h4>
+                                <div class="oy-gmb-panel-body">
+                                    <div class="oy-gmb-two-cols">
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-cta-type"><?php esc_html_e( 'Acción', 'lealez' ); ?></label>
+                                            <select id="oy-gmb-cta-type" name="cta_type">
+                                                <option value="ACTION_TYPE_UNSPECIFIED"><?php esc_html_e( 'Sin botón', 'lealez' ); ?></option>
+                                                <option value="LEARN_MORE"><?php esc_html_e( 'Más información', 'lealez' ); ?></option>
+                                                <option value="BOOK"><?php esc_html_e( 'Reservar', 'lealez' ); ?></option>
+                                                <option value="ORDER"><?php esc_html_e( 'Pedir', 'lealez' ); ?></option>
+                                                <option value="SHOP"><?php esc_html_e( 'Comprar', 'lealez' ); ?></option>
+                                                <option value="SIGN_UP"><?php esc_html_e( 'Registrarse', 'lealez' ); ?></option>
+                                                <option value="CALL"><?php esc_html_e( 'Llamar ahora', 'lealez' ); ?></option>
+                                            </select>
+                                        </div>
+                                        <div class="oy-gmb-form-row" id="oy-gmb-cta-url-row">
+                                            <label for="oy-gmb-cta-url"><?php esc_html_e( 'URL del CTA', 'lealez' ); ?></label>
+                                            <input type="url" id="oy-gmb-cta-url" name="cta_url" placeholder="https://...">
+                                        </div>
+                                    </div>
+                                    <div class="oy-gmb-hint"><?php esc_html_e( 'Para “Llamar ahora”, Google usa el teléfono del perfil y no requiere URL. En ofertas, Google ignora el CTA tradicional y usa los campos de oferta.', 'lealez' ); ?></div>
+                                </div>
+                            </div>
+
+                            <div class="oy-gmb-panel oy-gmb-event-offer-fields oy-gmb-section-hidden">
+                                <h4><?php esc_html_e( 'Evento / Oferta', 'lealez' ); ?></h4>
+                                <div class="oy-gmb-panel-body">
+                                    <div class="oy-gmb-form-row">
+                                        <label for="oy-gmb-event-title"><?php esc_html_e( 'Título del evento/oferta', 'lealez' ); ?> <span class="required">*</span></label>
+                                        <input type="text" id="oy-gmb-event-title" name="event_title" maxlength="58" placeholder="<?php esc_attr_e( 'Ej: Jornada especial, promoción de julio…', 'lealez' ); ?>">
+                                    </div>
+                                    <div class="oy-gmb-two-cols">
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-event-start-date"><?php esc_html_e( 'Fecha inicio', 'lealez' ); ?></label>
+                                            <input type="date" id="oy-gmb-event-start-date" name="event_start_date">
+                                        </div>
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-event-end-date"><?php esc_html_e( 'Fecha fin', 'lealez' ); ?></label>
+                                            <input type="date" id="oy-gmb-event-end-date" name="event_end_date">
+                                        </div>
+                                    </div>
+                                    <div class="oy-gmb-two-cols">
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-event-start-time"><?php esc_html_e( 'Hora inicio', 'lealez' ); ?></label>
+                                            <input type="time" id="oy-gmb-event-start-time" name="event_start_time">
+                                        </div>
+                                        <div class="oy-gmb-form-row">
+                                            <label for="oy-gmb-event-end-time"><?php esc_html_e( 'Hora fin', 'lealez' ); ?></label>
+                                            <input type="time" id="oy-gmb-event-end-time" name="event_end_time">
+                                        </div>
+                                    </div>
+
+                                    <div class="oy-gmb-form-row oy-gmb-offer-fields oy-gmb-section-hidden">
+                                        <label for="oy-gmb-coupon-code"><?php esc_html_e( 'Código de cupón', 'lealez' ); ?></label>
+                                        <input type="text" id="oy-gmb-coupon-code" name="coupon_code" maxlength="80">
+                                    </div>
+                                    <div class="oy-gmb-form-row oy-gmb-offer-fields oy-gmb-section-hidden">
+                                        <label for="oy-gmb-redeem-url"><?php esc_html_e( 'URL para canjear', 'lealez' ); ?></label>
+                                        <input type="url" id="oy-gmb-redeem-url" name="redeem_url" placeholder="https://...">
+                                    </div>
+                                    <div class="oy-gmb-form-row oy-gmb-offer-fields oy-gmb-section-hidden">
+                                        <label for="oy-gmb-offer-terms"><?php esc_html_e( 'Términos y condiciones', 'lealez' ); ?></label>
+                                        <textarea id="oy-gmb-offer-terms" name="offer_terms" style="min-height:70px;"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="oy-gmb-panel" style="margin-top:18px;">
+                            <h4><?php esc_html_e( 'Recurrencia opcional para eventos/ofertas', 'lealez' ); ?></h4>
+                            <div class="oy-gmb-panel-body">
+                                <div class="oy-gmb-three-cols">
+                                    <div class="oy-gmb-form-row">
+                                        <label for="oy-gmb-recurrence-type"><?php esc_html_e( 'Repetición', 'lealez' ); ?></label>
+                                        <select id="oy-gmb-recurrence-type" name="recurrence_type">
+                                            <option value="none"><?php esc_html_e( 'Sin recurrencia', 'lealez' ); ?></option>
+                                            <option value="daily"><?php esc_html_e( 'Diaria', 'lealez' ); ?></option>
+                                            <option value="weekly"><?php esc_html_e( 'Semanal', 'lealez' ); ?></option>
+                                            <option value="monthly"><?php esc_html_e( 'Mensual', 'lealez' ); ?></option>
+                                        </select>
+                                    </div>
+                                    <div class="oy-gmb-form-row">
+                                        <label for="oy-gmb-recurrence-end-time"><?php esc_html_e( 'Finaliza', 'lealez' ); ?></label>
+                                        <input type="datetime-local" id="oy-gmb-recurrence-end-time" name="recurrence_end_time">
+                                    </div>
+                                    <div class="oy-gmb-form-row oy-gmb-recurrence-monthly oy-gmb-section-hidden">
+                                        <label for="oy-gmb-recurrence-monthly-day"><?php esc_html_e( 'Día del mes', 'lealez' ); ?></label>
+                                        <input type="number" min="1" max="31" id="oy-gmb-recurrence-monthly-day" name="recurrence_monthly_day">
+                                    </div>
+                                </div>
+                                <div class="oy-gmb-form-row oy-gmb-recurrence-weekly oy-gmb-section-hidden">
+                                    <label><?php esc_html_e( 'Días de la semana', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="MONDAY"> <?php esc_html_e( 'Lun', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="TUESDAY"> <?php esc_html_e( 'Mar', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="WEDNESDAY"> <?php esc_html_e( 'Mié', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="THURSDAY"> <?php esc_html_e( 'Jue', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="FRIDAY"> <?php esc_html_e( 'Vie', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="SATURDAY"> <?php esc_html_e( 'Sáb', 'lealez' ); ?></label>
+                                    <label style="font-weight:400;display:inline-block;margin-right:12px;"><input type="checkbox" name="recurrence_weekly_days[]" value="SUNDAY"> <?php esc_html_e( 'Dom', 'lealez' ); ?></label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="oy-gmb-actions-row">
+                            <button type="button" class="button" id="oy-gmb-reset-form">🧹 <?php esc_html_e( 'Limpiar', 'lealez' ); ?></button>
+                            <button type="button" class="button button-secondary" id="oy-gmb-save-draft">💾 <?php esc_html_e( 'Guardar borrador local', 'lealez' ); ?></button>
+                            <button type="button" class="button button-primary" id="oy-gmb-publish-post">🚀 <?php esc_html_e( 'Publicar en Google', 'lealez' ); ?></button>
+                            <button type="button" class="button button-primary oy-gmb-section-hidden" id="oy-gmb-update-post">🔁 <?php esc_html_e( 'Actualizar en Google', 'lealez' ); ?></button>
+                            <span class="spinner" id="oy-gmb-form-spinner"></span>
+                        </div>
+                        <div class="oy-gmb-result" id="oy-gmb-form-result"></div>
+                    </form>
                 </div>
 
-                <form class="oy-new-post-form" id="oy-new-post-form" autocomplete="off">
-
-                    <!-- Tipo de publicación -->
-                    <div class="oy-form-row">
-                        <label><?php esc_html_e( 'Tipo de publicación', 'lealez' ); ?> <span class="required">*</span></label>
-                        <div class="oy-topic-type-selector">
-                            <div class="oy-topic-type-option selected" data-type="STANDARD" tabindex="0" role="button" aria-pressed="true">
-                                <span class="oy-topic-icon">📢</span>
-                                <span class="oy-topic-label"><?php esc_html_e( 'Actualizar', 'lealez' ); ?></span>
-                            </div>
-                            <div class="oy-topic-type-option" data-type="OFFER" tabindex="0" role="button" aria-pressed="false">
-                                <span class="oy-topic-icon">🏷️</span>
-                                <span class="oy-topic-label"><?php esc_html_e( 'Oferta', 'lealez' ); ?></span>
-                            </div>
-                            <div class="oy-topic-type-option" data-type="EVENT" tabindex="0" role="button" aria-pressed="false">
-                                <span class="oy-topic-icon">📅</span>
-                                <span class="oy-topic-label"><?php esc_html_e( 'Evento', 'lealez' ); ?></span>
-                            </div>
-                        </div>
-                        <input type="hidden" id="oy-new-post-topic-type" name="topic_type" value="STANDARD">
+                <div class="oy-gmb-posts-pane" id="oy-gmb-posts-tab-drafts">
+                    <div class="oy-gmb-notice info">
+                        <?php esc_html_e( 'Los borradores locales se guardan solo en WordPress. No aparecen en Google hasta que presiones “Publicar en Google”.', 'lealez' ); ?>
                     </div>
+                    <div id="oy-gmb-drafts-container"></div>
+                </div>
 
-                    <!-- Descripción -->
-                    <div class="oy-form-row">
-                        <label for="oy-new-post-summary">
-                            <?php esc_html_e( 'Descripción', 'lealez' ); ?> <span class="required">*</span>
-                        </label>
-                        <textarea id="oy-new-post-summary" name="summary" maxlength="1500"
-                                  placeholder="<?php esc_attr_e( 'Escribe el texto de tu publicación (máx. 1,500 caracteres)…', 'lealez' ); ?>"></textarea>
-                        <div class="oy-char-counter"><span id="oy-summary-chars">0</span> / 1500</div>
+                <div class="oy-gmb-posts-pane" id="oy-gmb-posts-tab-help">
+                    <div class="oy-gmb-notice">
+                        <strong><?php esc_html_e( 'Flujo recomendado para publicaciones', 'lealez' ); ?></strong><br>
+                        <?php esc_html_e( '1) Redacta o edita en Lealez. 2) Guarda como borrador local. 3) Publica o actualiza en Google. 4) Sincroniza desde GMB para ver el estado real: publicada, procesando, programada o rechazada.', 'lealez' ); ?>
                     </div>
-
-                    <!-- URL de imagen -->
-                    <div class="oy-form-row">
-                        <label for="oy-new-post-image-url"><?php esc_html_e( 'Imagen (URL pública)', 'lealez' ); ?></label>
-                        <input type="url" id="oy-new-post-image-url" name="image_url"
-                               placeholder="https://ejemplo.com/imagen.jpg">
-                        <p class="description" style="margin-top:4px;font-size:11px;color:#888;">
-                            <?php esc_html_e( 'Ingresa la URL pública de la imagen. Tamaño recomendado: 400×300 px o mayor.', 'lealez' ); ?>
-                        </p>
+                    <div class="oy-gmb-grid">
+                        <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>📋 <?php esc_html_e( 'Listar / Obtener', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'La pestaña Publicaciones GMB trae el listado y permite solicitar la ficha completa de cada publicación.', 'lealez' ); ?></p></div></div>
+                        <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>✍️ <?php esc_html_e( 'Crear / Editar', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'El editor soporta publicación estándar, evento, oferta, alerta, CTA, imagen pública, programación y recurrencia compatible con Local Posts.', 'lealez' ); ?></p></div></div>
+                        <div class="oy-gmb-card"><div class="oy-gmb-card-body"><strong>📊 <?php esc_html_e( 'Insights', 'lealez' ); ?></strong><p class="oy-gmb-muted"><?php esc_html_e( 'Cuando Google devuelva métricas para el post, Lealez las muestra en una ventana de detalle.', 'lealez' ); ?></p></div></div>
                     </div>
+                </div>
 
-                    <!-- CTA Button -->
-                    <div class="oy-form-row">
-                        <label for="oy-new-post-cta-type"><?php esc_html_e( 'Botón de acción (CTA)', 'lealez' ); ?></label>
-                        <div class="oy-form-cols">
-                            <div>
-                                <select id="oy-new-post-cta-type" name="cta_action_type">
-                                    <option value=""><?php esc_html_e( '— Sin botón —', 'lealez' ); ?></option>
-                                    <option value="LEARN_MORE"><?php esc_html_e( 'Más información', 'lealez' ); ?></option>
-                                    <option value="BOOK"><?php esc_html_e( 'Reservar', 'lealez' ); ?></option>
-                                    <option value="ORDER"><?php esc_html_e( 'Pedir', 'lealez' ); ?></option>
-                                    <option value="SHOP"><?php esc_html_e( 'Comprar', 'lealez' ); ?></option>
-                                    <option value="SIGN_UP"><?php esc_html_e( 'Registrarse', 'lealez' ); ?></option>
-                                    <option value="CALL"><?php esc_html_e( 'Llamar ahora', 'lealez' ); ?></option>
-                                </select>
-                            </div>
-                            <div id="oy-cta-url-wrap">
-                                <input type="url" id="oy-new-post-cta-url" name="cta_url"
-                                       placeholder="https://ejemplo.com/pagina">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Campos condicionales: EVENTO -->
-                    <div class="oy-conditional-fields" id="oy-event-fields">
-                        <div class="oy-form-row">
-                            <label for="oy-new-post-event-title">
-                                <?php esc_html_e( 'Título del evento', 'lealez' ); ?> <span class="required">*</span>
-                            </label>
-                            <input type="text" id="oy-new-post-event-title" name="event_title"
-                                   placeholder="<?php esc_attr_e( 'Nombre del evento…', 'lealez' ); ?>">
-                        </div>
-                        <div class="oy-form-row">
-                            <label><?php esc_html_e( 'Fecha y hora del evento', 'lealez' ); ?></label>
-                            <div class="oy-form-cols">
-                                <div>
-                                    <label for="oy-new-post-event-start-date" style="font-weight:normal;font-size:12px;color:#666;">
-                                        <?php esc_html_e( 'Inicio', 'lealez' ); ?>
-                                    </label>
-                                    <input type="date" id="oy-new-post-event-start-date" name="event_start_date">
-                                </div>
-                                <div>
-                                    <label for="oy-new-post-event-end-date" style="font-weight:normal;font-size:12px;color:#666;">
-                                        <?php esc_html_e( 'Fin', 'lealez' ); ?>
-                                    </label>
-                                    <input type="date" id="oy-new-post-event-end-date" name="event_end_date">
-                                </div>
-                            </div>
-                        </div>
-                    </div><!-- /event fields -->
-
-                    <!-- Campos condicionales: OFERTA -->
-                    <div class="oy-conditional-fields" id="oy-offer-fields">
-                        <div class="oy-form-row">
-                            <label for="oy-new-post-coupon"><?php esc_html_e( 'Código de cupón', 'lealez' ); ?></label>
-                            <input type="text" id="oy-new-post-coupon" name="coupon_code"
-                                   placeholder="PROMO20">
-                        </div>
-                        <div class="oy-form-row">
-                            <label for="oy-new-post-redeem-url"><?php esc_html_e( 'URL para canjear online', 'lealez' ); ?></label>
-                            <input type="url" id="oy-new-post-redeem-url" name="redeem_url"
-                                   placeholder="https://ejemplo.com/oferta">
-                        </div>
-                        <div class="oy-form-row">
-                            <label for="oy-new-post-offer-terms"><?php esc_html_e( 'Términos y condiciones', 'lealez' ); ?></label>
-                            <textarea id="oy-new-post-offer-terms" name="offer_terms" style="min-height:60px;"
-                                      placeholder="<?php esc_attr_e( 'Aplican restricciones…', 'lealez' ); ?>"></textarea>
-                        </div>
-                    </div><!-- /offer fields -->
-
-                    <!-- Aviso de resultado -->
-                    <div class="oy-new-post-notice" id="oy-new-post-result"></div>
-
-                    <!-- Botones -->
-                    <div class="oy-form-actions">
-                        <button type="submit" class="button button-primary" id="oy-new-post-submit">
-                            🚀 <?php esc_html_e( 'Publicar en Google', 'lealez' ); ?>
-                        </button>
-                        <button type="reset" class="button" id="oy-new-post-reset">
-                            <?php esc_html_e( 'Limpiar', 'lealez' ); ?>
-                        </button>
-                        <span class="spinner" id="oy-new-post-spinner"></span>
-                    </div>
-
-                </form>
-            </div><!-- /tab create -->
-
-            <?php endif; // GMB connected ?>
-        </div><!-- /.oy-posts-metabox-wrap -->
-
-        <?php $this->render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce, $preloaded_posts ); ?>
+            <?php endif; ?>
+        </div>
         <?php
+        $this->render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce, $preloaded_posts, $drafts );
     }
 
-    // =========================================================================
-    // HELPERS DE RENDER
-    // =========================================================================
-
     /**
-     * Renderiza aviso cuando no hay conexión GMB
+     * Avisos cuando no hay conexión GMB suficiente.
      *
-     * @param int    $business_id
-     * @param bool   $gmb_connected
-     * @param string $gmb_loc_name
+     * @param int    $business_id ID empresa.
+     * @param bool   $gmb_connected Si empresa conectada.
+     * @param string $gmb_loc_name Resource name ubicación.
      */
     private function render_no_connection_notice( $business_id, $gmb_connected, $gmb_loc_name ) {
+        echo '<div class="oy-gmb-posts-topbar"><div class="oy-gmb-posts-title"><div class="oy-gmb-posts-title-icon">📢</div><div><h3>' . esc_html__( 'Publicaciones de Google My Business', 'lealez' ) . '</h3>';
+        echo '<p>' . esc_html__( 'Conecta la empresa y vincula la ubicación GMB para habilitar el flujo de publicaciones.', 'lealez' ) . '</p></div></div></div>';
+
         if ( ! $business_id ) {
-            echo '<div class="oy-posts-notice warning" style="margin:16px;">';
+            echo '<div class="oy-gmb-notice warning" style="margin:16px;">';
             esc_html_e( '⚠️ Asigna una Empresa (oy_business) a esta ubicación para habilitar la integración con Google My Business.', 'lealez' );
             echo '</div>';
-        } elseif ( ! $gmb_connected ) {
-            echo '<div class="oy-posts-notice warning" style="margin:16px;">';
+            return;
+        }
+
+        if ( ! $gmb_connected ) {
+            echo '<div class="oy-gmb-notice warning" style="margin:16px;">';
             printf(
-                /* translators: %s: edit business link */
-                esc_html__( '⚠️ La empresa no está conectada a Google My Business. %s para conectar.', 'lealez' ),
+                wp_kses_post( __( '⚠️ La empresa no está conectada a Google My Business. %s para conectar.', 'lealez' ) ),
                 '<a href="' . esc_url( get_edit_post_link( $business_id ) ) . '">' . esc_html__( 'Editar empresa', 'lealez' ) . '</a>'
             );
             echo '</div>';
-        } elseif ( empty( $gmb_loc_name ) ) {
-            echo '<div class="oy-posts-notice info" style="margin:16px;">';
-            esc_html_e( 'ℹ️ Esta ubicación aún no tiene vinculado un perfil de Google My Business. Guarda el campo "Nombre GMB" (gmb_location_name) desde el metabox de Google My Business.', 'lealez' );
+            return;
+        }
+
+        if ( empty( $gmb_loc_name ) ) {
+            echo '<div class="oy-gmb-notice info" style="margin:16px;">';
+            esc_html_e( 'ℹ️ Esta ubicación aún no tiene vinculado un perfil GMB. Guarda el campo “Nombre GMB” (gmb_location_name) desde el metabox de Google My Business.', 'lealez' );
             echo '</div>';
         }
     }
 
     /**
-     * Renderiza el JS inline del metabox
+     * Renderiza JS inline.
      *
-     * @param int    $location_id
-     * @param int    $business_id
-     * @param string $gmb_loc_name
-     * @param string $nonce
+     * @param int    $location_id ID ubicación.
+     * @param int    $business_id ID empresa.
+     * @param string $gmb_loc_name Nombre GMB.
+     * @param string $nonce Nonce.
+     * @param array  $preloaded_posts Posts precargados.
+     * @param array  $drafts Borradores.
      */
-    private function render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce, $preloaded_posts = array() ) {
+    private function render_inline_script( $location_id, $business_id, $gmb_loc_name, $nonce, $preloaded_posts = array(), $drafts = array() ) {
         if ( ! $business_id || empty( $gmb_loc_name ) ) {
             return;
         }
-        $preloaded_json = ! empty( $preloaded_posts ) && is_array( $preloaded_posts )
-            ? wp_json_encode( $preloaded_posts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES )
-            : 'null';
+
+        $preloaded_json = wp_json_encode( array_values( (array) $preloaded_posts ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+        $drafts_json    = wp_json_encode( array_values( (array) $drafts ), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
         ?>
         <script type="text/javascript">
         (function($){
             'use strict';
 
-            /* ── Config ────────────────────────────────────────────────── */
             var AJAXURL     = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
             var NONCE       = <?php echo wp_json_encode( $nonce ); ?>;
             var LOCATION_ID = <?php echo (int) $location_id; ?>;
             var BUSINESS_ID = <?php echo (int) $business_id; ?>;
             var GMB_LOC     = <?php echo wp_json_encode( $gmb_loc_name ); ?>;
+            var allPosts    = <?php echo $preloaded_json ? $preloaded_json : '[]'; ?> || [];
+            var drafts      = <?php echo $drafts_json ? $drafts_json : '[]'; ?> || [];
 
-            /* Publicaciones precargadas desde post_meta (pueden ser null si no hay caché) */
-            var PRELOADED_POSTS = <?php echo $preloaded_json; ?>;
+            var TYPE_LABELS = { STANDARD:'<?php echo esc_js( __( 'Actualizar', 'lealez' ) ); ?>', EVENT:'<?php echo esc_js( __( 'Evento', 'lealez' ) ); ?>', OFFER:'<?php echo esc_js( __( 'Oferta', 'lealez' ) ); ?>', ALERT:'<?php echo esc_js( __( 'Alerta', 'lealez' ) ); ?>', PRODUCT:'<?php echo esc_js( __( 'Producto / legado', 'lealez' ) ); ?>' };
+            var STATE_LABELS = { LIVE:'<?php echo esc_js( __( 'Publicada', 'lealez' ) ); ?>', PROCESSING:'<?php echo esc_js( __( 'Procesando', 'lealez' ) ); ?>', SCHEDULED:'<?php echo esc_js( __( 'Programada', 'lealez' ) ); ?>', RECURRING:'<?php echo esc_js( __( 'Recurrente', 'lealez' ) ); ?>', REJECTED:'<?php echo esc_js( __( 'Rechazada', 'lealez' ) ); ?>', DELETED:'<?php echo esc_js( __( 'Eliminada', 'lealez' ) ); ?>', UNKNOWN:'<?php echo esc_js( __( 'Desconocido', 'lealez' ) ); ?>' };
+            var CTA_LABELS = { LEARN_MORE:'<?php echo esc_js( __( 'Más información', 'lealez' ) ); ?>', BOOK:'<?php echo esc_js( __( 'Reservar', 'lealez' ) ); ?>', ORDER:'<?php echo esc_js( __( 'Pedir', 'lealez' ) ); ?>', SHOP:'<?php echo esc_js( __( 'Comprar', 'lealez' ) ); ?>', SIGN_UP:'<?php echo esc_js( __( 'Registrarse', 'lealez' ) ); ?>', CALL:'<?php echo esc_js( __( 'Llamar ahora', 'lealez' ) ); ?>' };
 
-            /* CTA label mapping */
-            var CTA_LABELS = {
-                LEARN_MORE : '<?php echo esc_js( __( 'Más información', 'lealez' ) ); ?>',
-                BOOK       : '<?php echo esc_js( __( 'Reservar', 'lealez' ) ); ?>',
-                ORDER      : '<?php echo esc_js( __( 'Pedir', 'lealez' ) ); ?>',
-                SHOP       : '<?php echo esc_js( __( 'Comprar', 'lealez' ) ); ?>',
-                SIGN_UP    : '<?php echo esc_js( __( 'Registrarse', 'lealez' ) ); ?>',
-                CALL       : '<?php echo esc_js( __( 'Llamar ahora', 'lealez' ) ); ?>'
-            };
+            function escHtml(str){ return $('<div>').text(str || '').html(); }
+            function nl2br(str){ return escHtml(str || '').replace(/\n/g,'<br>'); }
+            function formatDate(isoStr){ if(!isoStr){return '—';} var d=new Date(isoStr); if(isNaN(d.getTime())){return isoStr;} return d.toLocaleString('es-CO',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+            function extractPostId(name){ var parts=(name || '').split('/'); return parts[parts.length-1] || ''; }
+            function postEmoji(type){ return {STANDARD:'📢',EVENT:'📅',OFFER:'🏷️',ALERT:'🔔',PRODUCT:'🛍️'}[type] || '📢'; }
+            function getPostImage(post){ var media=(post.media && post.media.length) ? post.media[0] : null; return media ? (media.googleUrl || media.sourceUrl || '') : ''; }
+            function showResult(kind,msg){ $('#oy-gmb-form-result').removeClass('success error info').addClass(kind).html(escHtml(msg)).show(); }
+            function clearResult(){ $('#oy-gmb-form-result').removeClass('success error info').hide().empty(); }
+            function setBusy(isBusy){ $('#oy-gmb-form-spinner').toggleClass('is-active', !!isBusy); $('#oy-gmb-post-form button').prop('disabled', !!isBusy); }
+            function api(action, data){ data = data || {}; data.action = action; data.nonce = NONCE; data.location_id = LOCATION_ID; data.business_id = BUSINESS_ID; data.gmb_loc_name = GMB_LOC; return $.post(AJAXURL, data); }
 
-            /* Type label mapping */
-            var TYPE_LABELS = {
-                STANDARD : '<?php echo esc_js( __( 'Actualizar', 'lealez' ) ); ?>',
-                OFFER    : '<?php echo esc_js( __( 'Oferta', 'lealez' ) ); ?>',
-                EVENT    : '<?php echo esc_js( __( 'Evento', 'lealez' ) ); ?>',
-                PRODUCT  : '<?php echo esc_js( __( 'Producto', 'lealez' ) ); ?>',
-                ALERT    : '<?php echo esc_js( __( 'Alerta', 'lealez' ) ); ?>'
-            };
+            function switchTab(tab){ $('.oy-gmb-posts-tab').removeClass('active'); $('.oy-gmb-posts-tab[data-tab="'+tab+'"]').addClass('active'); $('.oy-gmb-posts-pane').removeClass('active'); $('#oy-gmb-posts-tab-'+tab).addClass('active'); }
+            $(document).on('click','.oy-gmb-posts-tab',function(){ switchTab($(this).data('tab')); });
+            $(document).on('click','.oy-gmb-go-editor',function(){ resetEditor(); switchTab('editor'); });
 
-            /* State label mapping */
-            var STATE_LABELS = {
-                LIVE       : '<?php echo esc_js( __( 'Publicada', 'lealez' ) ); ?>',
-                PROCESSING : '<?php echo esc_js( __( 'Procesando', 'lealez' ) ); ?>',
-                REJECTED   : '<?php echo esc_js( __( 'Rechazada', 'lealez' ) ); ?>',
-                DELETED    : '<?php echo esc_js( __( 'Eliminada', 'lealez' ) ); ?>',
-                UNKNOWN    : '<?php echo esc_js( __( 'Desconocido', 'lealez' ) ); ?>'
-            };
-
-            /* All loaded posts (for client-side filter) */
-            var allPosts = [];
-
-            /* ── Utility ────────────────────────────────────────────── */
-            function formatDate( isoStr ) {
-                if ( ! isoStr ) return '—';
-                var d = new Date( isoStr );
-                if ( isNaN( d.getTime() ) ) return isoStr;
-                return d.toLocaleDateString( 'es-CO', { year:'numeric', month:'short', day:'numeric' } );
+            function fetchPosts(forceRefresh){
+                $('#oy-gmb-posts-list-container').html('<div class="oy-gmb-loading"><span class="spinner is-active"></span><?php echo esc_js( __( 'Cargando publicaciones…', 'lealez' ) ); ?></div>');
+                $('#oy-gmb-count').hide();
+                api('oy_gmb_posts_fetch', { force_refresh: forceRefresh ? 1 : 0 }).done(function(resp){
+                    if(resp && resp.success){ allPosts = resp.data.posts || []; renderPostsList(); }
+                    else { $('#oy-gmb-posts-list-container').html('<div class="oy-gmb-notice error">'+escHtml((resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'Error al cargar publicaciones.', 'lealez' ) ); ?>')+'</div>'); }
+                }).fail(function(){ $('#oy-gmb-posts-list-container').html('<div class="oy-gmb-notice error"><?php echo esc_js( __( 'Error de conexión al servidor.', 'lealez' ) ); ?></div>'); });
             }
 
-            function extractPostId( name ) {
-                /* name = "accounts/X/locations/Y/localPosts/Z" */
-                var parts = ( name || '' ).split( '/' );
-                return parts[ parts.length - 1 ] || '';
-            }
-
-            function escHtml( str ) {
-                return $('<div>').text( str || '' ).html();
-            }
-
-            /* ── Tab switching ─────────────────────────────────────── */
-            $( document ).on( 'click', '.oy-posts-tab-btn', function() {
-                var tab = $( this ).data( 'tab' );
-                $( '.oy-posts-tab-btn' ).removeClass( 'active' );
-                $( this ).addClass( 'active' );
-                $( '.oy-posts-tab-pane' ).removeClass( 'active' );
-                $( '#oy-posts-tab-' + tab ).addClass( 'active' );
-            });
-
-            /* ── Fetch posts ───────────────────────────────────────── */
-            function fetchPosts( forceRefresh ) {
-                $( '#oy-posts-list-container' ).html(
-                    '<div class="oy-posts-loading"><span class="spinner is-active"></span> <?php echo esc_js( __( 'Cargando publicaciones…', 'lealez' ) ); ?></div>'
-                );
-                $( '#oy-posts-count' ).hide();
-
-                $.post( AJAXURL, {
-                    action        : 'oy_gmb_posts_fetch',
-                    nonce         : NONCE,
-                    location_id   : LOCATION_ID,
-                    business_id   : BUSINESS_ID,
-                    gmb_loc_name  : GMB_LOC,
-                    force_refresh : forceRefresh ? 1 : 0
-                }, function( resp ) {
-                    if ( resp && resp.success ) {
-                        allPosts = resp.data.posts || [];
-                        renderPostsList( allPosts );
-                    } else {
-                        var msg = ( resp && resp.data && resp.data.message ) ? resp.data.message
-                                  : '<?php echo esc_js( __( 'Error al cargar publicaciones.', 'lealez' ) ); ?>';
-                        $( '#oy-posts-list-container' ).html(
-                            '<div class="oy-posts-notice error">' + escHtml( msg ) + '</div>'
-                        );
-                    }
-                } ).fail( function() {
-                    $( '#oy-posts-list-container' ).html(
-                        '<div class="oy-posts-notice error"><?php echo esc_js( __( 'Error de conexión al servidor.', 'lealez' ) ); ?></div>'
-                    );
-                });
-            }
-
-            /* ── Render post list ──────────────────────────────────── */
-            function renderPostsList( posts ) {
-                var typeFilter  = $( '#oy-posts-filter-type' ).val();
-                var stateFilter = $( '#oy-posts-filter-state' ).val();
-
-                var filtered = posts.filter( function( p ) {
-                    var type  = p.topicType || 'STANDARD';
-                    var state = p.state     || 'UNKNOWN';
-                    if ( typeFilter  && type  !== typeFilter  ) return false;
-                    if ( stateFilter && state !== stateFilter ) return false;
+            function renderPostsList(){
+                var typeFilter=$('#oy-gmb-filter-type').val();
+                var stateFilter=$('#oy-gmb-filter-state').val();
+                var search=($('#oy-gmb-filter-search').val() || '').toLowerCase();
+                var filtered=allPosts.filter(function(p){
+                    var type=p.topicType || 'STANDARD'; var state=p.state || 'UNKNOWN'; var txt=(p.summary || '').toLowerCase();
+                    if(typeFilter && type !== typeFilter){return false;}
+                    if(stateFilter && state !== stateFilter){return false;}
+                    if(search && txt.indexOf(search) === -1){return false;}
                     return true;
                 });
-
-                /* Count badge */
-                $( '#oy-posts-count' )
-                    .text( filtered.length + ' / ' + posts.length + ' <?php echo esc_js( __( 'publicaciones', 'lealez' ) ); ?>' )
-                    .show();
-
-                if ( ! filtered.length ) {
-                    $( '#oy-posts-list-container' ).html(
-                        '<div class="oy-posts-empty">' +
-                        '<span class="dashicons dashicons-megaphone"></span>' +
-                        '<p><?php echo esc_js( __( 'No se encontraron publicaciones con los filtros seleccionados.', 'lealez' ) ); ?></p>' +
-                        '</div>'
-                    );
-                    return;
-                }
-
-                var html = '<div class="oy-posts-grid">';
-                $.each( filtered, function( i, post ) {
-                    html += buildPostCard( post );
-                });
-                html += '</div>';
-
-                $( '#oy-posts-list-container' ).html( html );
+                $('#oy-gmb-count').text(filtered.length+' / '+allPosts.length+' <?php echo esc_js( __( 'publicaciones', 'lealez' ) ); ?>').show();
+                if(!filtered.length){ $('#oy-gmb-posts-list-container').html('<div class="oy-gmb-empty"><span class="dashicons dashicons-megaphone"></span><p><?php echo esc_js( __( 'No hay publicaciones con los filtros seleccionados.', 'lealez' ) ); ?></p></div>'); return; }
+                var html='<div class="oy-gmb-grid">'; $.each(filtered,function(i,p){ html += buildPostCard(p); }); html+='</div>'; $('#oy-gmb-posts-list-container').html(html);
             }
 
-            /* ── Build a single post card ──────────────────────────── */
-            function buildPostCard( post ) {
-                var name      = post.name     || '';
-                var postId    = extractPostId( name );
-                var type      = post.topicType || 'STANDARD';
-                var state     = post.state     || 'UNKNOWN';
-                var summary   = post.summary   || '';
-                var created   = post.createTime || '';
-                var updated   = post.updateTime || '';
-                var cta       = post.callToAction || {};
-                var media     = ( post.media && post.media.length ) ? post.media[0] : null;
-                var event     = post.event  || null;
-                var offer     = post.offer  || null;
-                var searchUrl = post.searchUrl || '';
-
-                var typeLabel  = TYPE_LABELS[ type ]  || type;
-                var stateLabel = STATE_LABELS[ state ] || state;
-
-                /* Image */
-                var imgHtml;
-                if ( media && media.googleUrl ) {
-                    imgHtml = '<img class="oy-post-card-image" src="' + escHtml( media.googleUrl ) + '" alt="" loading="lazy">';
-                } else {
-                    var emoji = { STANDARD:'📢', OFFER:'🏷️', EVENT:'📅', PRODUCT:'📦', ALERT:'🔔' };
-                    imgHtml = '<div class="oy-post-card-image-placeholder">' + ( emoji[ type ] || '📢' ) + '</div>';
-                }
-
-                /* CTA text */
-                var ctaHtml = '';
-                if ( cta.actionType && cta.actionType !== 'ACTION_TYPE_UNSPECIFIED' ) {
-                    var ctaLabel = CTA_LABELS[ cta.actionType ] || cta.actionType;
-                    ctaHtml = '<span class="oy-post-card-cta">🔗 ' + escHtml( ctaLabel ) + '</span>';
-                }
-
-                /* Event detail */
-                var extraHtml = '';
-                if ( event ) {
-                    var evTitle = event.title || '';
-                    var sched   = event.schedule || {};
-                    var start   = sched.startDate ? ( sched.startDate.year + '-' + ( '0' + sched.startDate.month ).slice(-2) + '-' + ( '0' + sched.startDate.day ).slice(-2) ) : '';
-                    var end     = sched.endDate   ? ( sched.endDate.year   + '-' + ( '0' + sched.endDate.month   ).slice(-2) + '-' + ( '0' + sched.endDate.day   ).slice(-2) ) : '';
-                    extraHtml = '<div class="oy-post-card-extra">' +
-                        '<strong>📅 <?php echo esc_js( __( 'Evento', 'lealez' ) ); ?>:</strong> ' + escHtml( evTitle ) +
-                        ( start ? ' · ' + formatDate( start ) : '' ) +
-                        ( end && end !== start ? ' → ' + formatDate( end ) : '' ) +
-                        '</div>';
-                }
-                if ( offer ) {
-                    var coupon = offer.couponCode || '';
-                    extraHtml = '<div class="oy-post-card-extra">' +
-                        '<strong>🏷️ <?php echo esc_js( __( 'Oferta', 'lealez' ) ); ?>:</strong>' +
-                        ( coupon ? ' <?php echo esc_js( __( 'Cupón:', 'lealez' ) ); ?> <code>' + escHtml( coupon ) + '</code>' : '' ) +
-                        '</div>';
-                }
-
-                /* Delete button (solo si no está en Processing) */
-                var deleteBtn = '';
-                if ( postId && state !== 'PROCESSING' ) {
-                    deleteBtn = '<button type="button" class="button-link button-link-delete oy-post-delete-btn"' +
-                        ' data-post-name="' + escHtml( name ) + '"' +
-                        ' data-post-id="' + escHtml( postId ) + '"' +
-                        ' title="<?php echo esc_js( __( 'Eliminar publicación', 'lealez' ) ); ?>">' +
-                        '🗑️ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?></button>';
-                }
-
-                /* View on GMB link */
-                var viewBtn = searchUrl
-                    ? '<a href="' + escHtml( searchUrl ) + '" target="_blank" class="button button-small">' +
-                      '🔗 <?php echo esc_js( __( 'Ver', 'lealez' ) ); ?></a>'
-                    : '';
-
-                return '<div class="oy-post-card" data-post-name="' + escHtml( name ) + '">' +
-                    imgHtml +
-                    '<div class="oy-post-card-body">' +
-                        '<div class="oy-post-card-badges">' +
-                            '<span class="oy-badge oy-badge-type-' + escHtml( type ) + '">' + escHtml( typeLabel ) + '</span>' +
-                            '<span class="oy-badge oy-badge-state-' + escHtml( state ) + '">' + escHtml( stateLabel ) + '</span>' +
-                        '</div>' +
-                        ( summary ? '<p class="oy-post-card-summary">' + escHtml( summary ) + '</p>' : '' ) +
-                        extraHtml +
-                        '<div class="oy-post-card-meta">' +
-                            '<span>🕐 ' + formatDate( updated || created ) + '</span>' +
-                            ctaHtml +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="oy-post-card-actions">' +
-                        viewBtn + ' ' + deleteBtn +
-                    '</div>' +
-                '</div>';
+            function buildPostCard(post){
+                var name=post.name || ''; var type=post.topicType || 'STANDARD'; var state=post.state || 'UNKNOWN'; var summary=post.summary || ''; var postId=extractPostId(name); var img=getPostImage(post); var cta=post.callToAction || {}; var event=post.event || null; var offer=post.offer || null; var searchUrl=post.searchUrl || '';
+                var mediaHtml = img ? '<img src="'+escHtml(img)+'" alt="" loading="lazy">' : postEmoji(type);
+                var ctaHtml = (cta.actionType && cta.actionType !== 'ACTION_TYPE_UNSPECIFIED') ? '<span>🔗 '+escHtml(CTA_LABELS[cta.actionType] || cta.actionType)+'</span>' : '';
+                var extra='';
+                if(event){ extra += '<strong>'+escHtml(event.title || '<?php echo esc_js( __( 'Evento / oferta', 'lealez' ) ); ?>')+'</strong>'; if(event.schedule){ extra += '<br>'+escHtml(scheduleText(event.schedule)); } }
+                if(offer){ if(offer.couponCode){ extra += '<br>🎟️ '+escHtml(offer.couponCode); } if(offer.termsConditions){ extra += '<br>'+escHtml(offer.termsConditions); } }
+                return '<div class="oy-gmb-card" data-post-name="'+escHtml(name)+'">'+
+                    '<div class="oy-gmb-card-media">'+mediaHtml+'</div>'+
+                    '<div class="oy-gmb-card-body">'+
+                    '<div class="oy-gmb-card-badges"><span class="oy-gmb-badge">'+escHtml(TYPE_LABELS[type] || type)+'</span><span class="oy-gmb-badge state-'+escHtml(state.toLowerCase())+'">'+escHtml(STATE_LABELS[state] || state)+'</span></div>'+
+                    '<div class="oy-gmb-card-summary">'+nl2br(summary || '—')+'</div>'+
+                    (extra ? '<div class="oy-gmb-card-extra">'+extra+'</div>' : '')+
+                    '<div class="oy-gmb-card-meta"><span>ID: '+escHtml(postId)+'</span><span>🕐 '+escHtml(formatDate(post.updateTime || post.createTime || post.scheduledTime))+'</span>'+ctaHtml+'</div>'+
+                    '<div class="oy-gmb-card-actions">'+
+                    (searchUrl ? '<a class="button button-small" href="'+escHtml(searchUrl)+'" target="_blank" rel="noopener">👁️ <?php echo esc_js( __( 'Ver', 'lealez' ) ); ?></a>' : '')+
+                    '<button type="button" class="button button-small oy-gmb-edit-post" data-post-name="'+escHtml(name)+'">✏️ <?php echo esc_js( __( 'Editar', 'lealez' ) ); ?></button>'+
+                    '<button type="button" class="button button-small oy-gmb-duplicate-post" data-post-name="'+escHtml(name)+'">📄 <?php echo esc_js( __( 'Duplicar', 'lealez' ) ); ?></button>'+
+                    '<button type="button" class="button button-small oy-gmb-get-post" data-post-name="'+escHtml(name)+'">🔎 <?php echo esc_js( __( 'Detalle', 'lealez' ) ); ?></button>'+
+                    '<button type="button" class="button button-small oy-gmb-insights-post" data-post-name="'+escHtml(name)+'">📊 <?php echo esc_js( __( 'Insights', 'lealez' ) ); ?></button>'+
+                    '<button type="button" class="button-link button-link-delete oy-gmb-delete-post" data-post-name="'+escHtml(name)+'">🗑️ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?></button>'+
+                    '</div></div></div>';
             }
 
-            /* ── Filter change ─────────────────────────────────────── */
-            $( document ).on( 'change', '#oy-posts-filter-type, #oy-posts-filter-state', function() {
-                if ( allPosts.length ) {
-                    renderPostsList( allPosts );
-                }
-            });
-
-            /* ── Refresh button ────────────────────────────────────── */
-            $( document ).on( 'click', '#oy-posts-btn-refresh', function() {
-                fetchPosts( true );
-            });
-
-            /* ── Delete post ───────────────────────────────────────── */
-            $( document ).on( 'click', '.oy-post-delete-btn', function() {
-                var $btn     = $( this );
-                var postName = $btn.data( 'post-name' );
-                var confirm  = window.confirm( '<?php echo esc_js( __( '¿Estás seguro que deseas eliminar esta publicación de Google My Business? Esta acción no se puede deshacer.', 'lealez' ) ); ?>' );
-                if ( ! confirm ) return;
-
-                $btn.prop( 'disabled', true ).text( '⏳' );
-
-                $.post( AJAXURL, {
-                    action      : 'oy_gmb_posts_delete',
-                    nonce       : NONCE,
-                    location_id : LOCATION_ID,
-                    business_id : BUSINESS_ID,
-                    gmb_loc_name: GMB_LOC,
-                    post_name   : postName
-                }, function( resp ) {
-                    if ( resp && resp.success ) {
-                        /* Remove from allPosts and re-render */
-                        allPosts = allPosts.filter( function( p ) {
-                            return p.name !== postName;
-                        });
-                        renderPostsList( allPosts );
-                    } else {
-                        var msg = ( resp && resp.data && resp.data.message ) ? resp.data.message
-                                  : '<?php echo esc_js( __( 'Error al eliminar la publicación.', 'lealez' ) ); ?>';
-                        alert( msg );
-                        $btn.prop( 'disabled', false ).text( '🗑️ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?>' );
-                    }
-                }).fail( function() {
-                    alert( '<?php echo esc_js( __( 'Error de conexión al servidor.', 'lealez' ) ); ?>' );
-                    $btn.prop( 'disabled', false ).text( '🗑️ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?>' );
-                });
-            });
-
-            /* ── Topic type selector ───────────────────────────────── */
-            $( document ).on( 'click keypress', '.oy-topic-type-option', function( e ) {
-                if ( e.type === 'keypress' && e.which !== 13 && e.which !== 32 ) return;
-                var type = $( this ).data( 'type' );
-                $( '.oy-topic-type-option' ).removeClass( 'selected' ).attr( 'aria-pressed', 'false' );
-                $( this ).addClass( 'selected' ).attr( 'aria-pressed', 'true' );
-                $( '#oy-new-post-topic-type' ).val( type );
-
-                /* Show/hide conditional fields */
-                $( '.oy-conditional-fields' ).removeClass( 'visible' );
-                if ( type === 'EVENT' ) {
-                    $( '#oy-event-fields' ).addClass( 'visible' );
-                } else if ( type === 'OFFER' ) {
-                    $( '#oy-offer-fields' ).addClass( 'visible' );
-                }
-            });
-
-            /* ── Char counter for summary ──────────────────────────── */
-            $( document ).on( 'input', '#oy-new-post-summary', function() {
-                var len = $( this ).val().length;
-                var $counter = $( '#oy-summary-chars' );
-                $counter.text( len );
-                $counter.closest( '.oy-char-counter' ).toggleClass( 'over', len > 1500 );
-            });
-
-            /* ── CTA type: hide URL field for CALL ─────────────────── */
-            $( document ).on( 'change', '#oy-new-post-cta-type', function() {
-                var val = $( this ).val();
-                $( '#oy-cta-url-wrap' ).toggle( val !== '' && val !== 'CALL' );
-            });
-
-            /* ── Form submit ───────────────────────────────────────── */
-            $( '#oy-new-post-form' ).on( 'submit', function( e ) {
-                e.preventDefault();
-
-                var $form    = $( this );
-                var $submit  = $( '#oy-new-post-submit' );
-                var $spinner = $( '#oy-new-post-spinner' );
-                var $result  = $( '#oy-new-post-result' );
-
-                $result.removeClass( 'success error info' ).hide().text( '' );
-
-                /* Validate */
-                var summary = $.trim( $( '#oy-new-post-summary' ).val() );
-                if ( ! summary ) {
-                    $result.addClass( 'error' )
-                        .text( '<?php echo esc_js( __( 'La descripción es obligatoria.', 'lealez' ) ); ?>' );
-                    return;
-                }
-                if ( summary.length > 1500 ) {
-                    $result.addClass( 'error' )
-                        .text( '<?php echo esc_js( __( 'La descripción supera el límite de 1,500 caracteres.', 'lealez' ) ); ?>' );
-                    return;
-                }
-
-                var topicType = $( '#oy-new-post-topic-type' ).val();
-                if ( topicType === 'EVENT' && ! $.trim( $( '#oy-new-post-event-title' ).val() ) ) {
-                    $result.addClass( 'error' )
-                        .text( '<?php echo esc_js( __( 'El título del evento es obligatorio.', 'lealez' ) ); ?>' );
-                    return;
-                }
-
-                $submit.prop( 'disabled', true );
-                $spinner.addClass( 'is-active' ).css( 'visibility', 'visible' );
-
-                var postData = {
-                    action       : 'oy_gmb_posts_create',
-                    nonce        : NONCE,
-                    location_id  : LOCATION_ID,
-                    business_id  : BUSINESS_ID,
-                    gmb_loc_name : GMB_LOC,
-                    topic_type   : topicType,
-                    summary      : summary,
-                    image_url    : $.trim( $( '#oy-new-post-image-url' ).val() ),
-                    cta_type     : $( '#oy-new-post-cta-type' ).val(),
-                    cta_url      : $.trim( $( '#oy-new-post-cta-url' ).val() ),
-                    event_title      : $.trim( $( '#oy-new-post-event-title' ).val() ),
-                    event_start_date : $( '#oy-new-post-event-start-date' ).val(),
-                    event_end_date   : $( '#oy-new-post-event-end-date' ).val(),
-                    coupon_code  : $.trim( $( '#oy-new-post-coupon' ).val() ),
-                    redeem_url   : $.trim( $( '#oy-new-post-redeem-url' ).val() ),
-                    offer_terms  : $.trim( $( '#oy-new-post-offer-terms' ).val() )
-                };
-
-                $.post( AJAXURL, postData, function( resp ) {
-                    if ( resp && resp.success ) {
-                        $result.addClass( 'success' )
-                            .text( resp.data.message || '<?php echo esc_js( __( 'Publicación creada correctamente.', 'lealez' ) ); ?>' );
-                        $form[ 0 ].reset();
-                        $( '#oy-summary-chars' ).text( '0' );
-                        $( '.oy-conditional-fields' ).removeClass( 'visible' );
-                        /* Refresh list after a short delay */
-                        setTimeout( function() {
-                            fetchPosts( true );
-                            /* Switch back to list tab */
-                            $( '.oy-posts-tab-btn[data-tab="list"]' ).trigger( 'click' );
-                        }, 1500 );
-                    } else {
-                        var msg = ( resp && resp.data && resp.data.message ) ? resp.data.message
-                                  : '<?php echo esc_js( __( 'Error al crear la publicación.', 'lealez' ) ); ?>';
-                        $result.addClass( 'error' ).text( msg );
-                    }
-                }).fail( function() {
-                    $result.addClass( 'error' ).text( '<?php echo esc_js( __( 'Error de conexión al servidor.', 'lealez' ) ); ?>' );
-                }).always( function() {
-                    $submit.prop( 'disabled', false );
-                    $spinner.removeClass( 'is-active' ).css( 'visibility', 'hidden' );
-                });
-            });
-
-            /* ── Form reset ────────────────────────────────────────── */
-            $( '#oy-new-post-reset' ).on( 'click', function() {
-                $( '#oy-new-post-result' ).removeClass( 'success error info' ).hide().text( '' );
-                $( '#oy-summary-chars' ).text( '0' );
-                $( '.oy-conditional-fields' ).removeClass( 'visible' );
-                $( '.oy-topic-type-option' ).removeClass( 'selected' ).attr( 'aria-pressed', 'false' );
-                $( '.oy-topic-type-option[data-type="STANDARD"]' ).addClass( 'selected' ).attr( 'aria-pressed', 'true' );
-                $( '#oy-new-post-topic-type' ).val( 'STANDARD' );
-            });
-
-            /* ── Auto-load on page ready ───────────────────────────── */
-            if ( PRELOADED_POSTS && PRELOADED_POSTS.length > 0 ) {
-                // Tenemos caché guardado — renderizar sin petición AJAX
-                allPosts = PRELOADED_POSTS.slice();
-                renderPostsList( allPosts );
-            } else {
-                // Sin caché — traer desde GMB
-                fetchPosts( false );
+            function scheduleText(schedule){
+                function d(o){ return o ? [o.year, ('0'+o.month).slice(-2), ('0'+o.day).slice(-2)].join('-') : ''; }
+                function t(o){ return o ? [('0'+(o.hours || 0)).slice(-2), ('0'+(o.minutes || 0)).slice(-2)].join(':') : ''; }
+                var a=d(schedule.startDate), b=d(schedule.endDate), c=t(schedule.startTime), e=t(schedule.endTime);
+                return [a,c,'→',b,e].join(' ').trim();
             }
 
-            /* ── Escuchar evento de sincronización automatizada ────── */
-            $( document ).on( 'oy:gmb:posts:refreshed', function() {
-                fetchPosts( false );
-            });
+            function formDataObject(){
+                var arr=$('#oy-gmb-post-form').serializeArray(); var data={};
+                $.each(arr,function(_,item){
+                    if(item.name === 'recurrence_weekly_days[]'){
+                        if(!data.recurrence_weekly_days){ data.recurrence_weekly_days=[]; }
+                        data.recurrence_weekly_days.push(item.value);
+                    } else { data[item.name]=item.value; }
+                });
+                if(!data.recurrence_weekly_days){ data.recurrence_weekly_days=[]; }
+                return data;
+            }
 
+            function fillForm(data, mode){
+                resetEditor(false);
+                data=data || {}; mode=mode || 'create';
+                $('#oy-gmb-editor-mode').val(mode);
+                $('#oy-gmb-draft-id').val(data.draft_id || '');
+                $('#oy-gmb-post-name').val(data.post_name || data.name || '');
+                $('#oy-gmb-topic-type').val(data.topic_type || data.topicType || 'STANDARD');
+                $('#oy-gmb-language-code').val(data.language_code || data.languageCode || 'es');
+                $('#oy-gmb-summary').val(data.summary || '');
+                $('#oy-gmb-image-url').val(data.image_url || data.imageUrl || getPostImage(data) || '');
+                var cta=data.callToAction || {}; $('#oy-gmb-cta-type').val(data.cta_type || cta.actionType || 'ACTION_TYPE_UNSPECIFIED'); $('#oy-gmb-cta-url').val(data.cta_url || cta.url || '');
+                if(data.scheduled_time){ $('#oy-gmb-scheduled-time').val(data.scheduled_time); } else if(data.scheduledTime){ $('#oy-gmb-scheduled-time').val(toDatetimeLocal(data.scheduledTime)); }
+                var event=data.event || {}; var schedule=event.schedule || {};
+                $('#oy-gmb-event-title').val(data.event_title || event.title || '');
+                $('#oy-gmb-event-start-date').val(data.event_start_date || dateObjToInput(schedule.startDate));
+                $('#oy-gmb-event-end-date').val(data.event_end_date || dateObjToInput(schedule.endDate));
+                $('#oy-gmb-event-start-time').val(data.event_start_time || timeObjToInput(schedule.startTime));
+                $('#oy-gmb-event-end-time').val(data.event_end_time || timeObjToInput(schedule.endTime));
+                var offer=data.offer || {}; $('#oy-gmb-coupon-code').val(data.coupon_code || offer.couponCode || ''); $('#oy-gmb-redeem-url').val(data.redeem_url || offer.redeemOnlineUrl || ''); $('#oy-gmb-offer-terms').val(data.offer_terms || offer.termsConditions || '');
+                $('#oy-gmb-alert-type').val(data.alert_type || data.alertType || 'COVID_19');
+                $('#oy-gmb-recurrence-type').val(data.recurrence_type || recurrenceTypeFromEvent(event) || 'none');
+                $('#oy-gmb-recurrence-end-time').val(data.recurrence_end_time || (event.recurrenceInfo && event.recurrenceInfo.seriesEndTime ? toDatetimeLocal(event.recurrenceInfo.seriesEndTime) : ''));
+                $('#oy-gmb-recurrence-monthly-day').val(data.recurrence_monthly_day || (event.recurrenceInfo && event.recurrenceInfo.monthlyPattern ? event.recurrenceInfo.monthlyPattern.dayOfMonth || '' : ''));
+                $('input[name="recurrence_weekly_days[]"]').prop('checked', false);
+                var days=data.recurrence_weekly_days || (event.recurrenceInfo && event.recurrenceInfo.weeklyPattern ? event.recurrenceInfo.weeklyPattern.daysOfWeek || [] : []);
+                $.each(days,function(_,day){ $('input[name="recurrence_weekly_days[]"][value="'+day+'"]').prop('checked', true); });
+                refreshConditionalFields(); updatePreview(); updateActionButtons(); switchTab('editor');
+            }
+
+            function resetEditor(doPreview){
+                $('#oy-gmb-post-form')[0].reset(); $('#oy-gmb-editor-mode').val('create'); $('#oy-gmb-draft-id').val(''); $('#oy-gmb-post-name').val(''); clearResult(); refreshConditionalFields(); updateActionButtons(); if(doPreview !== false){ updatePreview(); }
+            }
+            function toDatetimeLocal(iso){ var d=new Date(iso); if(isNaN(d.getTime())){return '';} var z=function(n){return ('0'+n).slice(-2);}; return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+'T'+z(d.getHours())+':'+z(d.getMinutes()); }
+            function dateObjToInput(o){ return o ? [o.year,('0'+o.month).slice(-2),('0'+o.day).slice(-2)].join('-') : ''; }
+            function timeObjToInput(o){ return o ? [('0'+(o.hours || 0)).slice(-2),('0'+(o.minutes || 0)).slice(-2)].join(':') : ''; }
+            function recurrenceTypeFromEvent(event){ if(!event || !event.recurrenceInfo){return 'none';} if(event.recurrenceInfo.dailyPattern){return 'daily';} if(event.recurrenceInfo.weeklyPattern){return 'weekly';} if(event.recurrenceInfo.monthlyPattern){return 'monthly';} return 'none'; }
+
+            function refreshConditionalFields(){
+                var type=$('#oy-gmb-topic-type').val(); var cta=$('#oy-gmb-cta-type').val(); var rec=$('#oy-gmb-recurrence-type').val();
+                $('.oy-gmb-event-offer-fields').toggleClass('oy-gmb-section-hidden', !(type === 'EVENT' || type === 'OFFER'));
+                $('.oy-gmb-offer-fields').toggleClass('oy-gmb-section-hidden', type !== 'OFFER');
+                $('.oy-gmb-alert-fields').toggleClass('oy-gmb-section-hidden', type !== 'ALERT');
+                $('#oy-gmb-cta-url-row').toggleClass('oy-gmb-section-hidden', cta === 'CALL' || cta === 'ACTION_TYPE_UNSPECIFIED');
+                $('.oy-gmb-recurrence-weekly').toggleClass('oy-gmb-section-hidden', rec !== 'weekly');
+                $('.oy-gmb-recurrence-monthly').toggleClass('oy-gmb-section-hidden', rec !== 'monthly');
+            }
+            function updateActionButtons(){ var mode=$('#oy-gmb-editor-mode').val(); $('#oy-gmb-update-post').toggleClass('oy-gmb-section-hidden', mode !== 'edit_gmb'); $('#oy-gmb-publish-post').toggleClass('oy-gmb-section-hidden', mode === 'edit_gmb'); }
+
+            function updatePreview(){
+                var d=formDataObject(); var type=d.topic_type || 'STANDARD'; var image=d.image_url || '';
+                $('#oy-gmb-summary-count').text((d.summary || '').length).parent().toggleClass('over',(d.summary || '').length > 1500);
+                $('#oy-gmb-preview-media').html(image ? '<img src="'+escHtml(image)+'" alt="">' : postEmoji(type));
+                $('#oy-gmb-preview-badges').html('<span class="oy-gmb-badge">'+escHtml(TYPE_LABELS[type] || type)+'</span>'+(d.scheduled_time ? '<span class="oy-gmb-badge state-scheduled"><?php echo esc_js( __( 'Programada', 'lealez' ) ); ?></span>' : ''));
+                $('#oy-gmb-preview-summary').html(nl2br(d.summary || '<?php echo esc_js( __( 'La vista previa aparecerá mientras escribes.', 'lealez' ) ); ?>'));
+                var extra=''; if(type === 'EVENT' || type === 'OFFER'){ extra += '<strong>'+escHtml(d.event_title || '<?php echo esc_js( __( 'Título evento/oferta', 'lealez' ) ); ?>')+'</strong>'; if(d.event_start_date || d.event_end_date){ extra += '<br>'+escHtml((d.event_start_date || '')+' '+(d.event_start_time || '')+' → '+(d.event_end_date || '')+' '+(d.event_end_time || '')); } } if(type === 'OFFER' && d.coupon_code){ extra += '<br>🎟️ '+escHtml(d.coupon_code); }
+                $('#oy-gmb-preview-extra').toggle(!!extra).html(extra);
+            }
+            $(document).on('change input','#oy-gmb-post-form input,#oy-gmb-post-form select,#oy-gmb-post-form textarea',function(){ refreshConditionalFields(); updatePreview(); });
+            $('#oy-gmb-reset-form').on('click',function(){ resetEditor(); });
+
+            function saveDraft(){
+                clearResult(); setBusy(true);
+                api('oy_gmb_posts_save_draft', formDataObject()).done(function(resp){
+                    if(resp && resp.success){ drafts=resp.data.drafts || []; renderDrafts(); $('#oy-gmb-draft-id').val(resp.data.draft.draft_id || ''); showResult('success', resp.data.message || '<?php echo esc_js( __( 'Borrador guardado.', 'lealez' ) ); ?>'); }
+                    else { showResult('error', (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo guardar el borrador.', 'lealez' ) ); ?>'); }
+                }).fail(function(){ showResult('error','<?php echo esc_js( __( 'Error de conexión al guardar borrador.', 'lealez' ) ); ?>'); }).always(function(){ setBusy(false); });
+            }
+            $('#oy-gmb-save-draft').on('click', saveDraft);
+
+            function submitToGoogle(isUpdate){
+                clearResult(); setBusy(true);
+                var action=isUpdate ? 'oy_gmb_posts_update' : 'oy_gmb_posts_create';
+                api(action, formDataObject()).done(function(resp){
+                    if(resp && resp.success){ showResult('success', resp.data.message || '<?php echo esc_js( __( 'Operación completada.', 'lealez' ) ); ?>'); fetchPosts(true); if(!isUpdate){ resetEditor(false); } }
+                    else { showResult('error', (resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'Google rechazó la solicitud.', 'lealez' ) ); ?>'); }
+                }).fail(function(){ showResult('error','<?php echo esc_js( __( 'Error de conexión con el servidor.', 'lealez' ) ); ?>'); }).always(function(){ setBusy(false); });
+            }
+            $('#oy-gmb-publish-post').on('click',function(){ submitToGoogle(false); });
+            $('#oy-gmb-update-post').on('click',function(){ submitToGoogle(true); });
+
+            function renderDrafts(){
+                $('#oy-gmb-drafts-tab-count').text(drafts.length ? '('+drafts.length+')' : '');
+                if(!drafts.length){ $('#oy-gmb-drafts-container').html('<div class="oy-gmb-empty"><span class="dashicons dashicons-saved"></span><p><?php echo esc_js( __( 'No hay borradores locales guardados.', 'lealez' ) ); ?></p></div>'); return; }
+                var html='<table class="oy-gmb-drafts-table"><thead><tr><th><?php echo esc_js( __( 'Tipo', 'lealez' ) ); ?></th><th><?php echo esc_js( __( 'Resumen', 'lealez' ) ); ?></th><th><?php echo esc_js( __( 'Actualizado', 'lealez' ) ); ?></th><th><?php echo esc_js( __( 'Acciones', 'lealez' ) ); ?></th></tr></thead><tbody>';
+                $.each(drafts,function(i,d){ html += '<tr><td><span class="oy-gmb-badge">'+escHtml(TYPE_LABELS[d.topic_type] || d.topic_type || 'STANDARD')+'</span></td><td>'+nl2br((d.summary || '').substring(0,180))+'</td><td class="oy-gmb-muted">'+escHtml(formatDate(d.updated_at || d.created_at))+'</td><td class="actions"><button type="button" class="button button-small oy-gmb-edit-draft" data-draft-id="'+escHtml(d.draft_id)+'">✏️ <?php echo esc_js( __( 'Editar', 'lealez' ) ); ?></button> <button type="button" class="button button-small oy-gmb-publish-draft" data-draft-id="'+escHtml(d.draft_id)+'">🚀 <?php echo esc_js( __( 'Publicar', 'lealez' ) ); ?></button> <button type="button" class="button-link button-link-delete oy-gmb-delete-draft" data-draft-id="'+escHtml(d.draft_id)+'">🗑️ <?php echo esc_js( __( 'Eliminar', 'lealez' ) ); ?></button></td></tr>'; });
+                html+='</tbody></table>'; $('#oy-gmb-drafts-container').html(html);
+            }
+            function findDraft(id){ for(var i=0;i<drafts.length;i++){ if(drafts[i].draft_id === id){ return drafts[i]; } } return null; }
+            $(document).on('click','.oy-gmb-edit-draft',function(){ var d=findDraft($(this).data('draft-id')); if(d){ fillForm(d,'create'); $('#oy-gmb-draft-id').val(d.draft_id); } });
+            $(document).on('click','.oy-gmb-publish-draft',function(){ var d=findDraft($(this).data('draft-id')); if(d){ fillForm(d,'create'); submitToGoogle(false); } });
+            $(document).on('click','.oy-gmb-delete-draft',function(){ var id=$(this).data('draft-id'); if(!confirm('<?php echo esc_js( __( '¿Eliminar este borrador local?', 'lealez' ) ); ?>')){return;} api('oy_gmb_posts_delete_draft',{draft_id:id}).done(function(resp){ if(resp && resp.success){ drafts=resp.data.drafts || []; renderDrafts(); } else { alert((resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo eliminar el borrador.', 'lealez' ) ); ?>'); } }); });
+
+            function findPost(name){ for(var i=0;i<allPosts.length;i++){ if(allPosts[i].name === name){ return allPosts[i]; } } return null; }
+            $(document).on('click','.oy-gmb-edit-post',function(){ var p=findPost($(this).data('post-name')); if(p){ p.post_name=p.name; fillForm(p,'edit_gmb'); } });
+            $(document).on('click','.oy-gmb-duplicate-post',function(){ var p=findPost($(this).data('post-name')); if(p){ p.post_name=''; fillForm(p,'create'); $('#oy-gmb-post-name').val(''); showResult('info','<?php echo esc_js( __( 'Publicación duplicada como borrador editable. Guarda o publica cuando esté lista.', 'lealez' ) ); ?>'); } });
+            $(document).on('click','.oy-gmb-delete-post',function(){ var name=$(this).data('post-name'); if(!confirm('<?php echo esc_js( __( '¿Eliminar esta publicación de Google? Esta acción se reflejará en GMB.', 'lealez' ) ); ?>')){return;} api('oy_gmb_posts_delete',{post_name:name}).done(function(resp){ if(resp && resp.success){ fetchPosts(true); } else { alert((resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo eliminar.', 'lealez' ) ); ?>'); } }); });
+            $(document).on('click','.oy-gmb-get-post',function(){ var name=$(this).data('post-name'); api('oy_gmb_posts_get',{post_name:name}).done(function(resp){ if(resp && resp.success){ var p=resp.data.post || {}; alert('<?php echo esc_js( __( 'Detalle recibido desde GMB:', 'lealez' ) ); ?>\n\n'+JSON.stringify(p,null,2).substring(0,2500)); } else { alert((resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudo obtener el detalle.', 'lealez' ) ); ?>'); } }); });
+            $(document).on('click','.oy-gmb-insights-post',function(){ var name=$(this).data('post-name'); api('oy_gmb_posts_insights',{post_name:name}).done(function(resp){ if(resp && resp.success){ alert('<?php echo esc_js( __( 'Insights devueltos por Google:', 'lealez' ) ); ?>\n\n'+JSON.stringify(resp.data.insights || {},null,2).substring(0,2500)); } else { alert((resp && resp.data && resp.data.message) ? resp.data.message : '<?php echo esc_js( __( 'No se pudieron obtener insights.', 'lealez' ) ); ?>'); } }); });
+
+            $('#oy-gmb-btn-refresh').on('click',function(){ fetchPosts(true); });
+            $('#oy-gmb-filter-type,#oy-gmb-filter-state').on('change', renderPostsList);
+            $('#oy-gmb-filter-search').on('input', renderPostsList);
+            $(document).on('oy:gmb:posts:refreshed',function(){ fetchPosts(false); });
+
+            refreshConditionalFields(); updatePreview(); renderDrafts();
+            if(allPosts && allPosts.length){ renderPostsList(); } else { fetchPosts(false); }
         })(jQuery);
         </script>
         <?php
     }
 
     // =========================================================================
-    // AJAX HANDLERS
+    // AJAX: GMB
     // =========================================================================
 
     /**
-     * AJAX: Obtiene la lista de publicaciones desde GMB (localPosts v4)
+     * AJAX: Lista publicaciones desde GMB.
      */
     public function ajax_fetch_posts() {
-        // Verificar nonce
-        if ( ! check_ajax_referer( self::NONCE_KEY, 'nonce', false ) ) {
-            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+        $context = $this->validate_ajax_context();
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
         }
 
-        // Verificar capacidades
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
-        }
-
-        $location_id   = absint( $_POST['location_id'] ?? 0 );
-        $business_id   = absint( $_POST['business_id'] ?? 0 );
-        $gmb_loc_name  = sanitize_text_field( $_POST['gmb_loc_name'] ?? '' );
         $force_refresh = ! empty( $_POST['force_refresh'] );
-
-        if ( ! $location_id || ! $business_id || empty( $gmb_loc_name ) ) {
-            wp_send_json_error( array( 'message' => __( 'Parámetros incompletos.', 'lealez' ) ) );
-        }
-
-        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-            wp_send_json_error( array( 'message' => __( 'API de Google My Business no disponible.', 'lealez' ) ) );
-        }
-
-        $result = Lealez_GMB_API::get_location_local_posts( $business_id, $gmb_loc_name, ! $force_refresh );
+        $result = Lealez_GMB_API::get_location_local_posts( $context['business_id'], $context['gmb_loc_name'], ! $force_refresh );
 
         if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array(
-                'message' => $result->get_error_message(),
-                'code'    => $result->get_error_code(),
-            ) );
+            $this->send_error( $result );
         }
 
-        $posts_list = $result['localPosts'] ?? array();
-
-        // Persistir la lista de publicaciones para precarga al reabrir la página
-        if ( ! empty( $posts_list ) && is_array( $posts_list ) ) {
-            update_post_meta( $location_id, '_gmb_posts_cache', $posts_list );
-            update_post_meta( $location_id, '_gmb_posts_last_sync', time() );
-        }
+        $posts_list = isset( $result['localPosts'] ) && is_array( $result['localPosts'] ) ? $result['localPosts'] : array();
+        update_post_meta( $context['location_id'], self::META_CACHE, $posts_list );
+        update_post_meta( $context['location_id'], self::META_LAST_SYNC, time() );
 
         wp_send_json_success( array(
             'posts' => $posts_list,
-            'total' => $result['total'] ?? 0,
+            'total' => isset( $result['total'] ) ? (int) $result['total'] : count( $posts_list ),
         ) );
     }
 
     /**
-     * AJAX: Crea una nueva publicación en GMB (localPosts POST v4)
+     * AJAX: Obtiene una publicación específica desde GMB.
+     */
+    public function ajax_get_post() {
+        $context = $this->validate_ajax_context();
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        $post_name = sanitize_text_field( wp_unslash( $_POST['post_name'] ?? '' ) );
+        if ( empty( $post_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Falta el nombre de la publicación.', 'lealez' ) ) );
+        }
+
+        $result = Lealez_GMB_API::get_location_local_post( $context['business_id'], $post_name, false );
+        if ( is_wp_error( $result ) ) {
+            $this->send_error( $result );
+        }
+
+        wp_send_json_success( array( 'post' => $result ) );
+    }
+
+    /**
+     * AJAX: Crea publicación en GMB.
      */
     public function ajax_create_post() {
-        // Verificar nonce
-        if ( ! check_ajax_referer( self::NONCE_KEY, 'nonce', false ) ) {
-            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+        $context = $this->validate_ajax_context();
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
         }
 
-        if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
+        $built = $this->build_payload_from_request();
+        if ( is_wp_error( $built ) ) {
+            $this->send_error( $built );
         }
 
-        $location_id  = absint( $_POST['location_id'] ?? 0 );
-        $business_id  = absint( $_POST['business_id'] ?? 0 );
-        $gmb_loc_name = sanitize_text_field( $_POST['gmb_loc_name'] ?? '' );
-
-        if ( ! $location_id || ! $business_id || empty( $gmb_loc_name ) ) {
-            wp_send_json_error( array( 'message' => __( 'Parámetros incompletos.', 'lealez' ) ) );
-        }
-
-        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-            wp_send_json_error( array( 'message' => __( 'API de Google My Business no disponible.', 'lealez' ) ) );
-        }
-
-        $topic_type = sanitize_text_field( $_POST['topic_type'] ?? 'STANDARD' );
-        $summary    = sanitize_textarea_field( $_POST['summary'] ?? '' );
-
-        if ( empty( $summary ) ) {
-            wp_send_json_error( array( 'message' => __( 'La descripción es obligatoria.', 'lealez' ) ) );
-        }
-        if ( mb_strlen( $summary ) > 1500 ) {
-            wp_send_json_error( array( 'message' => __( 'La descripción supera el límite de 1,500 caracteres.', 'lealez' ) ) );
-        }
-
-        // Build payload
-        $payload = array(
-            'topicType'    => $topic_type,
-            'languageCode' => 'es',
-            'summary'      => $summary,
-        );
-
-        // CTA
-        $cta_type = sanitize_text_field( $_POST['cta_type'] ?? '' );
-        $cta_url  = esc_url_raw( $_POST['cta_url']  ?? '' );
-        if ( ! empty( $cta_type ) && 'ACTION_TYPE_UNSPECIFIED' !== $cta_type ) {
-            $payload['callToAction'] = array( 'actionType' => $cta_type );
-            if ( ! empty( $cta_url ) && 'CALL' !== $cta_type ) {
-                $payload['callToAction']['url'] = $cta_url;
-            }
-        }
-
-        // Image
-        $image_url = esc_url_raw( $_POST['image_url'] ?? '' );
-        if ( ! empty( $image_url ) ) {
-            $payload['media'] = array(
-                array(
-                    'mediaFormat' => 'PHOTO',
-                    'sourceUrl'   => $image_url,
-                ),
-            );
-        }
-
-        // Event-specific fields
-        if ( 'EVENT' === $topic_type ) {
-            $event_title      = sanitize_text_field( $_POST['event_title']      ?? '' );
-            $event_start_date = sanitize_text_field( $_POST['event_start_date'] ?? '' );
-            $event_end_date   = sanitize_text_field( $_POST['event_end_date']   ?? '' );
-
-            if ( empty( $event_title ) ) {
-                wp_send_json_error( array( 'message' => __( 'El título del evento es obligatorio.', 'lealez' ) ) );
-            }
-
-            $event_data = array( 'title' => $event_title );
-
-            if ( ! empty( $event_start_date ) || ! empty( $event_end_date ) ) {
-                $schedule = array();
-                if ( ! empty( $event_start_date ) ) {
-                    $parts = explode( '-', $event_start_date );
-                    if ( count( $parts ) === 3 ) {
-                        $schedule['startDate'] = array(
-                            'year'  => (int) $parts[0],
-                            'month' => (int) $parts[1],
-                            'day'   => (int) $parts[2],
-                        );
-                    }
-                }
-                if ( ! empty( $event_end_date ) ) {
-                    $parts = explode( '-', $event_end_date );
-                    if ( count( $parts ) === 3 ) {
-                        $schedule['endDate'] = array(
-                            'year'  => (int) $parts[0],
-                            'month' => (int) $parts[1],
-                            'day'   => (int) $parts[2],
-                        );
-                    }
-                }
-                if ( ! empty( $schedule ) ) {
-                    $event_data['schedule'] = $schedule;
-                }
-            }
-
-            $payload['event'] = $event_data;
-        }
-
-        // Offer-specific fields
-        if ( 'OFFER' === $topic_type ) {
-            $offer = array();
-            $coupon_code = sanitize_text_field( $_POST['coupon_code'] ?? '' );
-            $redeem_url  = esc_url_raw( $_POST['redeem_url']  ?? '' );
-            $offer_terms = sanitize_textarea_field( $_POST['offer_terms'] ?? '' );
-
-            if ( ! empty( $coupon_code ) ) { $offer['couponCode']       = $coupon_code; }
-            if ( ! empty( $redeem_url )  ) { $offer['redeemOnlineUrl']  = $redeem_url;  }
-            if ( ! empty( $offer_terms ) ) { $offer['termsConditions']  = $offer_terms; }
-
-            if ( ! empty( $offer ) ) {
-                $payload['offer'] = $offer;
-            }
-        }
-
-        $result = Lealez_GMB_API::create_location_local_post( $business_id, $gmb_loc_name, $payload );
-
+        $result = Lealez_GMB_API::create_location_local_post( $context['business_id'], $context['gmb_loc_name'], $built['payload'] );
         if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array(
-                'message' => $result->get_error_message(),
-                'code'    => $result->get_error_code(),
-            ) );
+            $this->send_error( $result );
         }
+
+        $this->clear_posts_cache( $context['location_id'] );
 
         wp_send_json_success( array(
             'message' => __( 'Publicación creada correctamente en Google My Business.', 'lealez' ),
@@ -1274,43 +754,587 @@ class OY_Location_GMB_Posts_Metabox {
     }
 
     /**
-     * AJAX: Elimina una publicación de GMB (DELETE localPosts v4)
+     * AJAX: Actualiza publicación existente en GMB.
+     */
+    public function ajax_update_post() {
+        $context = $this->validate_ajax_context();
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        $post_name = sanitize_text_field( wp_unslash( $_POST['post_name'] ?? '' ) );
+        if ( empty( $post_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Falta el nombre de la publicación GMB que se va a actualizar.', 'lealez' ) ) );
+        }
+
+        $built = $this->build_payload_from_request();
+        if ( is_wp_error( $built ) ) {
+            $this->send_error( $built );
+        }
+
+        $result = Lealez_GMB_API::update_location_local_post(
+            $context['business_id'],
+            $context['gmb_loc_name'],
+            $post_name,
+            $built['payload'],
+            $built['update_mask']
+        );
+
+        if ( is_wp_error( $result ) ) {
+            $this->send_error( $result );
+        }
+
+        $this->clear_posts_cache( $context['location_id'] );
+
+        wp_send_json_success( array(
+            'message' => __( 'Publicación actualizada correctamente en Google My Business.', 'lealez' ),
+            'post'    => $result,
+        ) );
+    }
+
+    /**
+     * AJAX: Elimina publicación en GMB.
      */
     public function ajax_delete_post() {
-        // Verificar nonce
+        $context = $this->validate_ajax_context();
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        $post_name = sanitize_text_field( wp_unslash( $_POST['post_name'] ?? '' ) );
+        if ( empty( $post_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Falta el nombre de la publicación.', 'lealez' ) ) );
+        }
+
+        $result = Lealez_GMB_API::delete_location_local_post( $context['business_id'], $context['gmb_loc_name'], $post_name );
+        if ( is_wp_error( $result ) ) {
+            $this->send_error( $result );
+        }
+
+        $this->clear_posts_cache( $context['location_id'] );
+
+        wp_send_json_success( array( 'message' => __( 'Publicación eliminada correctamente en Google My Business.', 'lealez' ) ) );
+    }
+
+    /**
+     * AJAX: Insights de una publicación.
+     */
+    public function ajax_post_insights() {
+        $context = $this->validate_ajax_context();
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        $post_name = sanitize_text_field( wp_unslash( $_POST['post_name'] ?? '' ) );
+        if ( empty( $post_name ) ) {
+            wp_send_json_error( array( 'message' => __( 'Falta el nombre de la publicación.', 'lealez' ) ) );
+        }
+
+        $result = Lealez_GMB_API::report_location_local_post_insights( $context['business_id'], $context['gmb_loc_name'], array( $post_name ) );
+        if ( is_wp_error( $result ) ) {
+            $this->send_error( $result );
+        }
+
+        wp_send_json_success( array( 'insights' => $result ) );
+    }
+
+    // =========================================================================
+    // AJAX: BORRADORES LOCALES
+    // =========================================================================
+
+    /**
+     * AJAX: Guarda borrador local.
+     */
+    public function ajax_save_draft() {
+        $context = $this->validate_ajax_context( false );
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        $draft = $this->sanitize_draft_from_request();
+        if ( is_wp_error( $draft ) ) {
+            $this->send_error( $draft );
+        }
+
+        $drafts = $this->get_local_drafts( $context['location_id'] );
+        $draft_id = isset( $draft['draft_id'] ) ? (string) $draft['draft_id'] : '';
+        if ( empty( $draft_id ) ) {
+            $draft_id = 'draft_' . time() . '_' . wp_generate_password( 8, false, false );
+            $draft['created_at'] = gmdate( 'c' );
+        }
+        $draft['draft_id'] = $draft_id;
+        $draft['updated_at'] = gmdate( 'c' );
+
+        $updated = false;
+        foreach ( $drafts as $idx => $existing ) {
+            if ( isset( $existing['draft_id'] ) && $existing['draft_id'] === $draft_id ) {
+                $draft['created_at'] = $existing['created_at'] ?? $draft['created_at'];
+                $drafts[ $idx ] = $draft;
+                $updated = true;
+                break;
+            }
+        }
+        if ( ! $updated ) {
+            array_unshift( $drafts, $draft );
+        }
+
+        update_post_meta( $context['location_id'], self::META_DRAFTS, $drafts );
+
+        wp_send_json_success( array(
+            'message' => __( 'Borrador local guardado correctamente.', 'lealez' ),
+            'draft'   => $draft,
+            'drafts'  => $drafts,
+        ) );
+    }
+
+    /**
+     * AJAX: Elimina borrador local.
+     */
+    public function ajax_delete_draft() {
+        $context = $this->validate_ajax_context( false );
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        $draft_id = sanitize_text_field( wp_unslash( $_POST['draft_id'] ?? '' ) );
+        if ( empty( $draft_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Falta el ID del borrador.', 'lealez' ) ) );
+        }
+
+        $drafts = $this->get_local_drafts( $context['location_id'] );
+        $drafts = array_values( array_filter( $drafts, function( $draft ) use ( $draft_id ) {
+            return ! isset( $draft['draft_id'] ) || $draft['draft_id'] !== $draft_id;
+        } ) );
+
+        update_post_meta( $context['location_id'], self::META_DRAFTS, $drafts );
+
+        wp_send_json_success( array(
+            'message' => __( 'Borrador eliminado.', 'lealez' ),
+            'drafts'  => $drafts,
+        ) );
+    }
+
+    /**
+     * AJAX: Lista borradores locales.
+     */
+    public function ajax_list_drafts() {
+        $context = $this->validate_ajax_context( false );
+        if ( is_wp_error( $context ) ) {
+            $this->send_error( $context );
+        }
+
+        wp_send_json_success( array( 'drafts' => $this->get_local_drafts( $context['location_id'] ) ) );
+    }
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    /**
+     * Valida nonce, permisos, contexto y disponibilidad API.
+     *
+     * @param bool $require_api Si debe validar la clase API.
+     * @return array|WP_Error
+     */
+    private function validate_ajax_context( $require_api = true ) {
         if ( ! check_ajax_referer( self::NONCE_KEY, 'nonce', false ) ) {
-            wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'lealez' ) ) );
+            return new WP_Error( 'invalid_nonce', __( 'Nonce inválido.', 'lealez' ) );
         }
 
         if ( ! current_user_can( 'edit_posts' ) ) {
-            wp_send_json_error( array( 'message' => __( 'Sin permisos.', 'lealez' ) ) );
+            return new WP_Error( 'permission_denied', __( 'Sin permisos.', 'lealez' ) );
         }
 
         $location_id  = absint( $_POST['location_id'] ?? 0 );
         $business_id  = absint( $_POST['business_id'] ?? 0 );
-        $gmb_loc_name = sanitize_text_field( $_POST['gmb_loc_name'] ?? '' );
-        $post_name    = sanitize_text_field( $_POST['post_name']    ?? '' );
+        $gmb_loc_name = sanitize_text_field( wp_unslash( $_POST['gmb_loc_name'] ?? '' ) );
 
-        if ( ! $location_id || ! $business_id || empty( $gmb_loc_name ) || empty( $post_name ) ) {
-            wp_send_json_error( array( 'message' => __( 'Parámetros incompletos.', 'lealez' ) ) );
+        if ( ! $location_id || ! $business_id || empty( $gmb_loc_name ) ) {
+            return new WP_Error( 'missing_params', __( 'Parámetros incompletos.', 'lealez' ) );
         }
 
-        if ( ! class_exists( 'Lealez_GMB_API' ) ) {
-            wp_send_json_error( array( 'message' => __( 'API de Google My Business no disponible.', 'lealez' ) ) );
+        if ( $require_api && ! class_exists( 'Lealez_GMB_API' ) ) {
+            return new WP_Error( 'api_missing', __( 'API de Google My Business no disponible.', 'lealez' ) );
         }
 
-        $result = Lealez_GMB_API::delete_location_local_post( $business_id, $gmb_loc_name, $post_name );
+        return array(
+            'location_id'  => $location_id,
+            'business_id'  => $business_id,
+            'gmb_loc_name' => $gmb_loc_name,
+        );
+    }
 
-        if ( is_wp_error( $result ) ) {
-            wp_send_json_error( array(
-                'message' => $result->get_error_message(),
-                'code'    => $result->get_error_code(),
-            ) );
-        }
-
-        wp_send_json_success( array(
-            'message' => __( 'Publicación eliminada correctamente.', 'lealez' ),
+    /**
+     * Envía WP_Error como JSON.
+     *
+     * @param WP_Error $error Error.
+     */
+    private function send_error( $error ) {
+        wp_send_json_error( array(
+            'message' => $error->get_error_message(),
+            'code'    => $error->get_error_code(),
+            'data'    => $error->get_error_data(),
         ) );
+    }
+
+    /**
+     * Obtiene borradores locales.
+     *
+     * @param int $location_id ID ubicación.
+     * @return array
+     */
+    private function get_local_drafts( $location_id ) {
+        $drafts = get_post_meta( $location_id, self::META_DRAFTS, true );
+        return is_array( $drafts ) ? array_values( $drafts ) : array();
+    }
+
+    /**
+     * Limpia caché local de publicaciones.
+     *
+     * @param int $location_id ID ubicación.
+     */
+    private function clear_posts_cache( $location_id ) {
+        delete_post_meta( $location_id, self::META_CACHE );
+        delete_post_meta( $location_id, self::META_LAST_SYNC );
+    }
+
+    /**
+     * Sanitiza borrador desde request.
+     *
+     * @return array|WP_Error
+     */
+    private function sanitize_draft_from_request() {
+        $summary = sanitize_textarea_field( wp_unslash( $_POST['summary'] ?? '' ) );
+        if ( empty( $summary ) ) {
+            return new WP_Error( 'missing_summary', __( 'La descripción es obligatoria para guardar el borrador.', 'lealez' ) );
+        }
+
+        return array(
+            'draft_id'               => sanitize_text_field( wp_unslash( $_POST['draft_id'] ?? '' ) ),
+            'post_name'              => sanitize_text_field( wp_unslash( $_POST['post_name'] ?? '' ) ),
+            'topic_type'             => $this->sanitize_topic_type( $_POST['topic_type'] ?? 'STANDARD' ),
+            'language_code'          => $this->sanitize_language_code( $_POST['language_code'] ?? 'es' ),
+            'summary'                => $summary,
+            'image_url'              => esc_url_raw( wp_unslash( $_POST['image_url'] ?? '' ) ),
+            'cta_type'               => $this->sanitize_cta_type( $_POST['cta_type'] ?? 'ACTION_TYPE_UNSPECIFIED' ),
+            'cta_url'                => esc_url_raw( wp_unslash( $_POST['cta_url'] ?? '' ) ),
+            'scheduled_time'         => sanitize_text_field( wp_unslash( $_POST['scheduled_time'] ?? '' ) ),
+            'event_title'            => sanitize_text_field( wp_unslash( $_POST['event_title'] ?? '' ) ),
+            'event_start_date'       => sanitize_text_field( wp_unslash( $_POST['event_start_date'] ?? '' ) ),
+            'event_end_date'         => sanitize_text_field( wp_unslash( $_POST['event_end_date'] ?? '' ) ),
+            'event_start_time'       => sanitize_text_field( wp_unslash( $_POST['event_start_time'] ?? '' ) ),
+            'event_end_time'         => sanitize_text_field( wp_unslash( $_POST['event_end_time'] ?? '' ) ),
+            'coupon_code'            => sanitize_text_field( wp_unslash( $_POST['coupon_code'] ?? '' ) ),
+            'redeem_url'             => esc_url_raw( wp_unslash( $_POST['redeem_url'] ?? '' ) ),
+            'offer_terms'            => sanitize_textarea_field( wp_unslash( $_POST['offer_terms'] ?? '' ) ),
+            'alert_type'             => $this->sanitize_alert_type( $_POST['alert_type'] ?? 'COVID_19' ),
+            'recurrence_type'        => $this->sanitize_recurrence_type( $_POST['recurrence_type'] ?? 'none' ),
+            'recurrence_weekly_days' => $this->sanitize_weekly_days( $_POST['recurrence_weekly_days'] ?? array() ),
+            'recurrence_monthly_day' => absint( $_POST['recurrence_monthly_day'] ?? 0 ),
+            'recurrence_end_time'    => sanitize_text_field( wp_unslash( $_POST['recurrence_end_time'] ?? '' ) ),
+        );
+    }
+
+    /**
+     * Construye payload LocalPost para Google.
+     *
+     * @return array|WP_Error
+     */
+    private function build_payload_from_request() {
+        $draft = $this->sanitize_draft_from_request();
+        if ( is_wp_error( $draft ) ) {
+            return $draft;
+        }
+
+        if ( mb_strlen( $draft['summary'] ) > 1500 ) {
+            return new WP_Error( 'summary_too_long', __( 'La descripción supera el límite de 1,500 caracteres.', 'lealez' ) );
+        }
+
+        $payload = array(
+            'topicType'    => $draft['topic_type'],
+            'languageCode' => $draft['language_code'],
+            'summary'      => $draft['summary'],
+        );
+
+        $update_mask = array( 'topicType', 'languageCode', 'summary' );
+
+        if ( ! empty( $draft['scheduled_time'] ) ) {
+            $scheduled = $this->datetime_local_to_rfc3339( $draft['scheduled_time'] );
+            if ( is_wp_error( $scheduled ) ) {
+                return $scheduled;
+            }
+            $payload['scheduledTime'] = $scheduled;
+            $update_mask[] = 'scheduledTime';
+        }
+
+        if ( ! empty( $draft['image_url'] ) ) {
+            $payload['media'] = array(
+                array(
+                    'mediaFormat' => 'PHOTO',
+                    'sourceUrl'   => $draft['image_url'],
+                ),
+            );
+            $update_mask[] = 'media';
+        }
+
+        if ( 'OFFER' !== $draft['topic_type'] && 'ACTION_TYPE_UNSPECIFIED' !== $draft['cta_type'] ) {
+            $payload['callToAction'] = array( 'actionType' => $draft['cta_type'] );
+            if ( 'CALL' !== $draft['cta_type'] && ! empty( $draft['cta_url'] ) ) {
+                $payload['callToAction']['url'] = $draft['cta_url'];
+            }
+            $update_mask[] = 'callToAction';
+        }
+
+        if ( 'EVENT' === $draft['topic_type'] || 'OFFER' === $draft['topic_type'] ) {
+            if ( empty( $draft['event_title'] ) ) {
+                return new WP_Error( 'missing_event_title', __( 'El título del evento/oferta es obligatorio para publicaciones de tipo Evento u Oferta.', 'lealez' ) );
+            }
+
+            $event = array( 'title' => $draft['event_title'] );
+            $schedule = $this->build_schedule_from_draft( $draft );
+            if ( ! empty( $schedule ) ) {
+                $event['schedule'] = $schedule;
+            }
+
+            $recurrence = $this->build_recurrence_from_draft( $draft );
+            if ( is_wp_error( $recurrence ) ) {
+                return $recurrence;
+            }
+            if ( ! empty( $recurrence ) ) {
+                $event['recurrenceInfo'] = $recurrence;
+            }
+
+            $payload['event'] = $event;
+            $update_mask[] = 'event';
+        }
+
+        if ( 'OFFER' === $draft['topic_type'] ) {
+            $offer = array();
+            if ( ! empty( $draft['coupon_code'] ) ) {
+                $offer['couponCode'] = $draft['coupon_code'];
+            }
+            if ( ! empty( $draft['redeem_url'] ) ) {
+                $offer['redeemOnlineUrl'] = $draft['redeem_url'];
+            }
+            if ( ! empty( $draft['offer_terms'] ) ) {
+                $offer['termsConditions'] = $draft['offer_terms'];
+            }
+            if ( ! empty( $offer ) ) {
+                $payload['offer'] = $offer;
+                $update_mask[] = 'offer';
+            }
+        }
+
+        if ( 'ALERT' === $draft['topic_type'] ) {
+            $payload['alertType'] = $draft['alert_type'];
+            $update_mask[] = 'alertType';
+        }
+
+        return array(
+            'payload'     => $payload,
+            'update_mask' => array_values( array_unique( $update_mask ) ),
+        );
+    }
+
+    /**
+     * Construye schedule de evento.
+     *
+     * @param array $draft Datos sanitizados.
+     * @return array
+     */
+    private function build_schedule_from_draft( array $draft ) {
+        $schedule = array();
+
+        if ( ! empty( $draft['event_start_date'] ) ) {
+            $schedule['startDate'] = $this->date_string_to_google_date( $draft['event_start_date'] );
+        }
+        if ( ! empty( $draft['event_end_date'] ) ) {
+            $schedule['endDate'] = $this->date_string_to_google_date( $draft['event_end_date'] );
+        }
+        if ( ! empty( $draft['event_start_time'] ) ) {
+            $schedule['startTime'] = $this->time_string_to_google_time( $draft['event_start_time'] );
+        }
+        if ( ! empty( $draft['event_end_time'] ) ) {
+            $schedule['endTime'] = $this->time_string_to_google_time( $draft['event_end_time'] );
+        }
+
+        return array_filter( $schedule );
+    }
+
+    /**
+     * Construye recurrencia de evento.
+     *
+     * @param array $draft Datos sanitizados.
+     * @return array|WP_Error
+     */
+    private function build_recurrence_from_draft( array $draft ) {
+        if ( 'none' === $draft['recurrence_type'] ) {
+            return array();
+        }
+
+        $recurrence = array();
+        if ( ! empty( $draft['recurrence_end_time'] ) ) {
+            $end_time = $this->datetime_local_to_rfc3339( $draft['recurrence_end_time'] );
+            if ( is_wp_error( $end_time ) ) {
+                return $end_time;
+            }
+            $recurrence['seriesEndTime'] = $end_time;
+        }
+
+        if ( 'daily' === $draft['recurrence_type'] ) {
+            $recurrence['dailyPattern'] = new stdClass();
+        }
+
+        if ( 'weekly' === $draft['recurrence_type'] ) {
+            $recurrence['weeklyPattern'] = array(
+                'daysOfWeek' => ! empty( $draft['recurrence_weekly_days'] ) ? $draft['recurrence_weekly_days'] : array(),
+            );
+        }
+
+        if ( 'monthly' === $draft['recurrence_type'] ) {
+            $day = (int) $draft['recurrence_monthly_day'];
+            if ( $day < 1 || $day > 31 ) {
+                return new WP_Error( 'invalid_monthly_day', __( 'Para recurrencia mensual debes indicar un día entre 1 y 31.', 'lealez' ) );
+            }
+            $recurrence['monthlyPattern'] = array( 'dayOfMonth' => $day );
+        }
+
+        return $recurrence;
+    }
+
+    /**
+     * Convierte fecha YYYY-MM-DD a google.type.Date.
+     *
+     * @param string $date Fecha.
+     * @return array
+     */
+    private function date_string_to_google_date( $date ) {
+        $parts = explode( '-', (string) $date );
+        if ( 3 !== count( $parts ) ) {
+            return array();
+        }
+        return array(
+            'year'  => (int) $parts[0],
+            'month' => (int) $parts[1],
+            'day'   => (int) $parts[2],
+        );
+    }
+
+    /**
+     * Convierte hora HH:MM a google.type.TimeOfDay.
+     *
+     * @param string $time Hora.
+     * @return array
+     */
+    private function time_string_to_google_time( $time ) {
+        $parts = explode( ':', (string) $time );
+        if ( count( $parts ) < 2 ) {
+            return array();
+        }
+        return array(
+            'hours'   => (int) $parts[0],
+            'minutes' => (int) $parts[1],
+            'seconds' => 0,
+            'nanos'   => 0,
+        );
+    }
+
+    /**
+     * Convierte datetime-local a RFC3339 usando zona horaria WP.
+     *
+     * @param string $value Valor datetime-local.
+     * @return string|WP_Error
+     */
+    private function datetime_local_to_rfc3339( $value ) {
+        $value = trim( (string) $value );
+        if ( empty( $value ) ) {
+            return '';
+        }
+
+        try {
+            $tz = wp_timezone();
+            $dt = new DateTimeImmutable( $value, $tz );
+            return $dt->format( DATE_RFC3339 );
+        } catch ( Exception $e ) {
+            return new WP_Error( 'invalid_datetime', __( 'La fecha/hora programada no tiene un formato válido.', 'lealez' ) );
+        }
+    }
+
+    /**
+     * Sanitiza topic type.
+     *
+     * @param string $value Valor.
+     * @return string
+     */
+    private function sanitize_topic_type( $value ) {
+        $value = strtoupper( sanitize_text_field( wp_unslash( $value ) ) );
+        return in_array( $value, array( 'STANDARD', 'EVENT', 'OFFER', 'ALERT' ), true ) ? $value : 'STANDARD';
+    }
+
+    /**
+     * Sanitiza idioma.
+     *
+     * @param string $value Valor.
+     * @return string
+     */
+    private function sanitize_language_code( $value ) {
+        $value = sanitize_text_field( wp_unslash( $value ) );
+        return preg_match( '/^[a-z]{2}(?:-[A-Z]{2})?$/', $value ) ? $value : 'es';
+    }
+
+    /**
+     * Sanitiza CTA.
+     *
+     * @param string $value Valor.
+     * @return string
+     */
+    private function sanitize_cta_type( $value ) {
+        $value = strtoupper( sanitize_text_field( wp_unslash( $value ) ) );
+        $allowed = array( 'ACTION_TYPE_UNSPECIFIED', 'BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'CALL' );
+        return in_array( $value, $allowed, true ) ? $value : 'ACTION_TYPE_UNSPECIFIED';
+    }
+
+    /**
+     * Sanitiza alert type.
+     *
+     * @param string $value Valor.
+     * @return string
+     */
+    private function sanitize_alert_type( $value ) {
+        $value = strtoupper( sanitize_text_field( wp_unslash( $value ) ) );
+        return in_array( $value, array( 'COVID_19' ), true ) ? $value : 'COVID_19';
+    }
+
+    /**
+     * Sanitiza recurrencia.
+     *
+     * @param string $value Valor.
+     * @return string
+     */
+    private function sanitize_recurrence_type( $value ) {
+        $value = strtolower( sanitize_text_field( wp_unslash( $value ) ) );
+        return in_array( $value, array( 'none', 'daily', 'weekly', 'monthly' ), true ) ? $value : 'none';
+    }
+
+    /**
+     * Sanitiza días semanales.
+     *
+     * @param mixed $days Días.
+     * @return array
+     */
+    private function sanitize_weekly_days( $days ) {
+        if ( ! is_array( $days ) ) {
+            return array();
+        }
+        $allowed = array( 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY' );
+        $clean = array();
+        foreach ( $days as $day ) {
+            $day = strtoupper( sanitize_text_field( wp_unslash( $day ) ) );
+            if ( in_array( $day, $allowed, true ) ) {
+                $clean[] = $day;
+            }
+        }
+        return array_values( array_unique( $clean ) );
     }
 
 } // end class OY_Location_GMB_Posts_Metabox
