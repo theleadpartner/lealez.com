@@ -6867,6 +6867,226 @@ if ( '' !== $opening_date ) {
         return is_array( $result ) ? $result : array();
     }
 
+
+
+    /**
+     * Obtiene una publicación específica (localPost) de GMB via API v4.
+     *
+     * Endpoint: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/localPosts/{localPostId}
+     *
+     * @param int    $business_id ID del post oy_business.
+     * @param string $post_name   Resource name completo del localPost.
+     * @param bool   $use_cache   Si true, permite caché de lectura.
+     * @return array|WP_Error
+     */
+    public static function get_location_local_post( $business_id, $post_name, $use_cache = true ) {
+        $business_id = absint( $business_id );
+        $post_name   = trim( (string) $post_name );
+
+        if ( ! $business_id || empty( $post_name ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for get local post.', 'lealez' ) );
+        }
+
+        if ( false === strpos( $post_name, '/localPosts/' ) ) {
+            return new WP_Error( 'invalid_post_name', __( 'Invalid localPost resource name.', 'lealez' ) );
+        }
+
+        $endpoint = '/' . ltrim( $post_name, '/' );
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'GET',
+            array(),
+            (bool) $use_cache
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'warning', 'Get Local Post failed.', array(
+                    'post_name' => $post_name,
+                    'error'     => $result->get_error_message(),
+                ) );
+            }
+            return $result;
+        }
+
+        return is_array( $result ) ? $result : array();
+    }
+
+    /**
+     * Actualiza una publicación (localPost) existente en GMB via PATCH v4.
+     *
+     * Endpoint: PATCH https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/localPosts/{localPostId}?updateMask=...
+     *
+     * @param int    $business_id  ID del post oy_business.
+     * @param string $location_any Resource name o ID numérico de la ubicación.
+     * @param string $post_name    Resource name completo del localPost.
+     * @param array  $payload      Cuerpo LocalPost actualizado.
+     * @param array  $update_mask  Campos a actualizar. Si viene vacío se infiere desde payload.
+     * @return array|WP_Error
+     */
+    public static function update_location_local_post( $business_id, $location_any, $post_name, array $payload, array $update_mask = array() ) {
+        $business_id  = absint( $business_id );
+        $location_any = trim( (string) $location_any );
+        $post_name    = trim( (string) $post_name );
+
+        if ( ! $business_id || empty( $location_any ) || empty( $post_name ) || empty( $payload ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for update local post.', 'lealez' ) );
+        }
+
+        if ( false === strpos( $post_name, '/localPosts/' ) ) {
+            return new WP_Error( 'invalid_post_name', __( 'Invalid localPost resource name.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( empty( $update_mask ) ) {
+            $allowed_mask_fields = array( 'languageCode', 'summary', 'callToAction', 'event', 'media', 'topicType', 'alertType', 'offer', 'scheduledTime' );
+            foreach ( $allowed_mask_fields as $field ) {
+                if ( array_key_exists( $field, $payload ) ) {
+                    $update_mask[] = $field;
+                }
+            }
+        }
+
+        $allowed_mask_fields = array( 'languageCode', 'summary', 'callToAction', 'event', 'media', 'topicType', 'alertType', 'offer', 'scheduledTime' );
+        $clean_update_mask = array();
+        foreach ( $update_mask as $mask_field ) {
+            $mask_field = trim( (string) $mask_field );
+            if ( in_array( $mask_field, $allowed_mask_fields, true ) ) {
+                $clean_update_mask[] = $mask_field;
+            }
+        }
+        $update_mask = array_values( array_unique( $clean_update_mask ) );
+        if ( empty( $update_mask ) ) {
+            return new WP_Error( 'missing_update_mask', __( 'No local post fields were selected for update.', 'lealez' ) );
+        }
+
+        $payload['name'] = ltrim( $post_name, '/' );
+        $endpoint        = '/' . ltrim( $post_name, '/' );
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'PATCH',
+            $payload,
+            false,
+            array( 'updateMask' => implode( ',', $update_mask ) )
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'error', 'Update Local Post failed.', array(
+                    'post_name'   => $post_name,
+                    'update_mask' => $update_mask,
+                    'error'       => $result->get_error_message(),
+                    'payload'     => $payload,
+                ) );
+            }
+            return $result;
+        }
+
+        if ( '' !== $account_id && '' !== $location_id ) {
+            $cache_key = 'oy_local_posts_' . $business_id . '_' . md5( $account_id . $location_id );
+            delete_transient( $cache_key );
+        }
+
+        if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+            Lealez_GMB_Logger::log( $business_id, 'success', 'Local Post updated: ' . ( $result['name'] ?? $post_name ) );
+        }
+
+        return is_array( $result ) ? $result : array();
+    }
+
+    /**
+     * Consulta insights de publicaciones locales de una ubicación.
+     *
+     * Endpoint: POST https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations/{locationId}/localPosts:reportInsights
+     *
+     * @param int    $business_id      ID del post oy_business.
+     * @param string $location_any     Resource name o ID numérico de la ubicación.
+     * @param array  $local_post_names Lista de resource names de localPosts.
+     * @param array  $basic_request    BasicMetricsRequest opcional.
+     * @return array|WP_Error
+     */
+    public static function report_location_local_post_insights( $business_id, $location_any, array $local_post_names, array $basic_request = array() ) {
+        $business_id      = absint( $business_id );
+        $location_any     = trim( (string) $location_any );
+        $local_post_names = array_values( array_filter( array_map( 'trim', $local_post_names ) ) );
+
+        if ( ! $business_id || empty( $location_any ) || empty( $local_post_names ) ) {
+            return new WP_Error( 'missing_params', __( 'Missing params for local post insights.', 'lealez' ) );
+        }
+
+        if ( count( $local_post_names ) > 100 ) {
+            return new WP_Error( 'too_many_posts', __( 'Local Post insights supports a maximum of 100 posts per request.', 'lealez' ) );
+        }
+
+        $account_id  = self::extract_account_id_from_location_name( $location_any );
+        $location_id = self::extract_location_id_from_any( $location_any );
+
+        if ( '' === $account_id && '' !== $location_id ) {
+            $resolved = self::resolve_account_resource_name_for_location( $business_id, $location_id, $location_any );
+            if ( '' !== $resolved ) {
+                $account_id = self::extract_account_id_from_name( $resolved );
+            }
+        }
+
+        if ( '' === $account_id || '' === $location_id ) {
+            return new WP_Error( 'missing_params', __( 'Could not resolve accountId/locationId for local post insights.', 'lealez' ) );
+        }
+
+        $body = array(
+            'localPostNames' => $local_post_names,
+        );
+
+        if ( ! empty( $basic_request ) ) {
+            $body['basicRequest'] = $basic_request;
+        } else {
+            $body['basicRequest'] = array(
+                'metricRequests' => array(
+                    array( 'metric' => 'LOCAL_POST_VIEWS_SEARCH' ),
+                    array( 'metric' => 'LOCAL_POST_ACTIONS_CALL_TO_ACTION' ),
+                ),
+            );
+        }
+
+        $endpoint = '/accounts/' . rawurlencode( $account_id ) . '/locations/' . rawurlencode( $location_id ) . '/localPosts:reportInsights';
+
+        $result = self::make_request(
+            $business_id,
+            $endpoint,
+            self::$mybusiness_v4_base,
+            'POST',
+            $body,
+            false
+        );
+
+        if ( is_wp_error( $result ) ) {
+            if ( class_exists( 'Lealez_GMB_Logger' ) ) {
+                Lealez_GMB_Logger::log( $business_id, 'warning', 'Local Post insights failed.', array(
+                    'location_any' => $location_any,
+                    'post_count'   => count( $local_post_names ),
+                    'error'        => $result->get_error_message(),
+                ) );
+            }
+            return $result;
+        }
+
+        return is_array( $result ) ? $result : array();
+    }
+
     /**
      * Elimina una publicación (localPost) de GMB via API v4.
      *
