@@ -49,6 +49,13 @@ trait Lealez_Frontend_Pages_Trait {
                 'description' => __( 'Preferencias seguras de Google Business Profile y Wallet.', 'lealez' ),
                 'parent' => 'portal',
             ),
+            'business_google' => array(
+                'title' => __( 'Google de empresa', 'lealez' ),
+                'slug' => 'google-empresa',
+                'shortcode' => '[lealez_business_google_center]',
+                'description' => __( 'Conexión, cuentas y ubicaciones sincronizadas de la empresa.', 'lealez' ),
+                'parent' => 'portal',
+            ),
             'locations' => array(
                 'title' => __( 'Mis ubicaciones', 'lealez' ),
                 'slug' => 'mis-ubicaciones',
@@ -61,6 +68,13 @@ trait Lealez_Frontend_Pages_Trait {
                 'slug' => 'editar-ubicacion',
                 'shortcode' => '[lealez_location_editor]',
                 'description' => __( 'Perfil de ubicación organizado por pestañas.', 'lealez' ),
+                'parent' => 'portal',
+            ),
+            'location_google' => array(
+                'title' => __( 'Google de ubicación', 'lealez' ),
+                'slug' => 'google-ubicacion',
+                'shortcode' => '[lealez_location_google_center]',
+                'description' => __( 'Perfil, contenido, reseñas, sincronización y analítica GMB.', 'lealez' ),
                 'parent' => 'portal',
             ),
             'user_profile' => array(
