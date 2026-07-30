@@ -15,6 +15,8 @@ require_once __DIR__ . '/lealez-frontend-pages-trait.php';
 require_once __DIR__ . '/lealez-frontend-business-trait.php';
 require_once __DIR__ . '/lealez-frontend-location-trait.php';
 require_once __DIR__ . '/lealez-frontend-user-helpers-trait.php';
+require_once __DIR__ . '/lealez-frontend-admin-compat.php';
+require_once __DIR__ . '/class-lealez-frontend-gmb-center.php';
 
 if ( ! class_exists( 'Lealez_Frontend_Portal' ) ) :
 
