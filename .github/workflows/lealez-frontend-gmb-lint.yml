@@ -1,0 +1,42 @@
+name: Lealez Frontend GMB Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP 7.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          coverage: none
+
+      - name: Lint changed PHP
+        run: |
+          php -l includes/frontend/class-lealez-frontend-gmb-center.php
+          php -l includes/frontend/lealez-frontend-admin-compat.php
+          php -l includes/frontend/class-lealez-frontend-portal.php
+          php -l includes/frontend/lealez-frontend-pages-trait.php
+
+      - name: Check JavaScript syntax
+        run: node --check assets/js/frontend/lealez-frontend-gmb-center.js
+
+      - name: Verify required modules and safeguards
+        run: |
+          grep -q "oy_location_basic_info" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_address" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_contact" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_hours" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_gmb_more_attrs" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_menu" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_gmb_posts" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "oy_location_gmb_reviews" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "pending_review" includes/frontend/class-lealez-frontend-gmb-center.php
+          grep -q "map_meta_cap" includes/frontend/class-lealez-frontend-gmb-center.php
