@@ -3,7 +3,7 @@
  * Plugin Name: Lealez Plugin
  * Plugin URI: https://lealez.com
  * Description: Sistema completo de gestión de lealtad con integración Google My Business, Google Wallet y Apple Wallet
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: The Lead Partner
  * Author URI: https://theleadpartner.com
  * Text Domain: lealez
@@ -25,7 +25,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Main Lealez Plugin Class
  *
  * @class Lealez_Plugin
- * @version 1.0.0
+ * @version 1.1.0
  */
 final class Lealez_Plugin {
 
@@ -34,7 +34,7 @@ final class Lealez_Plugin {
      *
      * @var string
      */
-    public $version = '1.0.0';
+    public $version = '1.1.0';
 
     /**
      * The single instance of the class
@@ -129,55 +129,69 @@ final class Lealez_Plugin {
         );
     }
 
-/**
- * When WordPress has loaded all plugins
- */
-public function on_plugins_loaded() {
-    // Include CPT classes
-    $this->include_cpts();
-    
-    // Include admin classes
-    if ( is_admin() ) {
-        $this->include_admin();
-    }
-    
-    do_action( 'lealez_loaded' );
-}
+    /**
+     * When WordPress has loaded all plugins
+     */
+    public function on_plugins_loaded() {
+        // Include CPT classes
+        $this->include_cpts();
 
-/**
- * Include CPT classes
- */
-private function include_cpts() {
-    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
-    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-location-cpt.php';
-    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-program-cpt.php';
-    require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-card-cpt.php';
-    
-    // Include taxonomies
-    require_once LEALEZ_INCLUDES_DIR . 'taxonomies/class-oy-customer-category-taxonomy.php';
-    
-    // Include GMB integration
-    if ( file_exists( LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php' ) ) {
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php';
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php';
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-logger.php'; 
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-oauth.php';
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-api.php';
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-ajax.php';
+        // Frontend portal is loaded in admin and frontend requests because it
+        // also registers the portable page installer under the Lealez menu.
+        $this->include_frontend();
+
+        // Include admin classes
+        if ( is_admin() ) {
+            $this->include_admin();
+        }
+
+        do_action( 'lealez_loaded' );
     }
-}
-    
-/**
- * Include admin classes
- */
-private function include_admin() {
-    require_once LEALEZ_INCLUDES_DIR . 'admin/class-lealez-admin-menu.php';
-    
-    // Include GMB Settings if OAuth class exists
-    if ( class_exists( 'Lealez_GMB_OAuth' ) ) {
-        require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-settings.php';
+
+    /**
+     * Include CPT classes
+     */
+    private function include_cpts() {
+        require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-business-cpt.php';
+        require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-location-cpt.php';
+        require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-program-cpt.php';
+        require_once LEALEZ_INCLUDES_DIR . 'cpts/class-oy-loyalty-card-cpt.php';
+
+        // Include taxonomies
+        require_once LEALEZ_INCLUDES_DIR . 'taxonomies/class-oy-customer-category-taxonomy.php';
+
+        // Include GMB integration
+        if ( file_exists( LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php' ) ) {
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-rate-limiter.php';
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-encryption.php';
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-logger.php';
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-oauth.php';
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-api.php';
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-ajax.php';
+        }
     }
-}
+
+    /**
+     * Include frontend portal classes.
+     */
+    private function include_frontend() {
+        $portal_file = LEALEZ_INCLUDES_DIR . 'frontend/class-lealez-frontend-portal.php';
+        if ( file_exists( $portal_file ) ) {
+            require_once $portal_file;
+        }
+    }
+
+    /**
+     * Include admin classes
+     */
+    private function include_admin() {
+        require_once LEALEZ_INCLUDES_DIR . 'admin/class-lealez-admin-menu.php';
+
+        // Include GMB Settings if OAuth class exists
+        if ( class_exists( 'Lealez_GMB_OAuth' ) ) {
+            require_once LEALEZ_INCLUDES_DIR . 'integrations/google-my-business/class-lealez-gmb-settings.php';
+        }
+    }
 
     /**
      * Plugin activation callback

@@ -31,10 +31,34 @@ class Lealez_Frontend_Portal {
      */
     public function __construct() {
         add_action( 'init', array( $this, 'register_shortcodes' ) );
+        add_action( 'template_redirect', array( $this, 'protect_portal_pages_from_cache' ), 0 );
         add_action( 'template_redirect', array( $this, 'handle_frontend_actions' ), 5 );
         add_action( 'admin_menu', array( $this, 'register_pages_admin_menu' ), 30 );
         add_action( 'admin_post_lealez_create_frontend_page', array( $this, 'handle_create_frontend_page' ) );
         add_action( 'admin_post_lealez_create_all_frontend_pages', array( $this, 'handle_create_all_frontend_pages' ) );
+    }
+
+    /**
+     * Prevent full-page cache plugins and proxies from serving one user's
+     * personalized portal content to another user.
+     */
+    public function protect_portal_pages_from_cache() {
+        if ( ! is_page() ) {
+            return;
+        }
+
+        $page_id = get_queried_object_id();
+        if ( ! $page_id || ! get_post_meta( $page_id, '_lealez_frontend_page_key', true ) ) {
+            return;
+        }
+
+        if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+            define( 'DONOTCACHEPAGE', true );
+        }
+        if ( ! defined( 'DONOTCACHEOBJECT' ) ) {
+            define( 'DONOTCACHEOBJECT', true );
+        }
+        nocache_headers();
     }
 }
 
