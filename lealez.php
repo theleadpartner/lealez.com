@@ -3,7 +3,7 @@
  * Plugin Name: Lealez Plugin
  * Plugin URI: https://lealez.com
  * Description: Sistema completo de gestión de lealtad con integración Google My Business, Google Wallet y Apple Wallet
- * Version: 1.3.0
+ * Version: 1.4.0
  * Author: The Lead Partner
  * Author URI: https://theleadpartner.com
  * Text Domain: lealez
@@ -25,7 +25,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Main Lealez Plugin Class
  *
  * @class Lealez_Plugin
- * @version 1.3.0
+ * @version 1.4.0
  */
 final class Lealez_Plugin {
 
@@ -34,7 +34,7 @@ final class Lealez_Plugin {
      *
      * @var string
      */
-    public $version = '1.3.0';
+    public $version = '1.4.0';
 
     /**
      * The single instance of the class
@@ -140,6 +140,10 @@ final class Lealez_Plugin {
         // also registers the portable page installer under the Lealez menu.
         $this->include_frontend();
 
+        // Native Elementor widgets are loaded through a guarded integration.
+        // The file remains safe when Elementor is not installed or is inactive.
+        $this->include_elementor();
+
         // Include admin classes
         if ( is_admin() ) {
             $this->include_admin();
@@ -178,6 +182,16 @@ final class Lealez_Plugin {
         $portal_file = LEALEZ_INCLUDES_DIR . 'frontend/class-lealez-frontend-portal.php';
         if ( file_exists( $portal_file ) ) {
             require_once $portal_file;
+        }
+    }
+
+    /**
+     * Include the optional Elementor bridge.
+     */
+    private function include_elementor() {
+        $elementor_file = LEALEZ_INCLUDES_DIR . 'elementor/class-lealez-elementor.php';
+        if ( file_exists( $elementor_file ) ) {
+            require_once $elementor_file;
         }
     }
 

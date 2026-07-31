@@ -1,0 +1,303 @@
+/**
+ * Elementor presentation layer for Lealez frontend widgets.
+ * Base portal styles remain in lealez-frontend-portal.css.
+ */
+.lealez-elementor-shell {
+    --lealez-page: #f6f7f8;
+    --lealez-surface: #fff;
+    --lealez-primary: #3782c4;
+    --lealez-primary-dark: #245f91;
+    --lealez-ink: #172033;
+    --lealez-muted: #657084;
+    --lealez-line: #dce3ec;
+    --lealez-soft: #f5f8fc;
+    --lealez-success: #15803d;
+    --lealez-warning: #b45309;
+    --lealez-danger: #b42318;
+    --lz-radius: 16px;
+    --lz-gap: 18px;
+    --lz-card-pad-top: 24px;
+    --lz-card-pad-right: 24px;
+    --lz-card-pad-bottom: 24px;
+    --lz-card-pad-left: 24px;
+    width: 100%;
+    margin: 0 auto;
+    background: var(--lealez-page);
+    color: var(--lealez-ink);
+}
+
+.lealez-elementor-shell.is-density-compact {
+    --lz-gap: 12px;
+    --lz-card-pad-top: 17px;
+    --lz-card-pad-right: 17px;
+    --lz-card-pad-bottom: 17px;
+    --lz-card-pad-left: 17px;
+}
+
+.lealez-elementor-shell.is-density-spacious {
+    --lz-gap: 24px;
+    --lz-card-pad-top: 30px;
+    --lz-card-pad-right: 30px;
+    --lz-card-pad-bottom: 30px;
+    --lz-card-pad-left: 30px;
+}
+
+.lealez-elementor-shell .lealez-portal {
+    --lz-page: var(--lealez-page);
+    --lz-surface: var(--lealez-surface);
+    --lz-primary: var(--lealez-primary);
+    --lz-primary-dark: var(--lealez-primary-dark);
+    --lz-ink: var(--lealez-ink);
+    --lz-muted: var(--lealez-muted);
+    --lz-line: var(--lealez-line);
+    --lz-soft: var(--lealez-soft);
+    --lz-success: var(--lealez-success);
+    --lz-warning: var(--lealez-warning);
+    --lz-danger: var(--lealez-danger);
+}
+
+.lealez-elementor-shell .lealez-stat-grid,
+.lealez-elementor-shell .lealez-card-grid {
+    gap: var(--lz-gap);
+}
+
+.lealez-elementor-shell .lealez-stat-card,
+.lealez-elementor-shell .lealez-action-card,
+.lealez-elementor-shell .lealez-entity-card,
+.lealez-elementor-shell .lealez-form,
+.lealez-elementor-shell .lealez-empty,
+.lealez-elementor-shell .lealez-integration-status,
+.lealez-elementor-shell .lealez-gmb-sidebar,
+.lealez-elementor-shell .lealez-gmb-module-heading,
+.lealez-elementor-shell .lealez-gmb-status-card,
+.lealez-elementor-shell .postbox {
+    border-color: var(--lealez-line);
+    border-radius: var(--lz-radius);
+    background-color: var(--lealez-surface);
+}
+
+.lealez-elementor-shell .lealez-stat-card,
+.lealez-elementor-shell .lealez-action-card,
+.lealez-elementor-shell .lealez-entity-card {
+    padding: var(--lz-card-pad-top) var(--lz-card-pad-right) var(--lz-card-pad-bottom) var(--lz-card-pad-left);
+}
+
+.lealez-elementor-shell .lealez-form:not(.lealez-tab-form),
+.lealez-elementor-shell .lealez-tab-panel {
+    padding: var(--lz-card-pad-top) var(--lz-card-pad-right) var(--lz-card-pad-bottom) var(--lz-card-pad-left);
+}
+
+.lealez-elementor-shell .lealez-btn-primary {
+    background-color: var(--lealez-primary);
+}
+
+.lealez-elementor-shell .lealez-btn-primary:hover {
+    background-color: var(--lealez-primary-dark);
+}
+
+.lealez-elementor-shell .lealez-btn-secondary,
+.lealez-elementor-shell .lealez-back,
+.lealez-elementor-shell .lealez-eyebrow {
+    color: var(--lealez-primary-dark);
+}
+
+.lealez-elementor-shell.is-internal-header-hidden .lealez-page-head,
+.lealez-elementor-shell.is-internal-header-hidden .lealez-hero {
+    display: none;
+}
+
+.lealez-profile-summary,
+.lealez-profile-nav,
+.lealez-profile-summary *,
+.lealez-profile-nav * {
+    box-sizing: border-box;
+}
+
+.lealez-profile-summary {
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 16px;
+    border: 1px solid var(--lealez-line);
+    border-radius: calc(var(--lz-radius) + 2px);
+    background: var(--lealez-surface);
+    box-shadow: 0 10px 32px rgba(23, 32, 51, .07);
+}
+
+.lealez-profile-cover {
+    min-height: 148px;
+    background:
+        linear-gradient(115deg, rgba(20, 35, 55, .55), rgba(20, 35, 55, .08)),
+        linear-gradient(135deg, var(--lealez-primary-dark), var(--lealez-primary));
+    background-position: center;
+    background-size: cover;
+}
+
+.lealez-profile-summary.has-cover .lealez-profile-cover {
+    background-image:
+        linear-gradient(115deg, rgba(20, 35, 55, .48), rgba(20, 35, 55, .04)),
+        var(--lz-profile-cover);
+}
+
+.lealez-profile-summary-body {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 20px;
+    align-items: center;
+    padding: 0 var(--lz-card-pad-right) var(--lz-card-pad-bottom) var(--lz-card-pad-left);
+}
+
+.lealez-profile-logo {
+    width: 94px;
+    height: 94px;
+    margin-top: -38px;
+    border: 5px solid var(--lealez-surface);
+    border-radius: calc(var(--lz-radius) - 2px);
+    object-fit: cover;
+    background: var(--lealez-surface);
+    box-shadow: 0 8px 24px rgba(23, 32, 51, .16);
+}
+
+.lealez-profile-logo.is-placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+}
+
+.lealez-profile-summary-copy {
+    min-width: 0;
+    padding-top: 18px;
+}
+
+.lealez-profile-summary-copy h2 {
+    margin: 0 0 6px;
+    color: var(--lealez-ink);
+    font-size: clamp(25px, 3vw, 38px);
+    line-height: 1.12;
+}
+
+.lealez-profile-summary-copy p {
+    margin: 0;
+    color: var(--lealez-muted);
+}
+
+.lealez-profile-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 13px;
+}
+
+.lealez-profile-meta > span:not(.lealez-status) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 5px 10px;
+    border: 1px solid var(--lealez-line);
+    border-radius: 999px;
+    color: var(--lealez-muted);
+    background: var(--lealez-soft);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.lealez-profile-nav {
+    display: flex;
+    gap: 4px;
+    margin: 0 0 18px;
+    padding: 5px;
+    overflow-x: auto;
+    border: 1px solid var(--lealez-line);
+    border-radius: 13px;
+    background: var(--lealez-surface);
+    box-shadow: 0 5px 18px rgba(23, 32, 51, .04);
+}
+
+.lealez-profile-nav a {
+    flex: 0 0 auto;
+    padding: 10px 14px;
+    border-radius: 9px;
+    color: var(--lealez-muted);
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+    transition: background-color .18s ease, color .18s ease;
+}
+
+.lealez-profile-nav a:hover,
+.lealez-profile-nav a.is-active {
+    color: var(--lealez-primary-dark);
+    background: var(--lealez-soft);
+}
+
+.lealez-profile-nav a.is-active {
+    box-shadow: inset 0 -3px 0 var(--lealez-primary);
+}
+
+.lealez-profile-summary ~ .lealez-profile-nav + .lealez-portal .lealez-page-head,
+.lealez-profile-summary ~ .lealez-portal .lealez-page-head {
+    margin-top: 10px;
+}
+
+.lealez-elementor-shell .lealez-gmb-center {
+    --gmb-blue: var(--lealez-primary);
+    --gmb-blue-dark: var(--lealez-primary-dark);
+    --gmb-border: var(--lealez-line);
+    --gmb-muted: var(--lealez-muted);
+}
+
+.lealez-elementor-shell .lealez-gmb-nav-item.is-active {
+    color: var(--lealez-primary-dark);
+    background: var(--lealez-soft);
+    box-shadow: inset 4px 0 0 var(--lealez-primary);
+}
+
+.lealez-elementor-shell .lealez-gmb-overview-card {
+    background: linear-gradient(135deg, var(--lealez-primary-dark), var(--lealez-primary));
+}
+
+@media (max-width: 820px) {
+    .lealez-profile-summary-body {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .lealez-profile-summary-body > .lealez-btn {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
+
+    .lealez-elementor-shell .lealez-gmb-nav-item.is-active {
+        box-shadow: inset 0 -4px 0 var(--lealez-primary);
+    }
+}
+
+@media (max-width: 560px) {
+    .lealez-profile-cover {
+        min-height: 118px;
+    }
+
+    .lealez-profile-summary-body {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        text-align: left;
+    }
+
+    .lealez-profile-logo {
+        width: 78px;
+        height: 78px;
+        margin-top: -34px;
+    }
+
+    .lealez-profile-summary-copy {
+        padding-top: 0;
+    }
+
+    .lealez-profile-summary-body > .lealez-btn {
+        grid-column: auto;
+    }
+
+    .lealez-profile-nav {
+        border-radius: 11px;
+    }
+}

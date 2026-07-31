@@ -34,11 +34,13 @@ class Lealez_Frontend_Portal {
      */
     public function __construct() {
         add_action( 'init', array( $this, 'register_shortcodes' ) );
+        add_action( 'template_redirect', array( $this, 'redirect_legacy_frontend_pages' ), 1 );
         add_action( 'template_redirect', array( $this, 'protect_portal_pages_from_cache' ), 0 );
         add_action( 'template_redirect', array( $this, 'handle_frontend_actions' ), 5 );
         add_action( 'admin_menu', array( $this, 'register_pages_admin_menu' ), 30 );
         add_action( 'admin_post_lealez_create_frontend_page', array( $this, 'handle_create_frontend_page' ) );
         add_action( 'admin_post_lealez_create_all_frontend_pages', array( $this, 'handle_create_all_frontend_pages' ) );
+        add_action( 'admin_post_lealez_cleanup_frontend_pages', array( $this, 'handle_cleanup_frontend_pages' ) );
     }
 
     /**

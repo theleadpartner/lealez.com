@@ -2,6 +2,48 @@
 
 Todos los cambios relevantes del plugin se documentan en este archivo.
 
+## [1.4.0] - 2026-07-31
+
+### Agregado
+- Integración nativa con Elementor cargada únicamente cuando Elementor está disponible.
+- Categoría `Lealez` en el editor de Elementor.
+- Seis widgets nativos para el portal frontend:
+  - Panel de cuenta.
+  - Mis empresas.
+  - Perfil de empresa.
+  - Mis ubicaciones.
+  - Perfil de ubicación.
+  - Mi perfil.
+- Controles Elementor de ancho, densidad, fondos, superficies, colores, tipografía, rellenos, bordes, sombras y botones.
+- Resúmenes visuales para empresa y ubicación, inspirados en la lectura clara de perfiles modernos de directorios sin copiar una interfaz externa.
+- Navegación interna del perfil de empresa para Perfil, Equipo, Integraciones y Google Business Profile.
+- Migración segura de páginas antiguas basadas en shortcode, con respaldo en `_lealez_pre_elementor_content_backup`.
+- Detección diferenciada de Elementor activo, instalado pero inactivo y no instalado.
+- Limpieza controlada de páginas frontend heredadas gestionadas por Lealez.
+- Redirecciones permanentes desde slugs heredados hacia los perfiles unificados.
+
+### Modificado
+- El instalador `Páginas frontend de Lealez` crea páginas con datos nativos en `_elementor_data`; ya no inserta shortcodes en `post_content`.
+- Crear o reparar páginas requiere Elementor activo para evitar páginas incompletas.
+- `Perfil de empresa` concentra edición general, equipo, integraciones y centro Google en una sola página.
+- `Perfil de ubicación` conserva el perfil unificado de la versión 1.3.0 y añade una cabecera visual configurable.
+- El estado de cada página se valida por la presencia del widget Elementor esperado.
+- El botón de edición abre directamente el editor de Elementor.
+- Los estilos del portal aceptan variables configurables desde cada widget sin alterar la lógica funcional.
+- El alias interno `business_google` apunta al perfil de empresa para conservar la precarga de recursos y los flujos existentes del centro GMB.
+- README actualizado con arquitectura, widgets, migración, pruebas, seguridad y control de cambios de la versión 1.4.0.
+- Versión del plugin actualizada a `1.4.0`.
+
+### Retirado
+- Creación de páginas frontend independientes para Equipo de empresa, Integraciones de empresa, Google de empresa y Google de ubicación.
+- Dependencia del shortcode como contenido de las páginas generadas.
+
+### Conservado
+- Shortcodes existentes como API interna y capa de compatibilidad.
+- Metaboxes, handlers AJAX, nonces, procesos de guardado, permisos, cron jobs, logs y verificadores existentes.
+- Redirección compatible de enlaces antiguos.
+- Recuperación de páginas retiradas desde la Papelera de WordPress.
+
 ## [1.3.0] - 2026-07-30
 
 ### Agregado
