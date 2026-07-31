@@ -67,14 +67,7 @@ trait Lealez_Frontend_Pages_Trait {
                 'title' => __( 'Editar ubicación', 'lealez' ),
                 'slug' => 'editar-ubicacion',
                 'shortcode' => '[lealez_location_editor]',
-                'description' => __( 'Perfil de ubicación organizado por pestañas.', 'lealez' ),
-                'parent' => 'portal',
-            ),
-            'location_google' => array(
-                'title' => __( 'Google de ubicación', 'lealez' ),
-                'slug' => 'google-ubicacion',
-                'shortcode' => '[lealez_location_google_center]',
-                'description' => __( 'Perfil, contenido, reseñas, sincronización y analítica GMB.', 'lealez' ),
+                'description' => __( 'Perfil unificado con datos internos, Google Business Profile, contenido, interacción y analítica.', 'lealez' ),
                 'parent' => 'portal',
             ),
             'user_profile' => array(
@@ -104,12 +97,18 @@ trait Lealez_Frontend_Pages_Trait {
         }
         $definitions = $this->get_page_definitions();
         $created = isset( $_GET['lealez_pages_created'] ) ? absint( $_GET['lealez_pages_created'] ) : 0;
+        $page_ids = get_option( self::PAGE_OPTION, array() );
+        $legacy_id = is_array( $page_ids ) && isset( $page_ids['location_google'] ) ? absint( $page_ids['location_google'] ) : 0;
+        $legacy_page = $legacy_id ? get_post( $legacy_id ) : null;
         ?>
         <div class="wrap">
             <h1><?php esc_html_e( 'Páginas frontend de Lealez', 'lealez' ); ?></h1>
             <p><?php esc_html_e( 'Las páginas se crean con un shortcode funcional. Puedes diseñarlas con Elementor manteniendo el shortcode dentro del contenido.', 'lealez' ); ?></p>
             <?php if ( $created ) : ?>
                 <div class="notice notice-success is-dismissible"><p><?php echo esc_html( sprintf( _n( 'Se creó o reparó %d página.', 'Se crearon o repararon %d páginas.', $created, 'lealez' ), $created ) ); ?></p></div>
+            <?php endif; ?>
+            <?php if ( $legacy_page && 'trash' !== $legacy_page->post_status ) : ?>
+                <div class="notice notice-info"><p><strong><?php esc_html_e( 'Perfil de ubicación unificado:', 'lealez' ); ?></strong> <?php esc_html_e( 'La antigua página “Google de ubicación” se conserva únicamente para redirigir enlaces existentes hacia “Editar ubicación”. Ya no se crea ni se administra como una página independiente.', 'lealez' ); ?></p></div>
             <?php endif; ?>
             <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:18px 0;">
                 <input type="hidden" name="action" value="lealez_create_all_frontend_pages">

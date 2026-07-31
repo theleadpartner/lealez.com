@@ -5,7 +5,7 @@
 [![WordPress](https://img.shields.io/badge/WordPress-%3E%3D%206.0-21759B?logo=wordpress)](https://wordpress.org/)
 [![PHP](https://img.shields.io/badge/PHP-%3E%3D%207.4-777BB4?logo=php)](https://www.php.net/)
 [![License](https://img.shields.io/badge/License-GPL--2.0%2B-blue.svg)](https://www.gnu.org/licenses/gpl-2.0.html)
-[![Plugin version](https://img.shields.io/badge/plugin%20version-1.1.0-3782c4)](#versionado)
+[![Plugin version](https://img.shields.io/badge/plugin%20version-1.3.0-3782c4)](#versionado)
 
 ## Tabla de contenido
 
@@ -64,9 +64,9 @@ Este documento describe el estado del repositorio:
 
 - **Repositorio:** `theleadpartner/lealez.com`
 - **Rama base:** `main`
-- **Commit de referencia:** `38fb05b08063c5b276a1c4e757e6b0ba709f52e0`
+- **Commit de referencia:** rama `main`, versión funcional `1.3.0`
 - **Fecha de revisión:** 30 de julio de 2026
-- **Versión declarada en `lealez.php`:** `1.1.0`
+- **Versión declarada en `lealez.php`:** `1.3.0`
 - **Versión mínima de WordPress:** `6.0`
 - **Versión mínima de PHP:** `7.4`
 - **Text domain:** `lealez`
@@ -1870,3 +1870,69 @@ Antes de modificar una función:
 8. validar el flujo completo.
 
 La prioridad es extender Lealez sin destruir compatibilidad ni datos existentes.
+
+
+---
+
+<!-- LEALEZ_UNIFIED_LOCATION_PROFILE_1_3_0 -->
+### Perfil unificado de ubicación — versión 1.3.0
+
+Desde la versión `1.3.0`, una ubicación tiene **un único perfil frontend**. La página `Editar ubicación`, publicada mediante `[lealez_location_editor]`, reúne en la misma navegación:
+
+- datos administrativos internos de Lealez;
+- vinculación y control de sincronización con Google Business Profile;
+- información básica, dirección, áreas de servicio, contacto y horarios;
+- atributos de la sección “Más”;
+- fotos, menú, servicios y publicaciones;
+- opiniones y respuestas;
+- rendimiento, frases de búsqueda y horario de mayor interés.
+
+La página que antes se generaba como `Google de ubicación` ya no forma parte del instalador. Cuando existe en una instalación actualizada, se conserva como ruta de compatibilidad y redirige a `Editar ubicación`, preservando `location_id` y el módulo solicitado. No se elimina automáticamente para evitar romper enlaces, menús o marcadores existentes.
+
+#### Leyenda de sincronización
+
+Cada sección muestra uno de los siguientes alcances:
+
+| Indicador | Significado |
+|---|---|
+| **Sincroniza con Google** | El módulo guarda primero en Lealez y dispone de un flujo de envío a Google Business Profile. |
+| **Datos de Google** | Información obtenida desde Google; puede guardarse como caché o snapshot local, pero Google es la fuente. |
+| **Solo Lealez** | Información administrativa que nunca se incluye en solicitudes a Google. |
+| **Mixto** | La misma sección contiene campos de Google y campos locales; el panel enumera cada grupo. |
+| **Control técnico** | Vinculación, límites, logs o coordinación del proceso; no representa contenido público del perfil. |
+
+En la creación inicial, los campos compatibles también reciben una etiqueta visual. La ubicación debe guardarse primero para obtener un ID seguro; después continúa en el mismo perfil unificado y se habilitan los módulos de envío y verificación.
+
+#### Estados de publicación
+
+Guardar un formulario en WordPress **no significa** que el cambio ya esté publicado en Google. Los módulos compatibles mantienen el flujo:
+
+1. editar el dato;
+2. guardar localmente;
+3. enviar a Google Business Profile;
+4. verificar el estado devuelto por Google.
+
+La interfaz diferencia los estados `Guardado · falta enviar`, `Enviado · en cola`, `Google está revisando`, `Aplicado en Google`, `Aplicado parcialmente`, `No aplicado`, `Google devolvió otro valor`, `Pendiente de verificación`, `Requiere corregir datos` y `Error de envío`.
+
+Google conserva la decisión final. Una solicitud puede aplicarse inmediatamente, quedar en revisión, aplicarse parcialmente, ser modificada o ser rechazada. Lealez solo presenta `Aplicado en Google` cuando el verificador del módulo lo confirma.
+
+#### Separación de campos
+
+Los campos exclusivamente internos incluyen, entre otros:
+
+- empresa propietaria y nombre interno de la ficha;
+- código y estado administrativo;
+- configuración de lealtad;
+- responsable, correo, teléfono y notas internas.
+
+Los módulos de dirección, contacto público, horarios, atributos y menú reutilizan los metaboxes originales y sus handlers AJAX, nonces, jobs, logs y verificadores. Las secciones mixtas detallan cuáles campos participan en el intercambio con Google y cuáles permanecen solo en Lealez.
+
+#### Compatibilidad y permisos
+
+- No se duplican meta keys ni se crea una segunda lógica de publicación.
+- No se modifican los archivos de los CPT ni de los metaboxes existentes.
+- Los permisos se calculan por empresa y ubicación.
+- Los gerentes y administradores autorizados no reciben `manage_options` global.
+- La vinculación crítica de la propiedad de Google permanece protegida.
+- Las páginas personalizadas siguen excluidas del caché de página completa.
+- La página `Google de empresa` continúa separada porque administra OAuth, cuentas y propiedades de la empresa, no el contenido de una ubicación individual.
