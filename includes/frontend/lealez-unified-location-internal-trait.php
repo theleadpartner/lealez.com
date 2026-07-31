@@ -82,7 +82,7 @@ trait Lealez_Unified_Location_Internal_Trait {
             if ( 'POST' !== strtoupper( isset( $_SERVER['REQUEST_METHOD'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) : '' ) ) {
                 return;
             }
-            $action = isset( $_POST['lealez_frontend_action)] ) ? sanitize_key( wp_unslash( $_POST['lealez_frontend_action)] ) ) : '';
+            $action = isset( $_POST['lealez_frontend_action'] ) ? sanitize_key( wp_unslash( $_POST['lealez_frontend_action'] ) ) : '';
             if ( 'save_location_internal' !== $action ) {
                 return;
             }
