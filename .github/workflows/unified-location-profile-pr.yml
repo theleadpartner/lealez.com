@@ -56,7 +56,7 @@ jobs:
           node --check assets/js/frontend/lealez-frontend-unified-location.js
           ! grep -q "'location_google' => array(" includes/frontend/lealez-frontend-pages-trait.php
           grep -q "redirect_legacy_google_location_page" includes/frontend/lealez-unified-location-routing-trait.php
-          grep -q "Sincroniza con Google" includes/frontend/lealez-unified-location-modules-trait.php
+          grep -q "google_fields" includes/frontend/lealez-unified-location-modules-trait.php
           grep -q "Solo Lealez" includes/frontend/lealez-unified-location-internal-trait.php
           grep -q "Version: 1.3.0" lealez.php
           grep -q "LEALEZ_UNIFIED_LOCATION_PROFILE_1_3_0" README.md
