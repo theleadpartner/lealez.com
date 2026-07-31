@@ -1,0 +1,201 @@
+.lealez-unified-location-profile {
+    --lealez-sync-google: #1a73e8;
+    --lealez-sync-google-soft: #e8f0fe;
+    --lealez-sync-read: #0f766e;
+    --lealez-sync-read-soft: #e6fffb;
+    --lealez-sync-local: #6d28d9;
+    --lealez-sync-local-soft: #f3e8ff;
+    --lealez-sync-mixed: #a16207;
+    --lealez-sync-mixed-soft: #fef3c7;
+    --lealez-sync-system: #475569;
+    --lealez-sync-system-soft: #f1f5f9;
+}
+
+.lealez-sync-legend {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0 0 18px;
+}
+
+.lealez-sync-legend > div {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.lealez-sync-legend p {
+    color: #64748b;
+    font-size: 11px;
+    line-height: 1.45;
+    margin: 7px 0 0;
+}
+
+.lealez-sync-chip {
+    align-items: center;
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .015em;
+    line-height: 1.25;
+    padding: 4px 7px;
+    white-space: nowrap;
+}
+
+.lealez-sync-chip.is-large {
+    font-size: 11px;
+    padding: 6px 10px;
+}
+
+.lealez-sync-chip.is-google-write {
+    background: var(--lealez-sync-google-soft, #e8f0fe);
+    color: var(--lealez-sync-google, #1a73e8);
+}
+
+.lealez-sync-chip.is-google-read {
+    background: var(--lealez-sync-read-soft, #e6fffb);
+    color: var(--lealez-sync-read, #0f766e);
+}
+
+.lealez-sync-chip.is-internal {
+    background: var(--lealez-sync-local-soft, #f3e8ff);
+    color: var(--lealez-sync-local, #6d28d9);
+}
+
+.lealez-sync-chip.is-mixed {
+    background: var(--lealez-sync-mixed-soft, #fef3c7);
+    color: var(--lealez-sync-mixed, #a16207);
+}
+
+.lealez-sync-chip.is-system {
+    background: var(--lealez-sync-system-soft, #f1f5f9);
+    color: var(--lealez-sync-system, #475569);
+}
+
+.lealez-gmb-nav-meta,
+.lealez-module-heading-badges,
+.lealez-card-badges {
+    align-items: flex-end;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.lealez-card-badges {
+    align-items: flex-start;
+    flex-direction: row;
+    flex-wrap: wrap;
+}
+
+.lealez-gmb-nav-item .lealez-sync-chip,
+.lealez-gmb-nav-item .lealez-gmb-state {
+    max-width: 118px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lealez-field-scope-panel {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    margin: 0 0 14px;
+}
+
+.lealez-field-scope-panel section {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.lealez-field-scope-panel ul {
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.5;
+    margin: 9px 0 0 18px;
+}
+
+.lealez-field-scope-panel li + li {
+    margin-top: 4px;
+}
+
+.lealez-unified-location-profile .lealez-action-card > .lealez-sync-chip {
+    margin-top: auto;
+}
+
+.lealez-unified-location-profile .lealez-gmb-status-card > div {
+    min-width: 0;
+}
+
+.lealez-unified-location-profile .lealez-gmb-status-card strong {
+    overflow-wrap: anywhere;
+}
+
+.lealez-unified-location-profile .lealez-internal-location-form {
+    margin-top: 0;
+}
+
+.lealez-unified-location-profile .lealez-internal-location-form .lealez-sync-chip {
+    margin-left: 5px;
+    vertical-align: middle;
+}
+
+.lealez-unified-location-profile .is-read-only input,
+.lealez-unified-location-profile .is-read-only select,
+.lealez-unified-location-profile .is-read-only textarea,
+.lealez-unified-location-profile .is-read-only button {
+    pointer-events: none;
+}
+
+.lealez-unified-location-profile .is-read-only .inside {
+    opacity: .82;
+}
+
+.lealez-unified-create-notice {
+    margin-bottom: 16px;
+}
+
+.lealez-unified-create-notice .lealez-sync-legend {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.lealez-form .lealez-field-label-scope {
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+@media (max-width: 1100px) {
+    .lealez-sync-legend {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 820px) {
+    .lealez-gmb-nav-meta {
+        align-items: flex-start;
+    }
+
+    .lealez-gmb-nav-item .lealez-sync-chip,
+    .lealez-gmb-nav-item .lealez-gmb-state {
+        max-width: 150px;
+    }
+
+    .lealez-module-heading-badges {
+        align-items: flex-start;
+        margin-top: 10px;
+    }
+}
+
+@media (max-width: 560px) {
+    .lealez-sync-legend,
+    .lealez-unified-create-notice .lealez-sync-legend,
+    .lealez-field-scope-panel {
+        grid-template-columns: 1fr;
+    }
+
+    .lealez-sync-chip {
+        white-space: normal;
+    }
+}
