@@ -2,6 +2,8 @@
     'use strict';
 
     var config = window.lealezUnifiedLocation || {};
+    var customerCopyObserver = null;
+    var customerCopyFrame = null;
 
     function chip(label, cssClass) {
         return $('<span>', {
@@ -55,6 +57,11 @@
         annotateField($form.find(localSelectors.join(',')), config.localLabel || 'Solo en Lealez', 'is-internal');
     }
 
+    function isTechnicalAdminView() {
+        return parseInt(config.technicalAdmin, 10) === 1 ||
+            $('.lealez-unified-location-profile .lealez-gmb-nav-item[href*="section=connection"]').length > 0;
+    }
+
     /**
      * The original admin metaboxes are intentionally reused in the customer
      * portal so their save/push logic stays intact. Some of those metaboxes were
@@ -63,7 +70,7 @@
      * nodes; form values, hidden fields and AJAX payloads are never touched.
      */
     function sanitizeCustomerTechnicalCopy() {
-        if (parseInt(config.technicalAdmin, 10) === 1 || $('.lealez-unified-location-profile .lealez-gmb-nav-item[href*="section=connection"]').length) {
+        if (isTechnicalAdminView()) {
             return;
         }
 
@@ -119,8 +126,41 @@
         });
     }
 
+    function scheduleCustomerCopySanitization() {
+        if (customerCopyFrame !== null) {
+            return;
+        }
+
+        customerCopyFrame = window.requestAnimationFrame(function () {
+            customerCopyFrame = null;
+            sanitizeCustomerTechnicalCopy();
+        });
+    }
+
+    function observeDynamicCustomerCopy() {
+        if (isTechnicalAdminView() || typeof window.MutationObserver === 'undefined') {
+            return;
+        }
+
+        var root = document.querySelector('.lealez-unified-location-profile .lealez-gmb-main');
+        if (!root || customerCopyObserver) {
+            return;
+        }
+
+        customerCopyObserver = new MutationObserver(function () {
+            scheduleCustomerCopySanitization();
+        });
+
+        customerCopyObserver.observe(root, {
+            childList: true,
+            characterData: true,
+            subtree: true
+        });
+    }
+
     $(function () {
         annotateCreationForm();
         sanitizeCustomerTechnicalCopy();
+        observeDynamicCustomerCopy();
     });
 })(jQuery);
