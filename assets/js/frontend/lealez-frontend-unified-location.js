@@ -51,9 +51,76 @@
             '#location_manager_email', '#location_manager_phone', '#manager_notes', '#internal_notes'
         ];
 
-        annotateField($form.find(googleSelectors.join(',')), config.googleLabel || 'Sincroniza con Google', 'is-google-write');
-        annotateField($form.find(localSelectors.join(',')), config.localLabel || 'Solo Lealez', 'is-internal');
+        annotateField($form.find(googleSelectors.join(',')), config.googleLabel || 'Se puede publicar', 'is-google-write');
+        annotateField($form.find(localSelectors.join(',')), config.localLabel || 'Solo en Lealez', 'is-internal');
     }
 
-    $(annotateCreationForm);
+    /**
+     * The original admin metaboxes are intentionally reused in the customer
+     * portal so their save/push logic stays intact. Some of those metaboxes were
+     * written for technical administrators and can include Google resource
+     * names in explanatory text. For customer users we only clean visible text
+     * nodes; form values, hidden fields and AJAX payloads are never touched.
+     */
+    function sanitizeCustomerTechnicalCopy() {
+        if (parseInt(config.technicalAdmin, 10) === 1 || $('.lealez-unified-location-profile .lealez-gmb-nav-item[href*="section=connection"]').length) {
+            return;
+        }
+
+        var root = document.querySelector('.lealez-unified-location-profile .lealez-gmb-main');
+        if (!root || !document.createTreeWalker) {
+            return;
+        }
+
+        var skipTags = {
+            SCRIPT: true,
+            STYLE: true,
+            INPUT: true,
+            TEXTAREA: true,
+            SELECT: true,
+            OPTION: true,
+            CODE: true,
+            PRE: true
+        };
+
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: function (node) {
+                var parent = node.parentElement;
+                if (!parent || skipTags[parent.tagName]) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        });
+
+        var nodes = [];
+        var node;
+        while ((node = walker.nextNode())) {
+            nodes.push(node);
+        }
+
+        nodes.forEach(function (textNode) {
+            var text = textNode.nodeValue || '';
+            var cleaned = text
+                .replace(/categories\.primaryCategory/gi, 'Categoría principal')
+                .replace(/categories\.additionalCategories/gi, 'Categorías adicionales')
+                .replace(/phoneNumbers\.primaryPhone/gi, 'Teléfono principal')
+                .replace(/phoneNumbers\.additionalPhones/gi, 'Teléfonos adicionales')
+                .replace(/metadata\.placeId\s*:?\s*[A-Za-z0-9_-]*/gi, '')
+                .replace(/(?:categories\/)?gcid:[A-Za-z0-9_:-]+/gi, '')
+                .replace(/accounts\/[A-Za-z0-9_-]+\/locations\/[A-Za-z0-9_-]+/gi, '')
+                .replace(/\blocations\/[A-Za-z0-9_-]+\b/gi, '')
+                .replace(/\s{2,}/g, ' ')
+                .replace(/\s+([,.;:)])/g, '$1');
+
+            if (cleaned !== text) {
+                textNode.nodeValue = cleaned;
+            }
+        });
+    }
+
+    $(function () {
+        annotateCreationForm();
+        sanitizeCustomerTechnicalCopy();
+    });
 })(jQuery);
