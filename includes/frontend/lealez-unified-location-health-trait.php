@@ -115,13 +115,21 @@ trait Lealez_Unified_Location_Health_Trait {
         $overall_scores  = array();
         $pending_modules = 0;
 
-        $basic_values = array(
-            ! empty( $post ) && '' !== trim( (string) $post->post_title ),
-            '' !== trim( (string) get_post_meta( $location_id, 'google_primary_category', true ) ),
-            '' !== trim( (string) get_post_meta( $location_id, 'location_short_description', true ) ),
-            '' !== trim( (string) get_post_meta( $location_id, 'opening_date', true ) ),
-        );
-        $sections['basic'] = $this->build_completion_section( $modules, 'basic', $this->weighted_completion( $basic_values, array( 25, 30, 30, 15 ) ) );
+        $has_title       = ! empty( $post ) && '' !== trim( (string) $post->post_title );
+        $has_category    = '' !== trim( (string) get_post_meta( $location_id, 'google_primary_category', true ) );
+        $has_description = '' !== trim( (string) get_post_meta( $location_id, 'location_short_description', true ) );
+        $has_opening     = '' !== trim( (string) get_post_meta( $location_id, 'opening_date', true ) );
+
+        if ( $this->is_lodging_location( $location_id ) ) {
+            // Google documents profile descriptions differently for lodging
+            // categories, so an optional description must not lower the score.
+            $basic_values  = array( $has_title, $has_category, $has_opening );
+            $basic_weights = array( 35, 40, 25 );
+        } else {
+            $basic_values  = array( $has_title, $has_category, $has_description, $has_opening );
+            $basic_weights = array( 25, 30, 30, 15 );
+        }
+        $sections['basic'] = $this->build_completion_section( $modules, 'basic', $this->weighted_completion( $basic_values, $basic_weights ) );
         $overall_scores[]  = $sections['basic']['score'];
 
         if ( $service_area ) {
@@ -143,13 +151,13 @@ trait Lealez_Unified_Location_Health_Trait {
         $sections['address'] = $this->build_completion_section( $modules, 'address', $address_score );
         $overall_scores[]    = $address_score;
 
-        $has_actions = $this->has_any_location_action( $location_id );
+        // Action links (reservations, orders, chat, etc.) vary by category
+        // and capability, so they stay editable but do not penalize completion.
         $contact_values = array(
             '' !== trim( (string) get_post_meta( $location_id, 'location_phone', true ) ),
             '' !== trim( (string) get_post_meta( $location_id, 'location_website', true ) ),
-            $has_actions,
         );
-        $contact_score       = $this->weighted_completion( $contact_values, array( 45, 35, 20 ) );
+        $contact_score       = $this->weighted_completion( $contact_values, array( 55, 45 ) );
         $sections['contact'] = $this->build_completion_section( $modules, 'contact', $contact_score );
         $overall_scores[]    = $contact_score;
 
@@ -199,6 +207,14 @@ trait Lealez_Unified_Location_Health_Trait {
         );
     }
 
+    /**
+     * Build a section completion payload.
+     *
+     * @param array  $modules Modules map.
+     * @param string $key     Module key.
+     * @param int    $score   Completion score.
+     * @return array
+     */
     private function build_completion_section( array $modules, $key, $score ) {
         $label = isset( $modules[ $key ]['label'] ) ? (string) $modules[ $key ]['label'] : ucfirst( $key );
         return array(
@@ -209,6 +225,13 @@ trait Lealez_Unified_Location_Health_Trait {
         );
     }
 
+    /**
+     * Weighted percentage helper.
+     *
+     * @param array $values  Boolean values.
+     * @param array $weights Integer weights totaling 100.
+     * @return int
+     */
     private function weighted_completion( array $values, array $weights ) {
         $score = 0;
         foreach ( $weights as $index => $weight ) {
@@ -219,6 +242,12 @@ trait Lealez_Unified_Location_Health_Trait {
         return max( 0, min( 100, $score ) );
     }
 
+    /**
+     * Semaphoric state requested for the client UI.
+     *
+     * @param int $score Completion score.
+     * @return array{label:string,class:string}
+     */
     private function get_completion_state( $score ) {
         $score = (int) $score;
         if ( $score >= 80 ) {
@@ -230,6 +259,14 @@ trait Lealez_Unified_Location_Health_Trait {
         return array( 'label' => __( 'Requiere atención', 'lealez' ), 'class' => 'low' );
     }
 
+    /**
+     * Render a compact completion badge for navigation/status cards.
+     *
+     * @param int $location_id Location post ID.
+     * @param string $module Module key.
+     * @param array|null $completion Optional precomputed completion payload.
+     * @return string
+     */
     private function render_module_completion_badge( $location_id, $module, $completion = null ) {
         if ( ! is_array( $completion ) ) {
             $completion = $this->get_location_profile_completion( $location_id, $this->get_location_modules() );
@@ -247,16 +284,21 @@ trait Lealez_Unified_Location_Health_Trait {
         );
     }
 
-    private function has_any_location_action( $location_id ) {
-        foreach ( array( 'location_chat_url', 'location_menu_url', 'location_booking_url', 'location_order_url' ) as $meta_key ) {
-            if ( '' !== trim( (string) get_post_meta( $location_id, $meta_key, true ) ) ) {
-                return true;
-            }
-        }
+    /**
+     * Detect lodging categories from the stable Google category resource kept
+     * internally. The technical resource is used only for logic and is never
+     * rendered to the customer.
+     *
+     * @param int $location_id Location post ID.
+     * @return bool
+     */
+    private function is_lodging_location( $location_id ) {
+        $resource = strtolower( (string) get_post_meta( $location_id, 'google_primary_category_name', true ) );
+        $label    = strtolower( (string) get_post_meta( $location_id, 'google_primary_category', true ) );
+        $haystack = $resource . ' ' . $label;
 
-        foreach ( array( 'location_booking_urls', 'location_order_urls' ) as $meta_key ) {
-            $value = get_post_meta( $location_id, $meta_key, true );
-            if ( is_array( $value ) && ! empty( $value ) ) {
+        foreach ( array( 'hotel', 'motel', 'hostel', 'lodging', 'resort', 'bed_and_breakfast', 'guest_house', 'inn', 'hostal', 'alojamiento' ) as $needle ) {
+            if ( false !== strpos( $haystack, $needle ) ) {
                 return true;
             }
         }
@@ -264,6 +306,13 @@ trait Lealez_Unified_Location_Health_Trait {
         return false;
     }
 
+    /**
+     * Evaluate whether the weekly hours have been intentionally configured.
+     * Explicit closed/open-without-hours states are treated as complete choices.
+     *
+     * @param int $location_id Location post ID.
+     * @return int
+     */
     private function calculate_hours_completion( $location_id ) {
         $status = sanitize_key( (string) get_post_meta( $location_id, 'location_hours_status', true ) );
         if ( in_array( $status, array( 'open_without_hours', 'temporarily_closed', 'permanently_closed' ), true ) ) {
@@ -293,6 +342,14 @@ trait Lealez_Unified_Location_Health_Trait {
         return 0;
     }
 
+    /**
+     * Attributes are dynamic and optional by category/country. This score only
+     * indicates whether category-aware attributes have been loaded/configured;
+     * it is deliberately excluded from the overall percentage.
+     *
+     * @param int $location_id Location post ID.
+     * @return int
+     */
     private function calculate_attributes_completion( $location_id ) {
         $raw       = get_post_meta( $location_id, 'gmb_attributes_raw', true );
         $overrides = get_post_meta( $location_id, '_gmb_more_attributes_overrides', true );
