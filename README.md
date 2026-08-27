@@ -1,10 +1,10 @@
 # Lealez
 
-Plugin de WordPress para administrar empresas, ubicaciones, perfiles de Google Business Profile y la base de programas de lealtad. Desde la versión **1.4.0**, el portal de autogestión se publica mediante **widgets nativos de Elementor**, mientras Lealez conserva permisos, validaciones, guardado, sincronización con Google y compatibilidad con los shortcodes existentes.
+Plugin de WordPress para administrar empresas, ubicaciones, perfiles de Google Business Profile y la base de programas de lealtad. Desde la versión **1.4.0**, el portal de autogestión se publica mediante **widgets nativos de Elementor**, mientras Lealez conserva permisos, validaciones, guardado, sincronización con Google y compatibilidad con los shortcodes existentes. La versión **1.5.0** refuerza el perfil de ubicación con una experiencia orientada al cliente, completitud por sección y opciones adaptadas a las capacidades que Google reporta para cada tipo de negocio.
 
 ![WordPress](https://img.shields.io/badge/WordPress-6.0%2B-21759B?logo=wordpress)
 ![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?logo=php)
-![Version](https://img.shields.io/badge/version-1.4.0-3782c4)
+![Version](https://img.shields.io/badge/version-1.5.0-3782c4)
 ![Elementor](https://img.shields.io/badge/Elementor-required%20for%20frontend%20pages-92003B?logo=elementor)
 
 ## Contenido
@@ -21,6 +21,7 @@ Plugin de WordPress para administrar empresas, ubicaciones, perfiles de Google B
 - [Controles editables](#controles-editables)
 - [Perfil unificado de empresa](#perfil-unificado-de-empresa)
 - [Perfil unificado de ubicación](#perfil-unificado-de-ubicación)
+- [Completitud y adaptación por tipo de negocio](#completitud-y-adaptación-por-tipo-de-negocio)
 - [Migración desde shortcodes](#migración-desde-shortcodes)
 - [Páginas heredadas retiradas](#páginas-heredadas-retiradas)
 - [Google Business Profile](#google-business-profile)
@@ -42,6 +43,8 @@ Lealez separa dos responsabilidades:
 
 Esta separación permite cambiar el diseño del portal sin reemplazar los procesos que ya funcionan. Los widgets de Elementor usan los renderers y shortcodes de Lealez como API interna para preservar compatibilidad.
 
+En el frontend de cliente se prioriza lenguaje de negocio. Identificadores internos, nombres de campos de API, recursos técnicos, claves, payloads, límites y logs no forman parte de la experiencia normal del usuario. La información técnica se conserva para administración y soporte donde corresponde.
+
 ## Alcance actual
 
 El repositorio incluye:
@@ -56,6 +59,8 @@ El repositorio incluye:
 - administración de equipo e integraciones;
 - módulos de Google Business Profile;
 - perfil frontend unificado de ubicación;
+- indicador de completitud de la ubicación;
+- navegación y contenido adaptados al tipo/capacidad de negocio sincronizada desde Google;
 - instalador de páginas Elementor;
 - seis widgets Elementor;
 - migración segura desde páginas con shortcode;
@@ -88,6 +93,10 @@ WordPress
     │   ├── ubicaciones
     │   ├── usuario
     │   └── perfil unificado de ubicación
+    │       ├── navegación y render
+    │       ├── metaboxes Google existentes
+    │       ├── permisos
+    │       └── completitud y aplicabilidad
     └── Lealez_Elementor_Integration
         ├── categoría Lealez
         ├── registro de assets
@@ -99,6 +108,9 @@ WordPress
 - No duplicar reglas de acceso en JavaScript.
 - No guardar secretos en Elementor.
 - No reemplazar metaboxes o handlers existentes sin necesidad.
+- Mantener el flujo **editar → guardar en Lealez → enviar a Google → verificar**.
+- No presentar un guardado local como publicación exitosa.
+- Consultar capacidades/categorías/atributos disponibles antes de asumir que una opción aplica a todos los negocios.
 - Mantener shortcodes y acciones públicas como contratos de compatibilidad.
 - Crear páginas idempotentes: ejecutar el instalador varias veces no debe duplicarlas.
 - Reparar una página sin borrar una composición Elementor existente.
@@ -147,6 +159,8 @@ Representa una sede, sucursal, punto de atención o negocio local. Se relaciona 
 
 El acceso se concede al autor, a un administrador de WordPress o a quien tenga acceso a la empresa padre.
 
+Los metadatos de sincronización con Google continúan existiendo para compatibilidad técnica, pero el frontend de cliente no muestra IDs de cuenta, IDs de ubicación, resource names, payloads RAW ni nombres internos de propiedades de la API.
+
 ### Estado y archivo
 
 Lealez usa estados de WordPress para conservar datos. Archivar no elimina metadatos. Las operaciones de retiro de páginas también usan la Papelera para permitir recuperación.
@@ -172,7 +186,7 @@ El instalador:
 
 ## Páginas generadas
 
-La versión 1.4.0 mantiene seis páginas de usuario:
+Se mantienen seis páginas de usuario:
 
 | Clave | Página | Slug de instalación nueva | Widget |
 |---|---|---|---|
@@ -227,7 +241,7 @@ Renderiza listado, filtro por empresa, creación, edición, archivo y restauraci
 
 ### Lealez — Perfil de ubicación
 
-Renderiza el perfil unificado con datos internos, módulos Google, contenido, interacción y analítica.
+Renderiza el perfil unificado con datos internos, información pública, contenido, interacción, resultados y los módulos reales de Google Business Profile. En 1.5.0 agrega completitud, semáforo por sección y adaptación de módulos por tipo/capacidad del negocio.
 
 ### Lealez — Mi perfil
 
@@ -282,18 +296,75 @@ El enfoque toma como referencia la jerarquía clara de perfiles de directorios m
 
 ## Perfil unificado de ubicación
 
-La página conserva el sistema introducido en 1.3.0:
+La página conserva el sistema introducido en 1.3.0 y ampliado en 1.5.0:
 
 - resumen de publicación;
 - datos internos;
-- alcance de sincronización por campo;
+- alcance de sincronización por sección;
 - metaboxes existentes;
 - guardado local;
 - envío a Google;
 - revisión y estado de aplicación;
-- módulos de contenido, interacción y analítica.
+- módulos de contenido, interacción y resultados;
+- porcentaje de completitud global;
+- semáforo por cada sección relevante;
+- conteo de secciones con cambios por revisar;
+- estado de conexión expresado sin identificadores técnicos;
+- navegación agrupada y más corta;
+- menú/servicios adaptados a la capacidad detectada para la ubicación.
 
-La versión 1.4.0 agrega una cabecera configurable con portada, identidad, dirección, categoría, teléfono, estado y enlace al sitio web.
+La cabecera conserva portada, identidad, dirección, categoría, teléfono, estado y enlace al sitio web mediante los controles del widget Elementor.
+
+### Navegación 1.5.0
+
+El cliente ve grupos orientados a tareas:
+
+- **General:** Resumen y Administración Lealez.
+- **Perfil público:** Información del negocio, Ubicación y áreas de servicio, Contacto y acciones, Horarios, Características del negocio.
+- **Contenido:** Fotos, Menú o Servicios/Catálogo según corresponda, Publicaciones.
+- **Interacción:** Opiniones.
+- **Resultados:** Rendimiento, Búsquedas y Mayor interés.
+
+Los módulos de **Vinculación con Google** y **Diagnóstico de sincronización** son técnicos y se muestran únicamente a administradores del sitio. Los usuarios de empresa siguen viendo el estado de conexión, los cambios pendientes y el estado de cada envío, sin exponer información innecesaria.
+
+## Completitud y adaptación por tipo de negocio
+
+`Lealez_Unified_Location_Health_Trait` implementa una capa de experiencia sin modificar la lógica de publicación de los metaboxes.
+
+### Porcentaje global
+
+El porcentaje es una **guía interna de Lealez**, no una puntuación oficial de Google. Se calcula con información que el usuario puede completar de manera razonable:
+
+- información del negocio;
+- dirección o cobertura;
+- contacto;
+- horarios;
+- menú o catálogo únicamente cuando ese módulo aplica.
+
+Los estados visuales son:
+
+- **Rojo — Requiere atención:** menos de 50%.
+- **Amarillo — En progreso:** 50% a 79%.
+- **Verde — Bien completado:** 80% o más.
+
+### Áreas de servicio
+
+Si la ubicación está configurada como negocio de área de servicio, el cálculo no exige una dirección física completa. Se priorizan país, ciudad/cobertura y la configuración correspondiente. Esto evita tratar como incompleta una ficha para la cual una dirección visible no corresponde.
+
+### Atributos dinámicos
+
+Los atributos se muestran como sección de estado, pero no reducen el porcentaje global. Google define atributos dinámicos por categoría y país, y estos pueden cambiar. Lealez conserva el flujo existente que consulta las opciones compatibles antes de publicar.
+
+### Menú y servicios
+
+Lealez reutiliza `gmb_catalog_type`, ya generado por la sincronización existente:
+
+- `food_menu`: muestra Menú y oculta Servicios/Catálogo.
+- `services` o `products`: muestra Servicios/Catálogo y oculta Menú.
+- `none`: no presenta un módulo de catálogo incompatible.
+- sin valor aún: mantiene ambos accesibles de forma informativa hasta que Google confirme las capacidades.
+
+Esta lógica no inventa compatibilidad. El metabox y el endpoint existentes siguen siendo la fuente real de lectura/publicación.
 
 ## Migración desde shortcodes
 
@@ -346,6 +417,30 @@ La integración existente se conserva:
 - estados locales, enviados, en revisión y aplicados;
 - logs y rate limiting.
 
+### Flujo de edición y publicación
+
+Lealez diferencia explícitamente cuatro pasos:
+
+1. **Editar.** El usuario modifica una sección.
+2. **Guardar en Lealez.** Los datos quedan locales y pueden marcarse como pendientes.
+3. **Enviar a GMB.** El metabox correspondiente usa su handler real y únicamente los campos que soporta.
+4. **Verificar.** El estado se actualiza cuando el verificador confirma qué ocurrió en Google.
+
+Guardar no equivale a publicar. Google puede aplicar, revisar, modificar o rechazar un cambio.
+
+### Compatibilidad con Business Information API
+
+La UI 1.5.0 se diseñó teniendo en cuenta el comportamiento documentado de Google Business Profile:
+
+- las actualizaciones de una ubicación se realizan por campos concretos mediante `updateMask`;
+- categorías y atributos disponibles deben consultarse con los servicios oficiales porque cambian por país, idioma y tipo de negocio;
+- los atributos compatibles dependen de categoría y región;
+- un negocio que atiende únicamente en área de servicio no debe tratarse como si necesitara dirección física visible;
+- los menús de alimentos solo se deben administrar cuando la ubicación es elegible para esa capacidad;
+- información de salida o diagnóstico de Google no debe confundirse con campos que el cliente deba editar.
+
+Por esta razón, la capa de perfil no intenta enviar campos que los metaboxes existentes todavía no soportan de forma segura. Las capacidades reales siguen estando determinadas por la integración y los endpoints ya implementados.
+
 Para compatibilidad, `business_google` se mantiene como alias interno del ID de `business_editor`. Esto permite que el centro GMB precargue sus assets antes de `wp_head`, aunque ya no exista una página pública separada.
 
 La URL con `module` también abre la sección Google:
@@ -364,6 +459,8 @@ Crear, reparar o retirar páginas requiere:
 - nonce válido;
 - acción `admin-post.php` registrada.
 
+Los módulos técnicos de una ubicación —vinculación, identificadores, límites, procesos e historial de sincronización— se reservan para administradores del sitio. La administración de WordPress conserva la información técnica necesaria para soporte y auditoría.
+
 ### Frontend
 
 Cada renderer valida de nuevo:
@@ -372,8 +469,11 @@ Cada renderer valida de nuevo:
 - tipo de post;
 - ID válido;
 - acceso a empresa o ubicación;
+- visibilidad del módulo para el rol actual;
 - permisos adicionales para equipo;
 - nonce en operaciones de escritura.
+
+El frontend de cliente evita mostrar nombres internos de propiedades de Google, IDs técnicos, payloads RAW, claves o variables que no sean necesarias para tomar una decisión de negocio.
 
 ### Caché
 
@@ -427,13 +527,6 @@ lealez.com/
 │   ├── elementor/
 │   │   ├── class-lealez-elementor.php
 │   │   └── widgets/
-│   │       ├── class-lealez-elementor-portal-widget.php
-│   │       ├── class-lealez-elementor-portal-widgets.php
-│   │       ├── trait-lealez-elementor-content-controls.php
-│   │       ├── trait-lealez-elementor-style-controls.php
-│   │       ├── trait-lealez-elementor-profile-render.php
-│   │       ├── trait-lealez-elementor-profile-summary.php
-│   │       └── trait-lealez-elementor-profile-access.php
 │   ├── frontend/
 │   │   ├── class-lealez-frontend-portal.php
 │   │   ├── lealez-frontend-pages-trait.php
@@ -445,7 +538,14 @@ lealez.com/
 │   │   ├── lealez-frontend-page-access-trait.php
 │   │   ├── lealez-frontend-business-trait.php
 │   │   ├── lealez-frontend-location-trait.php
-│   │   └── class-lealez-frontend-unified-location-profile.php
+│   │   ├── class-lealez-frontend-unified-location-profile.php
+│   │   ├── lealez-unified-location-routing-trait.php
+│   │   ├── lealez-unified-location-render-trait.php
+│   │   ├── lealez-unified-location-modules-trait.php
+│   │   ├── lealez-unified-location-health-trait.php
+│   │   ├── lealez-unified-location-internal-trait.php
+│   │   ├── lealez-unified-location-metabox-trait.php
+│   │   └── lealez-unified-location-access-trait.php
 │   ├── integrations/google-my-business/
 │   └── taxonomies/
 └── templates/
@@ -464,6 +564,11 @@ lealez.com/
 | `lealez-frontend-page-installer-trait.php` | Creación y migración Elementor |
 | `lealez-frontend-page-routing-trait.php` | URLs, alias, limpieza y redirecciones |
 | `lealez-frontend-page-access-trait.php` | Helpers, avisos y permisos |
+| `class-lealez-frontend-unified-location-profile.php` | Composición del perfil frontend de ubicación |
+| `lealez-unified-location-modules-trait.php` | Mapa de secciones y alcance funcional |
+| `lealez-unified-location-health-trait.php` | Completitud, semáforo, aplicabilidad y visibilidad segura por módulo |
+| `lealez-unified-location-render-trait.php` | Navegación, resumen y render del perfil |
+| `lealez-unified-location-routing-trait.php` | Rutas, assets y validación de sección visible |
 | `class-lealez-elementor.php` | Inicialización y registro de widgets |
 | `class-lealez-elementor-portal-widget.php` | Clase base y dependencias de los widgets |
 | `class-lealez-elementor-portal-widgets.php` | Seis widgets concretos del portal |
@@ -472,6 +577,7 @@ lealez.com/
 | `trait-lealez-elementor-profile-render.php` | Enrutamiento del renderizado unificado |
 | `trait-lealez-elementor-profile-summary.php` | Cabeceras visuales de empresa y ubicación |
 | `trait-lealez-elementor-profile-access.php` | Acceso y resolución de páginas dentro de los widgets |
+| `lealez-frontend-unified-location.css` | Completitud, semáforos, navegación y responsive del perfil de ubicación |
 | `lealez-elementor-portal.css` | Capa visual aislada para Elementor |
 
 ## Instalación
@@ -533,14 +639,25 @@ lealez.com/
 
 - Crear ubicación.
 - Abrir perfil unificado.
-- Cambiar módulos y guardar.
-- Verificar alcance Google/Lealez por campo.
+- Confirmar porcentaje global y semáforos por sección.
+- Verificar que el porcentaje se identifique expresamente como indicador de Lealez, no de Google.
+- Probar una sede física y un negocio de área de servicio.
+- Verificar que un área de servicio no requiera dirección física para el cálculo de completitud.
+- Probar ubicación `food_menu`: debe mostrar Menú y ocultar Servicios/Catálogo.
+- Probar ubicación `services`/`products`: debe mostrar Servicios/Catálogo y ocultar Menú.
+- Probar `gmb_catalog_type=none`: no debe presentar un catálogo incompatible.
+- Probar ubicación aún no clasificada: Menú y Servicios permanecen consultables hasta confirmar capacidad.
+- Guardar cambios y confirmar que no se publican automáticamente.
+- Enviar desde una sección compatible y verificar estados local/en cola/revisión/aplicado/error.
+- Validar que un administrador de empresa no vea IDs técnicos, payloads, límites, logs ni los módulos técnicos de sincronización.
+- Validar que un administrador del sitio sí pueda acceder a Vinculación y Diagnóstico.
 - Confirmar que rutas antiguas redirigen.
 
 ### Responsive
 
 - 1440 px, 1024 px, 768 px, 390 px y 320 px.
-- Navegación horizontal utilizable.
+- Navegación utilizable y sidebar sin bloquear el scroll.
+- Tarjetas de completitud legibles.
 - Formularios sin desbordamiento.
 - Botones y cabecera legibles.
 
@@ -560,10 +677,10 @@ Flujo recomendado:
 Convenciones de commit:
 
 ```text
-feat: add native Elementor frontend pages
+feat: add location completion and applicability model
 fix: preserve existing Elementor layout during repair
-docs: document frontend page migration
-chore: bump plugin version to 1.4.0
+docs: document location profile UX version 1.5.0
+chore: bump plugin version to 1.5.0
 ```
 
 ## Solución de problemas
@@ -584,7 +701,15 @@ La página tiene datos Elementor, pero no el widget esperado. Reparar agrega una
 
 - Regenerar CSS y datos en Elementor.
 - Limpiar caché de WordPress, CDN y navegador.
-- Confirmar que `lealez-elementor-portal.css` carga después del CSS base.
+- Confirmar que `lealez-elementor-portal.css` y `lealez-frontend-unified-location.css` cargan después del CSS base.
+
+### No aparece Menú o Servicios
+
+La versión 1.5.0 adapta esos módulos a la capacidad ya detectada para la ubicación. Revisar primero una sincronización correcta de la propiedad. Si Google todavía no ha confirmado el tipo de catálogo, Lealez mantiene las opciones disponibles de manera informativa.
+
+### El porcentaje no coincide con una puntuación de Google
+
+Es correcto. **Completitud en Lealez** es una guía interna para ayudar a detectar datos pendientes. No representa ranking, calidad ni puntuación oficial de Google Business Profile.
 
 ### Google abre la sección incorrecta
 
@@ -595,6 +720,17 @@ Confirmar que la URL conserva `business_id` y `section=google` o `module`. Ejecu
 Guardar enlaces permanentes y confirmar que las páginas unificadas existen. Las redirecciones dependen de una página destino válida.
 
 ## Versiones
+
+### 1.5.0
+
+- Perfil de ubicación orientado a tareas y lenguaje de cliente.
+- Completitud global y semáforo por sección.
+- Adaptación de Menú/Servicios al tipo de negocio detectado.
+- Manejo de completitud específico para áreas de servicio.
+- Atributos dinámicos sin penalización artificial del porcentaje general.
+- Módulos técnicos restringidos a administradores del sitio.
+- Eliminación de IDs y términos internos del resumen del cliente.
+- Conservación del flujo local → envío → verificación de Google.
 
 ### 1.4.0
 
