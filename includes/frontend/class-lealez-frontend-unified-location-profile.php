@@ -17,6 +17,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 require_once __DIR__ . '/lealez-unified-location-routing-trait.php';
 require_once __DIR__ . '/lealez-unified-location-render-trait.php';
 require_once __DIR__ . '/lealez-unified-location-modules-trait.php';
+require_once __DIR__ . '/lealez-unified-location-quality-trait.php';
 require_once __DIR__ . '/lealez-unified-location-internal-trait.php';
 require_once __DIR__ . '/lealez-unified-location-metabox-trait.php';
 require_once __DIR__ . '/lealez-unified-location-access-trait.php';
@@ -27,6 +28,7 @@ class Lealez_Frontend_Unified_Location_Profile {
     use Lealez_Unified_Location_Routing_Trait;
     use Lealez_Unified_Location_Render_Trait;
     use Lealez_Unified_Location_Modules_Trait;
+    use Lealez_Unified_Location_Quality_Trait;
     use Lealez_Unified_Location_Internal_Trait;
     use Lealez_Unified_Location_Metabox_Trait;
     use Lealez_Unified_Location_Access_Trait;
