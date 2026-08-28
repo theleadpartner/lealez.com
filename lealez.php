@@ -3,7 +3,7 @@
  * Plugin Name: Lealez Plugin
  * Plugin URI: https://lealez.com
  * Description: Sistema completo de gestión de lealtad con integración Google My Business, Google Wallet y Apple Wallet
- * Version: 1.4.0
+ * Version: 1.5.0
  * Author: The Lead Partner
  * Author URI: https://theleadpartner.com
  * Text Domain: lealez
@@ -25,7 +25,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Main Lealez Plugin Class
  *
  * @class Lealez_Plugin
- * @version 1.4.0
+ * @version 1.5.0
  */
 final class Lealez_Plugin {
 
@@ -34,7 +34,7 @@ final class Lealez_Plugin {
      *
      * @var string
      */
-    public $version = '1.4.0';
+    public $version = '1.5.0';
 
     /**
      * The single instance of the class
@@ -83,8 +83,8 @@ final class Lealez_Plugin {
     /**
      * Define constant if not already set
      *
-     * @param string $name  Constant name
-     * @param mixed  $value Constant value
+     * @param string $name  Constant name.
+     * @param mixed  $value Constant value.
      */
     private function define( $name, $value ) {
         if ( ! defined( $name ) ) {
