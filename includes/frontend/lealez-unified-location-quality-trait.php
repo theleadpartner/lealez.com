@@ -201,7 +201,6 @@ trait Lealez_Unified_Location_Quality_Trait {
      * @return array|null
      */
     private function get_module_completion( $location_id, $module, array $modules ) {
-        $profile = $this->get_location_profile_completion( $location_id, $modules );
         $map = array(
             'basic'      => 'basic',
             'address'    => 'address',
@@ -211,7 +210,12 @@ trait Lealez_Unified_Location_Quality_Trait {
             'menu'       => 'menu',
             'services'   => 'services',
         );
-        if ( empty( $map[ $module ] ) || empty( $profile['sections'][ $map[ $module ] ] ) ) {
+        if ( empty( $map[ $module ] ) ) {
+            return null;
+        }
+
+        $profile = $this->get_location_profile_completion( $location_id, $modules );
+        if ( empty( $profile['sections'][ $map[ $module ] ] ) ) {
             return null;
         }
         return $profile['sections'][ $map[ $module ] ];
