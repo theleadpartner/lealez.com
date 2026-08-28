@@ -2,6 +2,39 @@
 
 Todos los cambios relevantes del plugin se documentan en este archivo.
 
+## [1.5.0] - 2026-08-27
+
+### Agregado
+- Indicador global de diligenciamiento del perfil de ubicación con porcentaje y semáforo rojo, amarillo o verde.
+- Indicadores de completitud por sección para Información, Ubicación, Contacto, Horarios, Características y el catálogo aplicable.
+- Capa de presentación específica para clientes que oculta identificadores, nombres de campos de API, payloads y otros detalles técnicos sin retirarlos del backend administrativo.
+- Resumen amigable del estado de conexión con Google Business Profile sin exponer Account ID, Location ID, resource names ni datos RAW.
+- Selección contextual entre Menú y Servicios usando primero el tipo de catálogo detectado por la sincronización existente y, cuando aún no existe ese dato, la categoría principal como fallback conservador.
+- Flujo visual de dos pasos: guardar primero en Lealez y publicar después en Google.
+
+### Modificado
+- El perfil frontend de ubicación se reorganizó en grupos más fáciles de navegar y con nombres orientados al usuario final.
+- Categoría principal y categorías adicionales pasan a identificarse en frontend como datos publicables en Google, reutilizando el flujo dinámico `categories.list` y el push ya existente del metabox de Información Básica.
+- La sección de atributos se presenta como **Características** y conserva la consulta dinámica por categoría y país; no se hardcodean opciones que Google pueda cambiar.
+- Los módulos Menú y Servicios se muestran según la aplicabilidad detectada para el tipo de negocio, manteniendo los datos locales existentes aunque cambie la detección.
+- Textos de botones y estados en el frontend se traducen a acciones de negocio como **Guardar en Lealez**, **Publicar en Google**, **Actualizar desde Google** y **Historial**.
+- El resumen principal dejó de mostrar identificadores internos de Google y ahora prioriza empresa, categoría, dirección, conexión y completitud.
+- Navegación lateral mejorada con estado sticky en escritorio, indicadores de completitud y comportamiento responsive.
+- Versión del plugin actualizada a `1.5.0`.
+
+### Conservado
+- Metaboxes originales, handlers AJAX, nonces, jobs, polling, logs, límites y procesos de publicación existentes.
+- Flujo de edición local antes del envío a Google.
+- Información técnica completa en el backend administrativo para diagnóstico y soporte.
+- Permisos actuales de empresa y ubicación.
+- Compatibilidad con widgets Elementor, shortcodes y rutas heredadas.
+
+### Referencia de integración Google
+- Las categorías y características disponibles deben consultarse dinámicamente por región e idioma.
+- Las características dependen de categoría y país y pueden cambiar con el tiempo.
+- Las actualizaciones de ubicación usan máscaras de campos, pero esos nombres técnicos no se exponen al cliente.
+- La elegibilidad de menús de alimentos se determina por las capacidades de la ubicación cuando la sincronización las ha detectado.
+
 ## [1.4.0] - 2026-07-31
 
 ### Agregado

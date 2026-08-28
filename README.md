@@ -1,10 +1,10 @@
 # Lealez
 
-Plugin de WordPress para administrar empresas, ubicaciones, perfiles de Google Business Profile y la base de programas de lealtad. Desde la versión **1.4.0**, el portal de autogestión se publica mediante **widgets nativos de Elementor**, mientras Lealez conserva permisos, validaciones, guardado, sincronización con Google y compatibilidad con los shortcodes existentes.
+Plugin para administrar empresas, ubicaciones, perfiles de Google Business Profile y la base funcional de programas y tarjetas de lealtad. Desde la versión **1.4.0** el portal de autogestión se publica mediante widgets nativos de Elementor; desde la versión **1.5.0** el perfil frontend de ubicación incorpora navegación orientada al cliente, diligenciamiento por porcentaje, semáforos por sección y presentación contextual según el tipo de negocio, manteniendo intactos los procesos existentes de guardado y sincronización con Google.
 
 ![WordPress](https://img.shields.io/badge/WordPress-6.0%2B-21759B?logo=wordpress)
 ![PHP](https://img.shields.io/badge/PHP-7.4%2B-777BB4?logo=php)
-![Version](https://img.shields.io/badge/version-1.4.0-3782c4)
+![Version](https://img.shields.io/badge/version-1.5.0-3782c4)
 ![Elementor](https://img.shields.io/badge/Elementor-required%20for%20frontend%20pages-92003B?logo=elementor)
 
 ## Contenido
@@ -13,48 +13,68 @@ Plugin de WordPress para administrar empresas, ubicaciones, perfiles de Google B
 - [Alcance actual](#alcance-actual)
 - [Requisitos](#requisitos)
 - [Arquitectura](#arquitectura)
-- [Carga del plugin](#carga-del-plugin)
 - [Modelo de datos](#modelo-de-datos)
 - [Portal frontend con Elementor](#portal-frontend-con-elementor)
-- [Páginas generadas](#páginas-generadas)
-- [Widgets de Elementor](#widgets-de-elementor)
-- [Controles editables](#controles-editables)
+- [Páginas y widgets](#páginas-y-widgets)
 - [Perfil unificado de empresa](#perfil-unificado-de-empresa)
 - [Perfil unificado de ubicación](#perfil-unificado-de-ubicación)
-- [Migración desde shortcodes](#migración-desde-shortcodes)
-- [Páginas heredadas retiradas](#páginas-heredadas-retiradas)
 - [Google Business Profile](#google-business-profile)
+- [Flujo local → Google](#flujo-local--google)
+- [Comportamiento por categoría](#comportamiento-por-categoría)
+- [Diligenciamiento y semáforos](#diligenciamiento-y-semáforos)
+- [Separación cliente / administración](#separación-cliente--administración)
 - [Permisos y seguridad](#permisos-y-seguridad)
-- [Shortcodes compatibles](#shortcodes-compatibles)
+- [Migración y compatibilidad](#migración-y-compatibilidad)
 - [Estructura del repositorio](#estructura-del-repositorio)
 - [Instalación](#instalación)
 - [Configuración de páginas](#configuración-de-páginas)
 - [Pruebas recomendadas](#pruebas-recomendadas)
 - [Control de cambios](#control-de-cambios)
 - [Solución de problemas](#solución-de-problemas)
+- [Versiones](#versiones)
 
 ## Objetivo
 
-Lealez separa dos responsabilidades:
+Lealez separa claramente dos responsabilidades:
 
-1. **Lógica de negocio:** CPT, permisos, metadatos, nonces, formularios, AJAX, Google Business Profile, cron, logs y validaciones.
-2. **Presentación:** páginas WordPress editables con Elementor, sin copiar la lógica funcional dentro del constructor visual.
+1. **Lógica de negocio:** CPT, permisos, metadatos, nonces, formularios, AJAX, Google Business Profile, cron, logs, validaciones, estados de publicación y persistencia local.
+2. **Presentación:** páginas frontend editables con Elementor que reutilizan la lógica real del plugin en lugar de duplicarla dentro del constructor visual.
 
-Esta separación permite cambiar el diseño del portal sin reemplazar los procesos que ya funcionan. Los widgets de Elementor usan los renderers y shortcodes de Lealez como API interna para preservar compatibilidad.
+Principios de implementación:
+
+- no duplicar reglas de acceso en JavaScript;
+- no guardar secretos ni tokens en Elementor;
+- no sustituir metaboxes, AJAX handlers o jobs existentes cuando pueden reutilizarse;
+- conservar shortcodes y acciones públicas como contratos de compatibilidad;
+- separar guardado local de publicación en Google;
+- no exponer al cliente identificadores, nombres de campos de API, payloads o datos RAW que solo sirven para soporte técnico;
+- consultar capacidades, categorías y características dinámicas desde Google en lugar de hardcodearlas cuando dependen del tipo de negocio.
 
 ## Alcance actual
 
 El repositorio incluye:
 
-- CPT `oy_business` para empresas.
-- CPT `oy_location` para ubicaciones o sedes.
-- CPT base de programas y tarjetas de lealtad.
-- metaboxes administrativos;
+- CPT `oy_business` para empresas;
+- CPT `oy_location` para ubicaciones o sedes;
+- CPT base para programas y tarjetas de lealtad;
+- metaboxes administrativos de empresa y ubicación;
+- OAuth y conexión con Google Business Profile;
+- importación y actualización de ubicaciones de Google;
+- edición local y publicación por módulos;
+- categorías dinámicas;
+- características/atributos dinámicos por categoría y región;
+- dirección y áreas de servicio;
+- contacto y enlaces públicos;
+- horarios regulares y especiales;
+- menús de alimentos cuando aplican;
+- servicios/catálogos cuando aplican;
+- publicaciones;
+- reseñas y respuestas;
+- medios;
+- rendimiento, frases de búsqueda y mayor interés;
 - portal frontend autenticado;
 - creación, edición, archivo y restauración de empresas y ubicaciones;
-- perfil de usuario;
-- administración de equipo e integraciones;
-- módulos de Google Business Profile;
+- perfil frontend unificado de empresa;
 - perfil frontend unificado de ubicación;
 - instalador de páginas Elementor;
 - seis widgets Elementor;
@@ -68,11 +88,12 @@ El repositorio incluye:
 |---|---|
 | WordPress | 6.0 o superior |
 | PHP | 7.4 o superior |
-| Elementor | Activo para crear, reparar y editar las páginas frontend |
-| HTTPS | Recomendado y necesario para OAuth y producción |
-| Permalinks | Recomendado usar una estructura amigable |
+| Elementor | Activo para crear, reparar y editar páginas frontend |
+| HTTPS | Recomendado y necesario para OAuth en producción |
+| Permalinks | Estructura amigable recomendada |
+| Google Business Profile APIs | Proyecto y acceso configurados para los módulos que se vayan a usar |
 
-Elementor no es necesario para cargar los CPT o la administración interna. Cuando no está activo, Lealez bloquea únicamente la creación o reparación de páginas que dependerían de un widget Elementor inexistente.
+Elementor no es necesario para cargar los CPT o la administración interna. Si Elementor no está activo, Lealez bloquea únicamente la creación o reparación de páginas que dependerían de sus widgets.
 
 ## Arquitectura
 
@@ -81,7 +102,20 @@ WordPress
 └── Lealez_Plugin
     ├── CPT y taxonomías
     ├── Integración Google Business Profile
-    ├── Administración de WordPress
+    │   ├── OAuth
+    │   ├── API
+    │   ├── AJAX
+    │   ├── rate limiting
+    │   └── logs
+    ├── Metaboxes oy_location
+    │   ├── información básica
+    │   ├── dirección
+    │   ├── contacto
+    │   ├── horarios
+    │   ├── características
+    │   ├── menú / servicios
+    │   ├── publicaciones / reseñas / medios
+    │   └── analítica
     ├── Lealez_Frontend_Portal
     │   ├── páginas y rutas
     │   ├── empresas
@@ -94,28 +128,17 @@ WordPress
         └── widgets del portal
 ```
 
-### Principios
+### Carga del plugin
 
-- No duplicar reglas de acceso en JavaScript.
-- No guardar secretos en Elementor.
-- No reemplazar metaboxes o handlers existentes sin necesidad.
-- Mantener shortcodes y acciones públicas como contratos de compatibilidad.
-- Crear páginas idempotentes: ejecutar el instalador varias veces no debe duplicarlas.
-- Reparar una página sin borrar una composición Elementor existente.
-- Retirar páginas antiguas solo cuando Lealez pueda demostrar que las gestiona.
+`lealez.php`:
 
-## Carga del plugin
-
-`lealez.php` realiza el arranque:
-
-1. Define constantes y versión.
-2. Registra activación y desactivación.
-3. Carga CPT y taxonomías.
-4. Carga Google Business Profile si sus archivos existen.
-5. Carga el portal frontend tanto en administración como en frontend.
-6. Carga el puente Elementor sin producir errores cuando Elementor está inactivo.
-7. Espera el hook `elementor/init` antes de registrar categoría y widgets.
-8. Carga clases administrativas únicamente en `is_admin()`.
+1. define constantes y versión;
+2. registra activación y desactivación;
+3. carga CPT y taxonomías;
+4. carga la integración Google Business Profile cuando sus archivos existen;
+5. carga el portal frontend tanto en administración como en frontend;
+6. carga el puente Elementor de forma segura;
+7. carga clases administrativas únicamente en `is_admin()`.
 
 Constantes principales:
 
@@ -123,7 +146,7 @@ Constantes principales:
 |---|---|
 | `LEALEZ_VERSION` | Versionado de código y assets |
 | `LEALEZ_PLUGIN_FILE` | Archivo principal |
-| `LEALEZ_PLUGIN_DIR` | Ruta absoluta del plugin |
+| `LEALEZ_PLUGIN_DIR` | Ruta absoluta |
 | `LEALEZ_PLUGIN_URL` | URL base |
 | `LEALEZ_ASSETS_URL` | CSS, JS e imágenes |
 | `LEALEZ_INCLUDES_DIR` | Clases y traits |
@@ -139,17 +162,17 @@ Representa una empresa. El acceso se concede cuando el usuario:
 - está en `_admin_users`; o
 - está en `_manager_users`.
 
-El equipo solo puede administrarlo un usuario con permisos administrativos, el autor o un usuario listado como administrador.
+La administración del equipo exige permisos administrativos de la empresa, autoría o privilegios globales.
 
 ### `oy_location`
 
 Representa una sede, sucursal, punto de atención o negocio local. Se relaciona con la empresa mediante `parent_business_id`.
 
-El acceso se concede al autor, a un administrador de WordPress o a quien tenga acceso a la empresa padre.
+El acceso se concede al autor, a un administrador global o a usuarios autorizados en la empresa padre.
 
 ### Estado y archivo
 
-Lealez usa estados de WordPress para conservar datos. Archivar no elimina metadatos. Las operaciones de retiro de páginas también usan la Papelera para permitir recuperación.
+Lealez utiliza estados de WordPress para conservar los datos. Archivar no elimina metadatos. Las páginas gestionadas por Lealez también se mueven a Papelera en lugar de eliminarse permanentemente.
 
 ## Portal frontend con Elementor
 
@@ -161,18 +184,18 @@ El instalador:
 - distingue Elementor instalado pero inactivo;
 - bloquea crear o reparar si Elementor no está activo;
 - crea páginas publicadas;
-- guarda una estructura nativa en `_elementor_data`;
+- guarda estructura nativa en `_elementor_data`;
 - deja `post_content` vacío;
 - asigna `elementor_header_footer`;
 - marca `_elementor_edit_mode` como `builder`;
 - valida que exista el widget esperado;
 - agrega el widget faltante sin borrar otros elementos;
-- limpia la caché de archivos de Elementor;
-- conserva una copia del contenido clásico anterior.
+- limpia caché de Elementor;
+- conserva respaldo del contenido clásico anterior.
 
-## Páginas generadas
+## Páginas y widgets
 
-La versión 1.4.0 mantiene seis páginas de usuario:
+La versión 1.5.0 mantiene seis páginas de usuario:
 
 | Clave | Página | Slug de instalación nueva | Widget |
 |---|---|---|---|
@@ -183,35 +206,13 @@ La versión 1.4.0 mantiene seis páginas de usuario:
 | `location_editor` | Perfil de ubicación | `/mi-cuenta-lealez/editar-ubicacion/` | `lealez-location-profile` |
 | `user_profile` | Mi perfil | `/mi-cuenta-lealez/mi-perfil/` | `lealez-user-profile` |
 
-Las instalaciones existentes conservan el ID y el permalink de la página previamente vinculada; la migración no obliga a cambiar enlaces activos.
+Los IDs se guardan en `lealez_frontend_page_ids` y cada página administrada recibe `_lealez_frontend_page_key`.
 
-Los IDs se guardan en:
+Los widgets ofrecen controles de ancho, densidad, relleno, fondos, superficies, colores, tipografías, bordes, radios, sombras, botones y visibilidad de cabeceras/resúmenes. Las variables CSS se limitan al wrapper del widget.
 
-```text
-lealez_frontend_page_ids
-```
+## Perfil unificado de empresa
 
-Cada página administrada por el instalador recibe:
-
-```text
-_lealez_frontend_page_key
-```
-
-## Widgets de Elementor
-
-Los widgets aparecen en la categoría **Lealez**:
-
-### Lealez — Panel de cuenta
-
-Renderiza resumen de empresas, ubicaciones y accesos principales.
-
-### Lealez — Mis empresas
-
-Renderiza listado, creación, edición, archivo y restauración de empresas autorizadas.
-
-### Lealez — Perfil de empresa
-
-Concentra:
+Una sola página concentra:
 
 - datos generales;
 - marca;
@@ -221,44 +222,7 @@ Concentra:
 - integraciones;
 - Google Business Profile.
 
-### Lealez — Mis ubicaciones
-
-Renderiza listado, filtro por empresa, creación, edición, archivo y restauración.
-
-### Lealez — Perfil de ubicación
-
-Renderiza el perfil unificado con datos internos, módulos Google, contenido, interacción y analítica.
-
-### Lealez — Mi perfil
-
-Renderiza datos personales, correo y cambio de contraseña con las validaciones existentes.
-
-## Controles editables
-
-Cada widget ofrece controles de Elementor para:
-
-- ancho máximo responsive;
-- densidad compacta, cómoda o amplia;
-- relleno general;
-- relleno de tarjetas;
-- color de fondo de página;
-- color de superficies;
-- color principal y principal oscuro;
-- texto principal y secundario;
-- bordes;
-- radio de tarjetas;
-- sombras;
-- tipografía general;
-- tipografía de encabezados;
-- color, tipografía y radio de botones;
-- ocultar el encabezado interno;
-- mostrar u ocultar el resumen visual en perfiles.
-
-Los controles generan variables CSS dentro del wrapper del widget. No alteran otros widgets ni el administrador de WordPress.
-
-## Perfil unificado de empresa
-
-El perfil usa una sola página y navegación por query string:
+Navegación por query string:
 
 ```text
 ?business_id=123
@@ -267,71 +231,45 @@ El perfil usa una sola página y navegación por query string:
 ?business_id=123&section=google
 ```
 
-La cabecera visual prioriza lectura rápida:
-
-- portada;
-- logotipo;
-- nombre;
-- descripción o tagline;
-- industria;
-- número de ubicaciones;
-- estado;
-- acceso a ubicaciones.
-
-El enfoque toma como referencia la jerarquía clara de perfiles de directorios modernos: identidad primero, navegación visible y contenido agrupado. No replica marcas, textos ni componentes propietarios de terceros.
-
 ## Perfil unificado de ubicación
 
-La página conserva el sistema introducido en 1.3.0:
+El perfil de ubicación reutiliza los metaboxes y procesos existentes, pero reorganiza la experiencia del cliente.
 
-- resumen de publicación;
-- datos internos;
-- alcance de sincronización por campo;
-- metaboxes existentes;
-- guardado local;
-- envío a Google;
-- revisión y estado de aplicación;
-- módulos de contenido, interacción y analítica.
+### Grupos de navegación
 
-La versión 1.4.0 agrega una cabecera configurable con portada, identidad, dirección, categoría, teléfono, estado y enlace al sitio web.
+**General**
 
-## Migración desde shortcodes
+- Resumen.
+- Configuración interna.
+- Conexión con Google.
+- Sincronización.
 
-Cuando una página existe pero no contiene el widget esperado, el botón **Agregar widget de Lealez** ejecuta una reparación.
+**Información del perfil**
 
-Proceso:
+- Información básica.
+- Dirección y cobertura.
+- Contacto y enlaces.
+- Horarios.
+- Características.
 
-1. Verifica permisos y nonce.
-2. Confirma que Elementor está activo.
-3. Lee `_elementor_data`.
-4. Si la página ya tiene una composición, agrega una nueva sección con el widget faltante.
-5. Si no tiene datos Elementor, crea la estructura inicial.
-6. Guarda el contenido clásico anterior en `_lealez_pre_elementor_content_backup`.
-7. Vacía `post_content` para evitar doble renderizado.
-8. Activa el modo builder.
-9. Elimina `_elementor_css` obsoleto.
-10. Limpia la caché de Elementor.
+**Contenido**
 
-La migración no elimina los shortcodes del plugin. Estos continúan disponibles como API interna y para páginas personalizadas no administradas por el instalador.
+- Fotos en Google.
+- Menú cuando corresponde.
+- Servicios cuando corresponde.
 
-## Páginas heredadas retiradas
+**Opiniones y actividad**
 
-Ya no se crean páginas independientes para:
+- Publicaciones.
+- Opiniones.
 
-- Equipo de empresa;
-- Integraciones de empresa;
-- Google de empresa;
-- Google de ubicación.
+**Resultados**
 
-Estas funciones ahora son secciones de perfiles unificados.
+- Rendimiento.
+- Frases de búsqueda.
+- Mayor interés.
 
-La limpieza solo mueve una página a la Papelera cuando:
-
-- su ID estaba guardado por Lealez; y
-- su meta `_lealez_frontend_page_key` coincide; o
-- contiene el shortcode heredado correspondiente.
-
-Nunca se elimina permanentemente una página. Las rutas antiguas redirigen al destino unificado conservando IDs y módulo cuando aplica.
+La navegación lateral permanece visible en escritorio y vuelve a flujo normal en pantallas pequeñas.
 
 ## Google Business Profile
 
@@ -343,16 +281,131 @@ La integración existente se conserva:
 - metaboxes de empresa y ubicación;
 - AJAX;
 - jobs y verificadores;
+- cron y polling;
 - estados locales, enviados, en revisión y aplicados;
-- logs y rate limiting.
+- logs;
+- límites de sincronización;
+- importación desde Google;
+- publicación de módulos compatibles.
 
-Para compatibilidad, `business_google` se mantiene como alias interno del ID de `business_editor`. Esto permite que el centro GMB precargue sus assets antes de `wp_head`, aunque ya no exista una página pública separada.
+La Business Information API moderna gestiona campos de ubicación como nombre, teléfonos, dirección, web, horarios y categorías mediante actualizaciones parciales. Lealez mantiene esas claves técnicas dentro de la capa de integración; el frontend del cliente muestra nombres de negocio entendibles.
 
-La URL con `module` también abre la sección Google:
+## Flujo local → Google
 
-```text
-?business_id=123&module=snapshot
-```
+La regla del perfil es explícita:
+
+1. **Editar y guardar en Lealez.** Los cambios se persisten localmente y pueden revisarse antes de publicar.
+2. **Publicar en Google.** El usuario utiliza la acción del módulo cuando los datos están listos.
+3. **Verificar estado.** Los jobs y verificadores existentes comparan lo enviado con lo que Google devuelve.
+
+Guardar un formulario local **no equivale** a publicar en Google.
+
+Estados que puede mostrar Lealez:
+
+- guardado, falta publicar;
+- enviado / en cola;
+- Google está revisando;
+- aplicado en Google;
+- aplicado parcialmente;
+- Google devolvió otro valor;
+- pendiente de verificación;
+- requiere corregir datos;
+- no aplicado;
+- error de envío.
+
+## Comportamiento por categoría
+
+Google no ofrece exactamente las mismas opciones a todos los negocios. Lealez respeta ese comportamiento.
+
+### Categorías
+
+- La categoría principal y las adicionales se seleccionan desde resultados dinámicos de Google.
+- No se debe depender de una lista estática incluida en el plugin.
+- Las opciones varían por región e idioma y pueden cambiar.
+- El frontend muestra el nombre legible; los identificadores internos permanecen en la integración.
+
+### Características
+
+La sección **Características** reutiliza el metabox dinámico existente:
+
+- consulta las opciones disponibles para la categoría y el país;
+- usa valores actuales sincronizados desde Google;
+- permite sobreescrituras locales;
+- guarda localmente antes del envío;
+- publica únicamente opciones compatibles.
+
+Esto evita presentar, por ejemplo, características de un restaurante a un negocio cuya categoría no las admite.
+
+### Menú y Servicios
+
+La visibilidad del catálogo usa esta prioridad:
+
+1. datos locales ya existentes, para no ocultar contenido del usuario;
+2. `gmb_catalog_type` detectado por la sincronización existente (`food_menu`, `services`, `products` o `none`);
+3. solo cuando todavía no existe detección, la categoría principal se utiliza como fallback conservador.
+
+Así, los perfiles de alimentos pueden mostrar **Menú** y los negocios de servicios pueden mostrar **Servicios** sin obligar a todos los tipos de negocio a navegar módulos irrelevantes.
+
+## Diligenciamiento y semáforos
+
+El perfil calcula un porcentaje orientativo de información diligenciada. **No es un ranking, no es un SEO score y no representa aprobación de Google.**
+
+Se evalúan únicamente secciones relevantes y datos que Lealez puede comprobar localmente:
+
+- Información: nombre, descripción, categoría y apertura.
+- Ubicación: dirección completa o país + áreas de servicio según el tipo de negocio.
+- Contacto: teléfono, sitio web y enlaces de acción cuando existen.
+- Horarios: presencia de horario regular.
+- Características: datos disponibles para la categoría cuando esa sección aplica.
+- Menú o Servicios: se incluye únicamente el catálogo aplicable.
+
+Semáforo:
+
+| Estado | Rango | Lectura |
+|---|---:|---|
+| Rojo | 0–44% | La sección requiere diligenciamiento |
+| Amarillo | 45–79% | Hay información, pero aún falta completar |
+| Verde | 80–100% | La mayor parte de los datos recomendados está diligenciada |
+
+El resumen general promedia únicamente las secciones aplicables al perfil visible.
+
+## Separación cliente / administración
+
+### Frontend del cliente
+
+El cliente ve nombres como:
+
+- Categoría principal.
+- Teléfono principal.
+- Conexión con Google.
+- Publicar en Google.
+- Características.
+- Historial de sincronización.
+
+La capa frontend oculta detalles que no aportan a la gestión diaria, entre ellos:
+
+- Account ID;
+- Location ID;
+- resource names;
+- claves de campos de API;
+- `updateMask` / `fieldMask`;
+- payloads;
+- endpoints;
+- datos RAW;
+- códigos internos mostrados por los metaboxes.
+
+La ocultación es exclusivamente de presentación. No modifica nonces, AJAX handlers, jobs ni datos almacenados.
+
+### Administración y soporte
+
+El backend conserva los metaboxes originales y la información técnica completa necesaria para:
+
+- auditoría;
+- soporte;
+- diagnóstico de sincronización;
+- revisión de payloads y respuestas;
+- inspección de identificadores;
+- seguimiento de jobs y logs.
 
 ## Permisos y seguridad
 
@@ -366,14 +419,16 @@ Crear, reparar o retirar páginas requiere:
 
 ### Frontend
 
-Cada renderer valida de nuevo:
+Cada renderer valida:
 
 - sesión iniciada;
 - tipo de post;
 - ID válido;
 - acceso a empresa o ubicación;
-- permisos adicionales para equipo;
+- permisos adicionales para administración de empresa;
 - nonce en operaciones de escritura.
+
+El perfil no concede permisos por aparecer dentro de Elementor; las validaciones se ejecutan del lado del servidor.
 
 ### Caché
 
@@ -386,11 +441,9 @@ DONOTCACHEOBJECT
 
 y envían `nocache_headers()` para reducir el riesgo de servir contenido personalizado de un usuario a otro.
 
-### Elementor
+## Migración y compatibilidad
 
-Elementor controla presentación. La existencia de un widget en una página no concede acceso a registros. Los secretos, tokens y permisos permanecen fuera de `_elementor_data`.
-
-## Shortcodes compatibles
+Shortcodes conservados:
 
 ```text
 [lealez_account_dashboard]
@@ -405,7 +458,20 @@ Elementor controla presentación. La existencia de un widget en una página no c
 [lealez_user_profile]
 ```
 
-No deben retirarse sin una migración de compatibilidad porque son utilizados por widgets, filtros y páginas existentes.
+No deben retirarse sin migración porque los widgets y rutas existentes los utilizan como capa de compatibilidad.
+
+Ya no se crean páginas frontend independientes para Equipo de empresa, Integraciones de empresa, Google de empresa o Google de ubicación. Las funciones se concentran en perfiles unificados. Las páginas heredadas gestionadas por Lealez se envían a Papelera, nunca se eliminan permanentemente.
+
+Cuando una página existente no contiene el widget esperado, **Agregar widget de Lealez**:
+
+1. valida permisos y nonce;
+2. confirma Elementor activo;
+3. lee `_elementor_data`;
+4. agrega el widget faltante sin borrar la composición existente;
+5. guarda el contenido clásico anterior en `_lealez_pre_elementor_content_backup`;
+6. vacía `post_content` para evitar doble renderizado;
+7. activa el modo builder;
+8. elimina CSS obsoleto y limpia caché.
 
 ## Estructura del repositorio
 
@@ -419,33 +485,31 @@ lealez.com/
 │   │   ├── lealez-frontend-portal.css
 │   │   ├── lealez-elementor-portal.css
 │   │   ├── lealez-frontend-gmb-center.css
+│   │   ├── lealez-gmb-admin-compat.css
 │   │   └── lealez-frontend-unified-location.css
-│   └── js/frontend/
+│   └── js/
+│       ├── admin/
+│       └── frontend/
+│           ├── lealez-frontend-portal.js
+│           ├── lealez-frontend-gmb-center.js
+│           └── lealez-frontend-unified-location.js
 ├── includes/
 │   ├── admin/
 │   ├── cpts/
+│   │   └── metaboxes/
 │   ├── elementor/
-│   │   ├── class-lealez-elementor.php
 │   │   └── widgets/
-│   │       ├── class-lealez-elementor-portal-widget.php
-│   │       ├── class-lealez-elementor-portal-widgets.php
-│   │       ├── trait-lealez-elementor-content-controls.php
-│   │       ├── trait-lealez-elementor-style-controls.php
-│   │       ├── trait-lealez-elementor-profile-render.php
-│   │       ├── trait-lealez-elementor-profile-summary.php
-│   │       └── trait-lealez-elementor-profile-access.php
 │   ├── frontend/
 │   │   ├── class-lealez-frontend-portal.php
-│   │   ├── lealez-frontend-pages-trait.php
-│   │   ├── lealez-frontend-page-definitions-trait.php
-│   │   ├── lealez-frontend-page-admin-trait.php
-│   │   ├── lealez-frontend-page-status-trait.php
-│   │   ├── lealez-frontend-page-installer-trait.php
-│   │   ├── lealez-frontend-page-routing-trait.php
-│   │   ├── lealez-frontend-page-access-trait.php
-│   │   ├── lealez-frontend-business-trait.php
-│   │   ├── lealez-frontend-location-trait.php
-│   │   └── class-lealez-frontend-unified-location-profile.php
+│   │   ├── class-lealez-frontend-gmb-center.php
+│   │   ├── class-lealez-frontend-unified-location-profile.php
+│   │   ├── lealez-unified-location-routing-trait.php
+│   │   ├── lealez-unified-location-render-trait.php
+│   │   ├── lealez-unified-location-modules-trait.php
+│   │   ├── lealez-unified-location-quality-trait.php
+│   │   ├── lealez-unified-location-internal-trait.php
+│   │   ├── lealez-unified-location-metabox-trait.php
+│   │   └── lealez-unified-location-access-trait.php
 │   ├── integrations/google-my-business/
 │   └── taxonomies/
 └── templates/
@@ -457,92 +521,105 @@ lealez.com/
 |---|---|
 | `lealez.php` | Bootstrap, versión y carga de módulos |
 | `class-lealez-frontend-portal.php` | Hooks del portal y protección de caché |
-| `lealez-frontend-pages-trait.php` | Composición de traits de páginas |
-| `lealez-frontend-page-definitions-trait.php` | Definiciones de páginas, widgets, páginas heredadas y detección de Elementor |
-| `lealez-frontend-page-admin-trait.php` | Interfaz administrativa de creación, reparación y limpieza |
-| `lealez-frontend-page-status-trait.php` | Descubrimiento de páginas y validación recursiva del widget esperado |
-| `lealez-frontend-page-installer-trait.php` | Creación y migración Elementor |
-| `lealez-frontend-page-routing-trait.php` | URLs, alias, limpieza y redirecciones |
-| `lealez-frontend-page-access-trait.php` | Helpers, avisos y permisos |
-| `class-lealez-elementor.php` | Inicialización y registro de widgets |
-| `class-lealez-elementor-portal-widget.php` | Clase base y dependencias de los widgets |
-| `class-lealez-elementor-portal-widgets.php` | Seis widgets concretos del portal |
-| `trait-lealez-elementor-content-controls.php` | Controles funcionales y de presentación general |
-| `trait-lealez-elementor-style-controls.php` | Controles de color, espacio, tarjetas, tipografía y botones |
-| `trait-lealez-elementor-profile-render.php` | Enrutamiento del renderizado unificado |
-| `trait-lealez-elementor-profile-summary.php` | Cabeceras visuales de empresa y ubicación |
-| `trait-lealez-elementor-profile-access.php` | Acceso y resolución de páginas dentro de los widgets |
-| `lealez-elementor-portal.css` | Capa visual aislada para Elementor |
+| `class-lealez-frontend-unified-location-profile.php` | Composición del perfil frontend de ubicación |
+| `lealez-unified-location-routing-trait.php` | Carga de assets, redirecciones y routing |
+| `lealez-unified-location-render-trait.php` | Estructura visual y navegación del perfil |
+| `lealez-unified-location-modules-trait.php` | Definición y agrupación de módulos |
+| `lealez-unified-location-quality-trait.php` | Diligenciamiento, semáforos, aplicabilidad de catálogo y resumen de conexión |
+| `lealez-unified-location-metabox-trait.php` | Reutilización segura de metaboxes existentes |
+| `lealez-unified-location-access-trait.php` | Permisos, estados de publicación y URLs |
+| `lealez-frontend-unified-location.js` | Capa de presentación cliente y ocultación de detalles técnicos |
+| `lealez-frontend-unified-location.css` | UI responsive del perfil, score y semáforos |
 
 ## Instalación
 
 1. Descargar o clonar el repositorio.
 2. Ubicarlo en `wp-content/plugins/lealez`.
 3. Verificar PHP 7.4+ y WordPress 6.0+.
-4. Instalar y activar Elementor.
+4. Instalar y activar Elementor si se utilizará el portal generado.
 5. Activar Lealez.
-6. Guardar enlaces permanentes si es una instalación nueva.
-7. Configurar Google Business Profile si aplica.
-8. Crear las páginas frontend desde el menú Lealez.
+6. Guardar enlaces permanentes en una instalación nueva.
+7. Configurar Google Business Profile.
+8. Crear o reparar las páginas frontend desde Lealez.
 
 ## Configuración de páginas
 
 1. Entrar como administrador.
 2. Ir a **Lealez → Páginas frontend**.
-3. Confirmar el aviso **Elementor activo**.
+3. Confirmar **Elementor activo**.
 4. Pulsar **Crear o reparar todas con Elementor**.
 5. Verificar que las seis filas indiquen **Lista en Elementor**.
 6. Abrir cada página con **Editar con Elementor**.
 7. Ajustar estilos desde el widget Lealez.
 8. Mantener el widget funcional en la página.
-9. Si se retiraron páginas heredadas, revisar la Papelera antes de vaciarla.
 
 ## Pruebas recomendadas
 
 ### Carga
 
 - Lealez activa sin Elementor: no hay fatal error.
-- Elementor activo: aparecen seis widgets en categoría Lealez.
+- Elementor activo: aparecen seis widgets en la categoría Lealez.
 - Administración y CPT siguen disponibles.
 
-### Instalador
-
-- Sin Elementor activo, botones de creación están bloqueados.
-- Crear todas produce seis páginas, no diez.
-- Repetir la acción no duplica páginas.
-- `post_content` queda vacío.
-- `_elementor_data` contiene el widget correcto.
-- El botón editar abre Elementor.
-
-### Migración
-
-- Página con shortcode conserva backup.
-- Página Elementor existente conserva sus elementos.
-- Reparar agrega solo el widget faltante.
-- Página heredada gestionada pasa a Papelera.
-- Página ajena con slug parecido no se modifica.
-
-### Empresa
-
-- Crear y editar empresa.
-- Navegar por Perfil, Equipo, Integraciones y Google.
-- Guardar cada sección y volver a la sección correcta.
-- Usuario sin acceso recibe panel de prohibición.
-
-### Ubicación
+### Ubicación y navegación
 
 - Crear ubicación.
 - Abrir perfil unificado.
-- Cambiar módulos y guardar.
-- Verificar alcance Google/Lealez por campo.
-- Confirmar que rutas antiguas redirigen.
+- Navegar todas las secciones aplicables.
+- Confirmar que la barra lateral no tapa contenido y funciona en escritorio/móvil.
+- Confirmar que Menú o Servicios cambian de acuerdo con `gmb_catalog_type` y no ocultan contenido local ya existente.
+
+### Guardado y Google
+
+- Editar Información Básica y guardar localmente.
+- Confirmar estado **Guardado · falta enviar** cuando aplica.
+- Publicar y verificar el estado posterior.
+- Repetir en Dirección, Contacto, Horarios, Características y Menú.
+- Confirmar que guardar no dispara publicación automática.
+- Confirmar que una ubicación sin conexión permite diligenciar datos locales, pero no publicar.
+
+### Categorías y características
+
+- Buscar categoría en el selector dinámico.
+- Guardar categoría principal y adicionales.
+- Publicar categorías y verificar la respuesta.
+- Cambiar categoría y refrescar Características.
+- Confirmar que las características mostradas corresponden a la categoría y país actuales.
+
+### Diligenciamiento
+
+- Perfil vacío: semáforos rojos.
+- Perfil parcialmente diligenciado: amarillo.
+- Perfil ampliamente diligenciado: verde.
+- Negocio de área de servicio: el cálculo usa áreas de servicio en lugar de exigir dirección física.
+- Negocio con menú: el cálculo incluye Menú y no Servicios.
+- Negocio de servicios: el cálculo incluye Servicios y no Menú.
+
+### Privacidad de información técnica
+
+En frontend de cliente confirmar que no aparecen:
+
+- Account ID;
+- Location ID;
+- resource names;
+- `updateMask`;
+- `fieldMask`;
+- payloads;
+- endpoints;
+- JSON RAW;
+- nombres internos de campos como rutas de API.
+
+En backend administrativo confirmar que esa información sigue disponible para diagnóstico.
 
 ### Responsive
 
-- 1440 px, 1024 px, 768 px, 390 px y 320 px.
-- Navegación horizontal utilizable.
-- Formularios sin desbordamiento.
-- Botones y cabecera legibles.
+Probar al menos 1440 px, 1024 px, 768 px, 390 px y 320 px:
+
+- sin desbordamiento horizontal;
+- botones legibles;
+- score visible;
+- navegación usable;
+- formularios y metaboxes embebidos operables.
 
 ## Control de cambios
 
@@ -551,19 +628,20 @@ Flujo recomendado:
 1. Crear rama desde `main`.
 2. Limitar el alcance del cambio.
 3. No reutilizar una rama ya fusionada.
-4. Ejecutar `php -l` sobre todos los PHP modificados.
-5. Probar WordPress y Elementor.
-6. Actualizar `CHANGELOG.md`.
-7. Actualizar versión en `lealez.php` cuando corresponda.
-8. Abrir pull request con resumen, riesgos, migración y pruebas.
+4. Ejecutar `php -l` sobre PHP modificado.
+5. Ejecutar `node --check` sobre JS modificado cuando Node esté disponible.
+6. Probar WordPress y Elementor.
+7. Actualizar `CHANGELOG.md`.
+8. Actualizar versión en `lealez.php` cuando corresponda.
+9. Abrir pull request con resumen, riesgos y pruebas.
 
 Convenciones de commit:
 
 ```text
-feat: add native Elementor frontend pages
-fix: preserve existing Elementor layout during repair
-docs: document frontend page migration
-chore: bump plugin version to 1.4.0
+feat: improve location profile and Google sync UX
+fix: preserve local state before Google publish
+docs: document category-aware location profiles
+chore: bump plugin version to 1.5.0
 ```
 
 ## Solución de problemas
@@ -572,29 +650,48 @@ chore: bump plugin version to 1.4.0
 
 Activar `elementor/elementor.php`. Lealez no crea páginas incompletas.
 
-### “Requiere migración a Elementor”
+### El perfil no permite publicar en Google
 
-La página existe, pero usa contenido clásico o shortcode. Pulsar **Agregar widget de Lealez**.
+Comprobar que la empresa tenga conexión válida y que la ubicación esté vinculada. El cliente no necesita ver identificadores internos para realizar esta verificación.
 
-### “Falta el widget de Lealez”
+### No aparecen Características
 
-La página tiene datos Elementor, pero no el widget esperado. Reparar agrega una sección sin borrar la composición existente.
+1. Confirmar categoría principal.
+2. Confirmar país/región.
+3. Conectar la ubicación con Google.
+4. Pulsar **Actualizar opciones disponibles**.
 
-### Los estilos no cambian
+Las características dependen de categoría y región y Google puede modificarlas.
 
-- Regenerar CSS y datos en Elementor.
-- Limpiar caché de WordPress, CDN y navegador.
-- Confirmar que `lealez-elementor-portal.css` carga después del CSS base.
+### Aparece Servicios cuando debería existir Menú, o viceversa
 
-### Google abre la sección incorrecta
+Ejecutar una sincronización de la ubicación para actualizar el tipo de catálogo detectado. Si ya existen datos locales en un módulo, Lealez lo mantiene visible para no ocultar contenido.
 
-Confirmar que la URL conserva `business_id` y `section=google` o `module`. Ejecutar **Crear o reparar todas** para sincronizar el alias `business_google`.
+### El porcentaje no coincide con lo esperado
+
+El porcentaje mide diligenciamiento local de campos recomendados y se ajusta al tipo de ubicación. No mide SEO, ranking, verificación ni calidad de Google.
+
+### Google devuelve otro valor
+
+Usar el estado del módulo y **Verificar estado**. Google puede revisar, normalizar o rechazar cambios. El backend conserva el detalle técnico para soporte.
 
 ### Una ruta antigua devuelve 404
 
-Guardar enlaces permanentes y confirmar que las páginas unificadas existen. Las redirecciones dependen de una página destino válida.
+Guardar enlaces permanentes y confirmar que las páginas unificadas existen. Las redirecciones requieren una página destino válida.
 
 ## Versiones
+
+### 1.5.0
+
+- Perfil frontend de ubicación rediseñado para gestión de cliente.
+- Porcentaje global de diligenciamiento.
+- Semáforos por sección.
+- Menú/Servicios contextuales según el tipo de negocio.
+- Categorías identificadas como publicables mediante el flujo dinámico existente.
+- Características dinámicas presentadas con nomenclatura amigable.
+- Ocultación frontend de IDs, claves de API, payloads y datos RAW.
+- Flujo visible Guardar en Lealez → Publicar en Google.
+- Backend técnico conservado para soporte.
 
 ### 1.4.0
 
@@ -604,13 +701,12 @@ Guardar enlaces permanentes y confirmar que las páginas unificadas existen. Las
 - Migración desde shortcodes con backup.
 - Retiro seguro de páginas redundantes.
 - Redirecciones y alias de compatibilidad.
-- Nueva capa visual inspirada en la claridad de perfiles de directorios modernos.
 
 ### 1.3.0
 
 - Perfil unificado de ubicación.
 - Alcance Google/Lealez por sección y campo.
-- Compatibilidad con módulos GMB existentes.
+- Compatibilidad con módulos Google existentes.
 
 ### 1.2.0
 
