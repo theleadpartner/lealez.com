@@ -2,6 +2,31 @@
 
 Todos los cambios relevantes del plugin se documentan en este archivo.
 
+## [1.5.0] - 2026-08-27
+
+### Agregado
+- Indicador de **completitud de la ficha en Lealez** con porcentaje global orientativo y semáforo rojo/amarillo/verde por sección.
+- Resumen de secciones pendientes y estado amigable de conexión con Google Business Profile.
+- Detección de aplicabilidad del contenido según la capacidad ya identificada por la sincronización de Google: menú para ubicaciones aptas y servicios/catálogo para los demás tipos compatibles.
+- Nueva capa `Lealez_Unified_Location_Health_Trait` para centralizar completitud, aplicabilidad y visibilidad segura de módulos.
+
+### Modificado
+- Navegación del perfil de ubicación reorganizada en General, Perfil público, Contenido, Interacción y Resultados.
+- Los nombres y explicaciones del frontend usan lenguaje de negocio y evitan exponer nombres internos de campos, identificadores o estructuras de API.
+- El resumen de ubicación deja de mostrar IDs técnicos de cuenta/ubicación y presenta únicamente información necesaria para el cliente.
+- Los módulos técnicos de vinculación y diagnóstico de sincronización quedan disponibles únicamente para administradores del sitio; el cliente conserva estados amigables de conexión y publicación.
+- El flujo de edición conserva la secuencia existente: guardar en Lealez, revisar, enviar a GMB y verificar el resultado.
+- El cálculo de dirección distingue negocios con ubicación física de negocios de área de servicio y no penaliza una dirección física ausente cuando no corresponde.
+- Los atributos continúan siendo dinámicos según categoría y país y su indicador no altera el porcentaje global porque Google los trata como opciones variables.
+- El menú y el catálogo se muestran u ocultan según la capacidad detectada para la ubicación, evitando presentar opciones incompatibles.
+- Versión del plugin actualizada a `1.5.0`.
+
+### Conservado
+- Metaboxes originales, nonces, handlers AJAX, jobs, verificadores, logs, rate limits y procesos reales de publicación hacia Google.
+- Guardado local previo a cualquier envío a Google.
+- Shortcodes, widgets Elementor, rutas heredadas y permisos existentes fuera del alcance de esta mejora.
+- La administración técnica completa en WordPress para soporte y auditoría.
+
 ## [1.4.0] - 2026-07-31
 
 ### Agregado
